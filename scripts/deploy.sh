@@ -4,11 +4,9 @@
 # Usage:
 #   ./scripts/deploy.sh              # deploy main (default)
 #   ./scripts/deploy.sh --pr 126     # deploy PR #126's branch
-#   ./scripts/deploy.sh --pr 126 --revert  # revert back to main
 #
 # When deploying a PR, the script fetches the PR branch from origin and
-# checks it out. When reverting (or deploying without --pr), it checks
-# out main and pulls latest.
+# checks it out. Without --pr, it always reverts to main.
 #
 # provision-grafana.sh is called every time and is fully idempotent.
 # Tailscale Funnel routes are re-applied on every deploy (idempotent).
@@ -29,7 +27,6 @@ ENV_FILE="$PROJECT_DIR/.env"
 # Parse arguments
 # ---------------------------------------------------------------------------
 PR_NUMBER=""
-REVERT=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -37,17 +34,12 @@ while [[ $# -gt 0 ]]; do
             PR_NUMBER="$2"
             shift 2
             ;;
-        --revert)
-            REVERT=true
-            shift
-            ;;
         -h|--help)
-            echo "Usage: deploy.sh [--pr NUMBER] [--revert]"
+            echo "Usage: deploy.sh [--pr NUMBER]"
             echo ""
             echo "  --pr NUMBER   Deploy the branch for GitHub PR #NUMBER"
-            echo "  --revert      Revert to main (use after testing a PR)"
             echo ""
-            echo "With no arguments, deploys latest main."
+            echo "Without --pr, deploys latest main (reverts any PR branch)."
             exit 0
             ;;
         *)
@@ -60,7 +52,7 @@ done
 
 cd "$PROJECT_DIR"
 
-if [[ "$REVERT" == true ]] || [[ -z "$PR_NUMBER" ]]; then
+if [[ -z "$PR_NUMBER" ]]; then
     echo "==> Deploying main..."
     git fetch origin main
     git checkout main
@@ -82,7 +74,7 @@ else
     git checkout "$PR_BRANCH"
     git pull origin "$PR_BRANCH"
     echo ""
-    echo "    NOTE: You are now on a PR branch. Run 'deploy.sh --revert'"
+    echo "    NOTE: You are now on a PR branch. Run 'deploy.sh' (no args)"
     echo "    to go back to main when done testing."
 fi
 
