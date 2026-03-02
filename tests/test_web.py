@@ -317,8 +317,8 @@ async def test_invalid_session_type_returns_422(storage: Storage) -> None:
 
 
 @pytest.mark.asyncio
-async def test_index_substitutes_grafana_url(storage: Storage) -> None:
-    """GET / returns HTML with Grafana placeholders replaced by the configured URL/UID."""
+async def test_index_substitutes_grafana_port(storage: Storage) -> None:
+    """GET / returns HTML with port/UID placeholders replaced by configured values."""
     app = create_app(storage)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -327,19 +327,21 @@ async def test_index_substitutes_grafana_url(storage: Storage) -> None:
 
     assert resp.status_code == 200
     html = resp.text
-    assert "__GRAFANA_URL__" not in html
+    assert "__GRAFANA_PORT__" not in html
     assert "__GRAFANA_UID__" not in html
-    # Default values are present
-    assert "http://corvopi:3001" in html
+    assert "__SK_PORT__" not in html
+    # Default ports and UID are injected as JS constants
+    assert "'3001'" in html  # GRAFANA_PORT
     assert "j105-sailing" in html
+    assert "'3000'" in html  # SK_PORT
 
 
 @pytest.mark.asyncio
-async def test_index_uses_env_grafana_url(
+async def test_index_uses_env_grafana_port(
     storage: Storage, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """GET / uses GRAFANA_URL / GRAFANA_DASHBOARD_UID env vars when set."""
-    monkeypatch.setenv("GRAFANA_URL", "http://myhost:3001")
+    """GET / uses GRAFANA_PORT / GRAFANA_DASHBOARD_UID env vars when set."""
+    monkeypatch.setenv("GRAFANA_PORT", "4001")
     monkeypatch.setenv("GRAFANA_DASHBOARD_UID", "custom-uid")
     app = create_app(storage)
     async with httpx.AsyncClient(
@@ -348,17 +350,14 @@ async def test_index_uses_env_grafana_url(
         resp = await client.get("/")
 
     html = resp.text
-    assert "http://myhost:3001" in html
+    assert "'4001'" in html
     assert "custom-uid" in html
-    assert "__GRAFANA_URL__" not in html
+    assert "__GRAFANA_PORT__" not in html
 
 
 @pytest.mark.asyncio
-async def test_index_public_url_grafana_and_signalk(
-    storage: Storage, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """When PUBLIC_URL is set, Grafana links use PUBLIC_URL/grafana and Signal K link appears."""
-    monkeypatch.setenv("PUBLIC_URL", "https://corvopi.tail1234.ts.net")
+async def test_index_has_dynamic_signalk_link(storage: Storage) -> None:
+    """Index page always includes the Signal K nav link (JS shows/hides it)."""
     app = create_app(storage)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -366,25 +365,8 @@ async def test_index_public_url_grafana_and_signalk(
         resp = await client.get("/")
 
     html = resp.text
-    assert "https://corvopi.tail1234.ts.net/grafana" in html
-    assert "https://corvopi.tail1234.ts.net/signalk" in html
-    assert "__SIGNALK_LINK__" not in html
-    assert "__GRAFANA_URL__" not in html
-
-
-@pytest.mark.asyncio
-async def test_index_no_signalk_link_without_public_url(storage: Storage) -> None:
-    """Without PUBLIC_URL the Signal K link is absent from the main page."""
-    app = create_app(storage)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/")
-
-    html = resp.text
-    assert "__SIGNALK_LINK__" not in html
-    # No /signalk link (the placeholder was replaced with empty string)
-    assert "Signal K" not in html
+    assert 'id="signalk-nav"' in html
+    assert "Signal K" in html
 
 
 @pytest.mark.asyncio

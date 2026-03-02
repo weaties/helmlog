@@ -19,46 +19,28 @@ if TYPE_CHECKING:
 
 
 def test_race_config_grafana_defaults() -> None:
-    """RaceConfig has sensible defaults for Grafana fields."""
+    """RaceConfig has sensible defaults for Grafana and Signal K fields."""
     cfg = RaceConfig()
-    assert cfg.grafana_url == "http://corvopi:3001"
+    assert cfg.grafana_port == "3001"
     assert cfg.grafana_uid == "j105-sailing"
-    assert cfg.signalk_url == ""
+    assert cfg.sk_port == "3000"
     assert cfg.public_url == ""
 
 
 def test_race_config_grafana_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """RaceConfig reads Grafana fields from environment variables."""
-    monkeypatch.setenv("GRAFANA_URL", "http://myhost:3001")
+    monkeypatch.setenv("GRAFANA_PORT", "4001")
     monkeypatch.setenv("GRAFANA_DASHBOARD_UID", "custom-uid")
     cfg = RaceConfig()
-    assert cfg.grafana_url == "http://myhost:3001"
+    assert cfg.grafana_port == "4001"
     assert cfg.grafana_uid == "custom-uid"
 
 
-def test_race_config_public_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When PUBLIC_URL is set, grafana_url and signalk_url derive from it."""
-    monkeypatch.setenv("PUBLIC_URL", "https://corvopi.tail1234.ts.net")
+def test_race_config_signalk_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RaceConfig reads SK_PORT from environment variables."""
+    monkeypatch.setenv("SK_PORT", "4000")
     cfg = RaceConfig()
-    assert cfg.grafana_url == "https://corvopi.tail1234.ts.net/grafana"
-    assert cfg.signalk_url == "https://corvopi.tail1234.ts.net/signalk"
-    assert cfg.public_url == "https://corvopi.tail1234.ts.net"
-
-
-def test_race_config_public_url_trailing_slash(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PUBLIC_URL trailing slash is stripped before appending path segments."""
-    monkeypatch.setenv("PUBLIC_URL", "https://corvopi.tail1234.ts.net/")
-    cfg = RaceConfig()
-    assert cfg.grafana_url == "https://corvopi.tail1234.ts.net/grafana"
-    assert cfg.signalk_url == "https://corvopi.tail1234.ts.net/signalk"
-
-
-def test_race_config_public_url_overrides_grafana_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PUBLIC_URL takes precedence over GRAFANA_URL when both are set."""
-    monkeypatch.setenv("PUBLIC_URL", "https://corvopi.tail1234.ts.net")
-    monkeypatch.setenv("GRAFANA_URL", "http://corvopi:3001")
-    cfg = RaceConfig()
-    assert cfg.grafana_url == "https://corvopi.tail1234.ts.net/grafana"
+    assert cfg.sk_port == "4000"
 
 
 def test_default_event_monday() -> None:

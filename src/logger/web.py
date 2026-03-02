@@ -161,8 +161,8 @@ background:#131f35;color:#7eb8f7;font-size:.8rem;cursor:pointer;text-decoration:
   <div style="display:flex;gap:6px;margin-top:2px">
     <a class="btn-export" href="/history">📋 History</a>
     <a class="btn-export" href="/admin/boats">⚓ Boats</a>
-    <a class="btn-export btn-grafana" href="__GRAFANA_URL__/d/__GRAFANA_UID__/sailing-data?refresh=10s" target="_blank">📊 Grafana</a>
-    __SIGNALK_LINK__
+    <a id="grafana-nav" class="btn-export btn-grafana" href="#" target="_blank">📊 Grafana</a>
+    <a id="signalk-nav" class="btn-export" href="#" target="_blank" style="display:none">⚙ Signal K</a>
   </div>
 </div>
 <div class="sub" id="header-sub">Loading…</div>
@@ -319,6 +319,17 @@ background:#131f35;color:#7eb8f7;font-size:.8rem;cursor:pointer;text-decoration:
 </div>
 
 <script>
+const _GRAFANA_PORT = '__GRAFANA_PORT__';
+const _GRAFANA_UID = '__GRAFANA_UID__';
+const _SK_PORT = '__SK_PORT__';
+const GRAFANA_BASE = location.protocol + '//' + location.hostname + ':' + _GRAFANA_PORT;
+const SK_BASE = location.protocol + '//' + location.hostname + ':' + _SK_PORT;
+(function initNavLinks() {
+  const g = document.getElementById('grafana-nav');
+  if (g) g.href = GRAFANA_BASE + '/d/' + _GRAFANA_UID + '/sailing-data?refresh=10s';
+  const s = document.getElementById('signalk-nav');
+  if (s) { s.href = SK_BASE; s.style.display = ''; }
+})();
 let state = null;
 let tickInterval = null;
 let curRaceStartMs = null;
@@ -425,7 +436,7 @@ function render(s) {
       const from = new Date(r.start_utc).getTime();
       const to   = r.end_utc ? new Date(r.end_utc).getTime() : 'now';
       const refresh = r.end_utc ? 'refresh=' : 'refresh=10s';
-      const grafanaBtn = `<a class="btn-export btn-grafana" href="__GRAFANA_URL__/d/__GRAFANA_UID__/sailing-data?from=${from}&to=${to}&orgId=1&${refresh}" target="_blank">📊 ${r.end_utc ? 'Grafana' : 'Live'}</a>`;
+      const grafanaBtn = `<a class="btn-export btn-grafana" href="${GRAFANA_BASE}/d/${_GRAFANA_UID}/sailing-data?from=${from}&to=${to}&orgId=1&${refresh}" target="_blank">📊 ${r.end_utc ? 'Grafana' : 'Live'}</a>`;
       const debriefBtn = (r.end_utc && s.has_recorder && !s.current_debrief && !s.current_race)
         ? `<button class="btn-export btn-debrief" onclick="startDebrief(${r.id})">🎙 Debrief</button>`
         : '';
@@ -1362,8 +1373,10 @@ background:#0a1628;color:#7eb8f7;font-size:.8rem;cursor:pointer}
 <div id="pager" class="pager"></div>
 
 <script>
-const GRAFANA_URL = '__GRAFANA_URL__';
-const GRAFANA_UID = '__GRAFANA_UID__';
+const _GRAFANA_PORT = '__GRAFANA_PORT__';
+const _GRAFANA_UID = '__GRAFANA_UID__';
+const GRAFANA_URL = location.protocol + '//' + location.hostname + ':' + _GRAFANA_PORT;
+const GRAFANA_UID = _GRAFANA_UID;
 let currentType = '';
 let currentOffset = 0;
 const LIMIT = 25;
@@ -2324,7 +2337,14 @@ def create_app(
     If *recorder* and *audio_config* are provided, recording starts when a race
     starts and stops when the race ends.
     """
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+    from slowapi.util import get_remote_address
+
+    limiter = Limiter(key_func=get_remote_address)
     app = FastAPI(title="J105 Logger", docs_url=None, redoc_url=None)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
     app.state.storage = storage
     _audio_session_id: int | None = None
     _debrief_audio_session_id: int | None = None
@@ -2335,19 +2355,14 @@ def create_app(
     from logger.races import RaceConfig
 
     cfg = RaceConfig()
-    _signalk_link = (
-        f'<a class="btn-export" href="{cfg.signalk_url}" target="_blank">⚙ Signal K</a>'
-        if cfg.signalk_url
-        else ""
-    )
     _page = (
-        _HTML.replace("__GRAFANA_URL__", cfg.grafana_url)
+        _HTML.replace("__GRAFANA_PORT__", cfg.grafana_port)
         .replace("__GRAFANA_UID__", cfg.grafana_uid)
-        .replace("__SIGNALK_LINK__", _signalk_link)
+        .replace("__SK_PORT__", cfg.sk_port)
         .replace("__GIT_INFO__", _GIT_INFO)
     )
     _history_page = (
-        _HISTORY_HTML.replace("__GRAFANA_URL__", cfg.grafana_url)
+        _HISTORY_HTML.replace("__GRAFANA_PORT__", cfg.grafana_port)
         .replace("__GRAFANA_UID__", cfg.grafana_uid)
         .replace("__GIT_INFO__", _GIT_INFO)
     )
@@ -2370,7 +2385,7 @@ def create_app(
         call_next,  # noqa: ANN001
     ) -> Response:
         path = request.url.path
-        if _is_auth_disabled() or path in _PUBLIC_PATHS or path.startswith("/notes/"):
+        if _is_auth_disabled() or path in _PUBLIC_PATHS:
             return await call_next(request)  # type: ignore[no-any-return]
         from http.cookies import SimpleCookie
 
@@ -2405,6 +2420,7 @@ def create_app(
         return HTMLResponse(html)
 
     @app.post("/login", include_in_schema=False)
+    @limiter.limit("10/minute")
     async def login_submit(
         request: Request,
         token: str = Form(...),
@@ -2513,6 +2529,7 @@ def create_app(
         return HTMLResponse(_render_admin_users_html(users, sessions))
 
     @app.post("/admin/users/invite", status_code=201, include_in_schema=False)
+    @limiter.limit("5/minute")
     async def admin_invite_user(
         request: Request,
         email: str = Form(...),
@@ -3275,7 +3292,11 @@ def create_app(
         )
 
     @app.get("/notes/{path:path}")
-    async def serve_note_photo(path: str, request: Request) -> Response:
+    async def serve_note_photo(
+        path: str,
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> Response:
         notes_dir = Path(os.environ.get("NOTES_DIR", "data/notes")).resolve()
         full_path = (notes_dir / path).resolve()
         if not str(full_path).startswith(str(notes_dir)):

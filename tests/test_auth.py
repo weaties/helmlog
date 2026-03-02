@@ -373,3 +373,33 @@ async def test_admin_invite_generates_url(storage: Storage) -> None:
     data = resp.json()
     assert "invite_url" in data
     assert "/login?token=" in data["invite_url"]
+
+
+@pytest.mark.asyncio
+async def test_notes_photo_requires_auth(storage: Storage) -> None:
+    """/notes/ path requires auth when auth is enabled (regression for #109)."""
+    with patch.dict(os.environ, {"AUTH_DISABLED": "false"}):
+        app = create_app(storage)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            resp = await client.get(
+                "/notes/1/some_photo.jpg", headers={"accept": "application/json"}
+            )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_login_rate_limited(storage: Storage) -> None:
+    """POST /login is rate-limited to 10 requests per minute."""
+    with patch.dict(os.environ, {"AUTH_DISABLED": "false"}):
+        app = create_app(storage)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            for _ in range(10):
+                await client.post("/login", data={"token": "bad", "next": "/"})
+            resp = await client.post("/login", data={"token": "bad", "next": "/"})
+    assert resp.status_code == 429
