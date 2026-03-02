@@ -51,6 +51,18 @@ done
 
 cd "$PROJECT_DIR"
 
+# ---------------------------------------------------------------------------
+# Resolve uv — not on PATH in non-interactive SSH sessions
+# ---------------------------------------------------------------------------
+if command -v uv &>/dev/null; then
+    UV_BIN="$(command -v uv)"
+elif [[ -x "$HOME/.local/bin/uv" ]]; then
+    UV_BIN="$HOME/.local/bin/uv"
+else
+    echo "ERROR: uv not found. Run setup.sh first." >&2
+    exit 1
+fi
+
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
 # ---------------------------------------------------------------------------
@@ -117,7 +129,7 @@ else
 fi
 
 echo "==> Syncing Python dependencies..."
-uv sync
+"$UV_BIN" sync
 
 echo "==> Provisioning Grafana (dashboard, datasources, plugins)..."
 "$SCRIPT_DIR/provision-grafana.sh"
