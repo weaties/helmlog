@@ -147,7 +147,8 @@ if command -v tailscale &>/dev/null; then
         tailscale funnel --bg --set-path /signalk/ 3000
         echo "    Routes verified for https://${TS_HOSTNAME}"
         # Update Grafana ROOT_URL with the actual public hostname
-        sudo tee /etc/systemd/system/grafana-server.service.d/port.conf > /dev/null << EOF
+        TMPCONF="$(mktemp)"
+        cat > "$TMPCONF" << EOF
 [Service]
 Environment=GF_SERVER_HTTP_PORT=3001
 Environment=GF_SERVER_ROOT_URL=https://${TS_HOSTNAME}/grafana/
@@ -155,6 +156,8 @@ Environment=GF_SERVER_HTTP_ADDR=127.0.0.1
 Environment=GF_AUTH_DISABLE_LOGIN_FORM=false
 Environment=GF_AUTH_ANONYMOUS_ENABLED=false
 EOF
+        sudo rsync "$TMPCONF" /etc/systemd/system/grafana-server.service.d/port.conf
+        rm -f "$TMPCONF"
         sudo systemctl daemon-reload
         sudo systemctl restart grafana-server
         # Keep PUBLIC_URL in .env current so the webapp generates correct links
