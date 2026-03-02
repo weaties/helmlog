@@ -2,11 +2,9 @@
 # deploy.sh — Deploy code to the Raspberry Pi and restart services.
 #
 # Usage:
-#   ./scripts/deploy.sh              # deploy main (default)
+#   ./scripts/deploy.sh              # on main: pull & deploy latest main
+#                                    # on a PR branch: prompt to switch PR or revert
 #   ./scripts/deploy.sh --pr 126     # deploy PR #126's branch
-#
-# When deploying a PR, the script fetches the PR branch from origin and
-# checks it out. Without --pr, it always reverts to main.
 #
 # provision-grafana.sh is called every time and is fully idempotent.
 # Tailscale Funnel routes are re-applied on every deploy (idempotent).
@@ -39,7 +37,8 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "  --pr NUMBER   Deploy the branch for GitHub PR #NUMBER"
             echo ""
-            echo "Without --pr, deploys latest main (reverts any PR branch)."
+            echo "On main: pulls latest and deploys."
+            echo "On a PR branch: prompts to switch PRs or revert to main."
             exit 0
             ;;
         *)
@@ -52,30 +51,69 @@ done
 
 cd "$PROJECT_DIR"
 
-if [[ -z "$PR_NUMBER" ]]; then
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
+# ---------------------------------------------------------------------------
+# Resolve which ref to deploy
+# ---------------------------------------------------------------------------
+deploy_main() {
     echo "==> Deploying main..."
     git fetch origin main
     git checkout main
     git pull origin main
-else
-    echo "==> Deploying PR #${PR_NUMBER}..."
-    # Fetch the PR branch using the gh CLI to resolve the branch name
+}
+
+deploy_pr() {
+    local pr="$1"
+    echo "==> Deploying PR #${pr}..."
     if ! command -v gh &>/dev/null; then
         echo "ERROR: gh CLI is required for --pr deploys. Install: https://cli.github.com" >&2
         exit 1
     fi
-    PR_BRANCH="$(gh pr view "$PR_NUMBER" --json headRefName -q .headRefName)"
+    PR_BRANCH="$(gh pr view "$pr" --json headRefName -q .headRefName)"
     if [[ -z "$PR_BRANCH" ]]; then
-        echo "ERROR: Could not resolve branch for PR #${PR_NUMBER}" >&2
+        echo "ERROR: Could not resolve branch for PR #${pr}" >&2
         exit 1
     fi
     echo "    Branch: ${PR_BRANCH}"
     git fetch origin "$PR_BRANCH"
     git checkout "$PR_BRANCH"
     git pull origin "$PR_BRANCH"
+}
+
+if [[ -n "$PR_NUMBER" ]]; then
+    # Explicit --pr flag always wins
+    deploy_pr "$PR_NUMBER"
+elif [[ "$CURRENT_BRANCH" == "main" ]]; then
+    # On main with no --pr flag: pull latest main
+    deploy_main
+else
+    # On a non-main branch (i.e. a PR deployment) with no --pr flag: ask
     echo ""
-    echo "    NOTE: You are now on a PR branch. Run 'deploy.sh' (no args)"
-    echo "    to go back to main when done testing."
+    echo "Currently deployed: branch '${CURRENT_BRANCH}' (not main)"
+    echo ""
+    echo "  1) Revert to main"
+    echo "  2) Deploy a different PR"
+    echo "  3) Re-deploy current branch (pull latest)"
+    echo ""
+    read -rp "Choice [1/2/3]: " choice
+    case "$choice" in
+        1)
+            deploy_main
+            ;;
+        2)
+            read -rp "PR number: " pr_num
+            deploy_pr "$pr_num"
+            ;;
+        3)
+            echo "==> Re-deploying ${CURRENT_BRANCH}..."
+            git pull origin "$CURRENT_BRANCH"
+            ;;
+        *)
+            echo "Invalid choice. Aborting." >&2
+            exit 1
+            ;;
+    esac
 fi
 
 echo "==> Syncing Python dependencies..."
