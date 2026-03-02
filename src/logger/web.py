@@ -40,13 +40,20 @@ def _get_git_info() -> str:
     import subprocess
 
     try:
+        # Resolve the repo root from this file's location so the path isn't
+        # hardcoded.  The service account (j105logger) doesn't own the repo,
+        # so we must add it to safe.directory to pass git's ownership check.
+        _repo = str(Path(__file__).resolve().parents[2])
+        _git = ["git", "-c", f"safe.directory={_repo}"]
         branch = subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            [*_git, "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=_repo,
             stderr=subprocess.DEVNULL,
             text=True,
         ).strip()
         sha = subprocess.check_output(
-            ["git", "rev-parse", "--short=7", "HEAD"],
+            [*_git, "rev-parse", "--short=7", "HEAD"],
+            cwd=_repo,
             stderr=subprocess.DEVNULL,
             text=True,
         ).strip()
