@@ -7,14 +7,35 @@
 
 ## Executive Summary
 
-The device has **one critical** finding that requires immediate action: the application is
-deployed to the public internet via Tailscale Funnel with authentication completely disabled
-(`AUTH_DISABLED=true`), exposing all race data, crew information, GPS tracks, audio recordings,
-and photo notes — plus Signal K live instrument data — to anyone on the internet without a
-password.
+This audit identified 16 findings across the `corvopi` deployment. The critical finding (F-01)
+was addressed immediately by removing `AUTH_DISABLED=true` and enabling magic-link auth. A
+defense-in-depth startup guard now prevents the application from starting with auth disabled
+when a public URL is configured. Most remaining findings have been remediated in `setup.sh` and
+`web.py`; re-running `setup.sh` on the Pi applies them. See the Remediation Status section below
+for the current state of each finding.
 
-Beyond that root issue, there are several high and medium severity misconfigurations that would
-remain problematic even after authentication is restored.
+---
+
+## Remediation Status
+
+| ID | Severity | Status | Notes |
+|----|----------|--------|-------|
+| F-01 | CRITICAL | **Resolved** | `AUTH_DISABLED` removed from `.env`; startup guard added in `web.py` to prevent recurrence |
+| F-02 | HIGH | **Resolved** | `setup.sh` installs scoped sudoers; re-run on Pi to apply |
+| F-03 | HIGH | **Resolved** | `setup.sh` sets `chmod 600 .env`; re-run on Pi to apply |
+| F-04 | HIGH | **Accepted** | NetworkManager default; mitigated by F-02 sudo fix; PSK rotation is manual |
+| F-05 | HIGH | **Resolved** | `setup.sh` configures SK admin password + `security.json`; re-run on Pi to apply |
+| F-06 | HIGH | **Resolved** | `setup.sh` disables Grafana anon access, enables login, binds to loopback; re-run on Pi to apply |
+| F-07 | MEDIUM | **Resolved** | InfluxDB/Grafana already loopback-bound in `setup.sh`; Signal K `--hostname 127.0.0.1` added |
+| F-08 | MEDIUM | **Resolved** | `/notes/` route requires `require_auth("viewer")`; middleware has no `/notes/` bypass |
+| F-09 | MEDIUM | **Resolved** | `slowapi` rate limiting on `/login` (10/min) and `/admin/users/invite` (5/min) |
+| F-10 | MEDIUM | **Resolved** | `setup.sh` writes `X11Forwarding no` to `sshd_config.d/hardening.conf`; re-run on Pi to apply |
+| F-11 | MEDIUM | **Resolved** | `setup.sh` sets `chmod 600 ~/.ssh/config`; re-run on Pi to apply |
+| F-12 | MEDIUM | **Resolved** | `setup.sh` installs `unattended-upgrades` and runs `apt upgrade`; re-run on Pi to apply |
+| F-13 | MEDIUM | **Resolved** | `setup.sh` masks cups, rpcbind, avahi, bluetooth, ModemManager; re-run on Pi to apply |
+| F-14 | LOW | **Accepted** | LightDM autologin retained; acceptable for boat embedded system with physical security |
+| F-15 | LOW | **Resolved** | Signal K `--hostname 127.0.0.1` added to `setup.sh`; re-run on Pi to apply |
+| F-16 | INFO | **Resolved** | `NODE_ENV=production` added to Signal K systemd unit; re-run on Pi to apply |
 
 ---
 

@@ -215,7 +215,8 @@ Wants=can-interface.service
 [Service]
 User=${CURRENT_USER}
 WorkingDirectory=/home/${CURRENT_USER}/.signalk
-ExecStart=/usr/bin/node ${SK_BIN} -c /home/${CURRENT_USER}/.signalk
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node ${SK_BIN} -c /home/${CURRENT_USER}/.signalk --hostname 127.0.0.1
 Restart=on-failure
 RestartSec=5
 
