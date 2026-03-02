@@ -390,6 +390,96 @@ async def test_nav_has_users_link(client: AsyncClient) -> None:
     assert "/admin/users" in r.text
 
 
+# ---------------------------------------------------------------------------
+# Email (#94)
+# ---------------------------------------------------------------------------
+
+
+def test_smtp_configured_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    from logger.email import smtp_configured
+
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("SMTP_PORT", raising=False)
+    monkeypatch.delenv("SMTP_FROM", raising=False)
+    assert smtp_configured() is False
+
+
+def test_smtp_configured_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    from logger.email import smtp_configured
+
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_FROM", "test@example.com")
+    assert smtp_configured() is True
+
+
+@pytest.mark.asyncio
+async def test_send_email_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock, patch
+
+    from logger.email import send_email
+
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
+
+    mock_smtp = MagicMock()
+    with patch("logger.email.smtplib.SMTP", return_value=mock_smtp):
+        mock_smtp.__enter__ = MagicMock(return_value=mock_smtp)
+        mock_smtp.__exit__ = MagicMock(return_value=False)
+        result = await send_email("user@example.com", "Test", "Hello")
+    assert result is True
+    mock_smtp.send_message.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_send_email_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import patch
+
+    from logger.email import send_email
+
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
+
+    with patch("logger.email.smtplib.SMTP", side_effect=ConnectionRefusedError("nope")):
+        result = await send_email("user@example.com", "Test", "Hello")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_send_welcome_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from logger.email import send_welcome_email
+
+    with patch("logger.email.send_email", new_callable=AsyncMock, return_value=True) as mock:
+        result = await send_welcome_email(
+            "Alice", "alice@example.com", "crew", "http://x/login?token=abc"
+        )
+    assert result is True
+    mock.assert_called_once()
+    _to, _subject, _body = mock.call_args[0]
+    assert _to == "alice@example.com"
+    assert "crew" in _body
+    assert "http://x/login?token=abc" in _body
+
+
+@pytest.mark.asyncio
+async def test_send_device_alert(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from logger.email import send_device_alert
+
+    with patch("logger.email.send_email", new_callable=AsyncMock, return_value=True) as mock:
+        result = await send_device_alert("alice@example.com", "1.2.3.4", "Mozilla/5.0")
+    assert result is True
+    mock.assert_called_once()
+    _to, _subject, _body = mock.call_args[0]
+    assert _to == "alice@example.com"
+    assert "1.2.3.4" in _body
+
+
 @pytest.mark.asyncio
 async def test_audit_logged_on_race_start(client: AsyncClient, storage: Storage) -> None:
     # Set event first

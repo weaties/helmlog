@@ -424,6 +424,17 @@ async def _add_user(email: str, name: str | None, role: str) -> None:
         base = os.environ.get("PUBLIC_URL", f"http://localhost:{os.environ.get('WEB_PORT', '3002')}").rstrip(".")
         login_url = f"{base}/login?token={token}"
         logger.info("Login link (expires in 7 days):\n  {}", login_url)
+
+        from logger.email import send_welcome_email, smtp_configured
+
+        if smtp_configured() and email:
+            sent = await send_welcome_email(name, email, role, login_url)
+            if sent:
+                logger.info("Welcome email sent to {}", email)
+            else:
+                logger.warning("Welcome email to {} failed — link printed above", email)
+        else:
+            logger.debug("SMTP not configured — skipping welcome email")
     finally:
         await storage.close()
 

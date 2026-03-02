@@ -2638,6 +2638,19 @@ def create_app(
             samesite="lax",
             max_age=int(os.getenv("AUTH_SESSION_TTL_DAYS", "90")) * 86400,
         )
+
+        # Best-effort new-device alert email
+        from logger.email import send_device_alert, smtp_configured
+
+        if smtp_configured():
+            asyncio.ensure_future(
+                send_device_alert(
+                    row["email"],
+                    request.client.host if request.client else None,
+                    request.headers.get("user-agent"),
+                )
+            )
+
         return response
 
     @app.post("/logout", include_in_schema=False)
@@ -2696,7 +2709,17 @@ def create_app(
         await storage.create_invite_token(token, email, role, _user["id"], invite_expires_at())
         invite_url = f"{base}/login?token={token}"
         await _audit(request, "user.invite", detail=f"{email} as {role}", user=_user)
-        return JSONResponse({"invite_url": invite_url, "token": token}, status_code=201)
+
+        from logger.email import send_welcome_email, smtp_configured
+
+        email_sent = False
+        if smtp_configured() and email:
+            email_sent = await send_welcome_email(None, email, role, invite_url)
+
+        return JSONResponse(
+            {"invite_url": invite_url, "token": token, "email_sent": email_sent},
+            status_code=201,
+        )
 
     @app.put("/admin/users/{user_id}/role", status_code=204, include_in_schema=False)
     async def admin_update_role(
