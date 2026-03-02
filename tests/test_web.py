@@ -86,11 +86,14 @@ async def test_state_endpoint_returns_json(storage: Storage) -> None:
 @pytest.mark.asyncio
 async def test_start_race_no_event_returns_422(storage: Storage) -> None:
     """POST /api/races/start fails with 422 when no event is configured."""
+    from unittest.mock import patch
+
     app = create_app(storage)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.post("/api/races/start")
+        with patch("logger.races.default_event_for_date", return_value=None):
+            resp = await client.post("/api/races/start")
 
     assert resp.status_code == 422
 

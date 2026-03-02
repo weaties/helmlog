@@ -2728,7 +2728,7 @@ def create_app(
 
         default_event = default_event_for_date(today)
         custom_event = await storage.get_daily_event(date_str)
-        event = default_event or custom_event
+        event = custom_event or default_event
         if event is None:
             raise HTTPException(
                 status_code=422,
