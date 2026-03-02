@@ -43,20 +43,72 @@ grafana-server.service (independent, starts at boot)
 
 ## Table of Contents
 
-1. [Daily use](#daily-use)
-2. [Web interfaces](#web-interfaces)
-3. [Race marking](#race-marking)
-4. [Sail tracking](#sail-tracking)
-5. [Linking YouTube videos](#linking-youtube-videos)
-6. [External data — weather and tides](#external-data--weather-and-tides)
-7. [Recording audio commentary](#recording-audio-commentary)
-8. [Audio transcription](#audio-transcription)
-9. [System health monitoring](#system-health-monitoring)
-10. [Mac development](#mac-development)
-11. [Fresh SD card setup](#fresh-sd-card-setup)
-12. [Updating / deploying](#updating--deploying)
-13. [Configuration](#configuration)
-14. [Troubleshooting](#troubleshooting)
+1. [Environments & DNS](#environments--dns)
+2. [Daily use](#daily-use)
+3. [Web interfaces](#web-interfaces)
+4. [Race marking](#race-marking)
+5. [Sail tracking](#sail-tracking)
+6. [Linking YouTube videos](#linking-youtube-videos)
+7. [External data — weather and tides](#external-data--weather-and-tides)
+8. [Recording audio commentary](#recording-audio-commentary)
+9. [Audio transcription](#audio-transcription)
+10. [System health monitoring](#system-health-monitoring)
+11. [Mac development](#mac-development)
+12. [Fresh SD card setup](#fresh-sd-card-setup)
+13. [Updating / deploying](#updating--deploying)
+14. [Configuration](#configuration)
+15. [Troubleshooting](#troubleshooting)
+
+---
+
+## Environments & DNS
+
+The project uses the **`saillog.io`** domain (registered on Cloudflare) with a
+`{hostname}.{environment}.saillog.io` naming pattern. The hostname is the boat
+name, so this scales to multiple boats in the future.
+
+| Environment | URL | Host | Branch | Deploys |
+|---|---|---|---|---|
+| **Live** | `corvo.live.saillog.io` | Pi 4 8GB (`corvopi`) | `main` | Auto on promotion push |
+| **Stage** | `corvo.stage.saillog.io` | Pi 5 8GB (test Pi) | `stage` | Auto on `stage` branch push |
+| **Test** | `corvo.test.saillog.io` | Pi 5 8GB (test Pi) | `main` | Auto on merge to `main` |
+| **PR Preview** | `corvo.test-pr{N}.saillog.io` | Pi 5 8GB (test Pi) | PR branch | Auto on PR open/update |
+| **Dev** | `localhost:3002` | Developer's Mac | feature branch | Manual |
+
+### Promotion flow
+
+```
+Developer Mac (dev)
+  └─ PR opened ──────────→ corvo.test-pr{N}.saillog.io  (ephemeral, auto-deployed)
+  └─ PR merged to main ──→ corvo.test.saillog.io        (auto-deployed)
+  └─ promote stage ───────→ corvo.stage.saillog.io       (fast-forward main → stage, auto-deployed)
+  └─ promote live ────────→ corvo.live.saillog.io        (fast-forward stage → live, auto-deployed)
+```
+
+Promotions are fast-forward merges only — no merge commits, no surprises.
+Every promotion creates a timestamped git tag (`live/2026-03-02T14.30.00Z` or
+`stage/2026-03-02T14.30.00Z`) forming a complete deployment audit trail.
+
+```bash
+# Promote main → stage
+j105-logger promote stage
+
+# Promote stage → live
+j105-logger promote live
+
+# Roll back live to the previous deployment
+j105-logger promote live --rollback
+
+# View deployment history
+git tag -l 'live/*' --sort=-creatordate
+```
+
+### Ingress
+
+Public access uses **Cloudflare Tunnel** with **Cloudflare Access** (email OTP)
+protecting all environments. Tailscale is retained for private SSH access to
+both Pis. See [issue #125](https://github.com/weaties/j105-logger/issues/125)
+for the full implementation plan.
 
 ---
 
@@ -867,7 +919,7 @@ j105-logger status
 
 ## Updating / deploying
 
-### Normal deploy (code changes only)
+### Current: manual deploy
 
 After a PR merges to `main`, SSH into the Pi and run:
 
@@ -878,8 +930,8 @@ cd ~/j105-logger
 ```
 
 This pulls `main`, syncs Python dependencies, re-applies Tailscale Funnel routes,
-updates `PUBLIC_URL` in `.env`, updates Grafana's `ROOT_URL`, and restarts the
-`j105-logger` service. Service status is printed at the end for a quick sanity check.
+updates `PUBLIC_URL` in `.env`, and restarts the `j105-logger` service. Service
+status is printed at the end for a quick sanity check.
 
 All `sudo` commands in `deploy.sh` are in the scoped `/etc/sudoers.d/j105-logger-allowed`
 file (configured by `setup.sh`), so no password prompt is needed during a normal deploy.
