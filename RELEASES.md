@@ -1,6 +1,76 @@
 # Release Notes
 
-## Unreleased (main, 2026-03-01)
+## Unreleased (main, 2026-03-02)
+
+### Environments & DNS — saillog.io (#125)
+
+Registered `saillog.io` on Cloudflare and documented the full promotion
+strategy for multi-environment deployments:
+
+- **DNS pattern**: `{boat}.{env}.saillog.io` — e.g. `corvo.live.saillog.io`
+- **Environments**: live (prod Pi 4), stage, test, per-PR previews (test Pi 5), dev (localhost)
+- **Promotion flow**: fast-forward merges from main → stage → live, with
+  timestamped git tags (`live/YYYY-MM-DDTHH.MM.SSZ`) as a deployment audit trail
+- **Planned ingress**: Cloudflare Tunnel + Cloudflare Access replacing Tailscale Funnel
+- **Rollback**: `j105-logger promote live --rollback` to revert to previous tag
+- README updated with new Environments & DNS section
+
+### Audit log, tags, triggers, headshots, admin nav (#93, #94, #99, #100, #123)
+
+Major feature batch adding traceability, organization, and user personalization:
+
+- **Audit logging** — all state-changing web routes log user, IP, and action to
+  an `audit_log` table; admin audit page at `/admin/audit` + JSON API at `/api/audit`
+- **Tags** — full CRUD API for tagging sessions and notes; `tags`, `session_tags`,
+  `note_tags` tables (schema v19)
+- **Keyword triggers** — auto-create notes from transcript keywords; new
+  `triggers.py` module + `scan-transcript` CLI subcommand for retroactive scanning
+- **Profile headshots** — self-service avatar upload on profile page (Pillow
+  resize to 256×256 JPEG); SVG initials fallback for users without avatars
+- **Admin Users nav link** — `/admin/users` is now discoverable from the main
+  nav bar (visible to admins only via `/api/me` role check)
+- 25 new tests (413 total passing)
+
+### Speaker diarisation on Pi 5 (#120)
+
+Pyannote speaker diarisation now works on the Pi 5 (aarch64):
+
+- Enabled `pyannote-audio` pipeline for speaker labeling (`SPEAKER_00`,
+  `SPEAKER_01`, …) on transcriptions when `HF_TOKEN` is configured
+- Bypassed `torchcodec` `AudioDecoder` which fails on aarch64 — uses
+  `soundfile` fallback instead
+- Set `HOME` env var in systemd unit so `faster-whisper` can cache models
+  under the `j105logger` service account
+
+### Security hardening (#117, #118)
+
+Comprehensive security hardening of the Pi deployment, baked into `setup.sh`
+so all future SD card builds inherit the same posture:
+
+- Dedicated `j105logger` service account (nologin, UID ≈ 997)
+- Scoped `NOPASSWD` sudo replacing the blanket Pi OS default
+- SSH hardening (X11Forwarding disabled, permissions tightened)
+- InfluxDB bound to loopback only; Grafana loopback + login required
+- Automatic security updates via `unattended-upgrades`
+- Unused services masked (cups, avahi-daemon, bluetooth)
+- Signal K bcrypt admin password auto-generated at setup
+- SSH safety guard added after lockout incident — `setup.sh` now validates
+  that at least one SSH access method remains before tightening config
+
+### Race event naming fix (#122)
+
+Custom event names (saved via the web UI) now take precedence over the
+weekday defaults (BallardCup on Monday, CYC on Wednesday). Previously,
+a saved custom event was ignored on Monday/Wednesday.
+
+### Security audit documentation
+
+Added security audit report and penetration test statement of work
+(`docs/`) documenting the 2026-03-01 security review.
+
+---
+
+## 2026-03-01
 
 ### Public internet access via Tailscale Funnel (#82–#89)
 
@@ -76,7 +146,7 @@ over the boat's Wi-Fi hotspot.
 
 ---
 
-## Earlier features (main, 2026-02-27)
+## 2026-02-27
 
 ### Sail tracking (#57, PR #60)
 
