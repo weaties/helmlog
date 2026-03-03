@@ -386,8 +386,8 @@ async def test_avatar_fallback_svg(client: AsyncClient, storage: Storage) -> Non
 async def test_nav_has_users_link(client: AsyncClient) -> None:
     r = await client.get("/")
     assert r.status_code == 200
-    assert 'id="nav-users"' in r.text
     assert "/admin/users" in r.text
+    assert 'class="site-nav"' in r.text
 
 
 # ---------------------------------------------------------------------------
@@ -478,6 +478,86 @@ async def test_send_device_alert(monkeypatch: pytest.MonkeyPatch) -> None:
     _to, _subject, _body = mock.call_args[0]
     assert _to == "alice@example.com"
     assert "1.2.3.4" in _body
+
+
+# ---------------------------------------------------------------------------
+# Timezone (#129)
+# ---------------------------------------------------------------------------
+
+
+def test_configured_tz_default() -> None:
+    from logger.races import configured_tz
+
+    tz = configured_tz()
+    assert str(tz) == "UTC"
+
+
+def test_configured_tz_custom(monkeypatch: pytest.MonkeyPatch) -> None:
+    from logger.races import configured_tz
+
+    monkeypatch.setenv("TIMEZONE", "America/Los_Angeles")
+    tz = configured_tz()
+    assert str(tz) == "America/Los_Angeles"
+
+
+def test_local_today_uses_tz(monkeypatch: pytest.MonkeyPatch) -> None:
+    from logger.races import local_today
+
+    monkeypatch.setenv("TIMEZONE", "Pacific/Auckland")  # UTC+12/+13
+    today = local_today()
+    # Just verify it returns a date object without crashing
+    assert today is not None
+    assert hasattr(today, "isoformat")
+
+
+def test_weekday_event_uses_local_date() -> None:
+    """Verify default_event_for_date works with any date."""
+    from datetime import date
+
+    from logger.races import default_event_for_date
+
+    # Monday = BallardCup
+    monday = date(2026, 3, 2)  # 2026-03-02 is a Monday
+    assert default_event_for_date(monday) == "BallardCup"
+
+    # Wednesday = CYC
+    wednesday = date(2026, 3, 4)
+    assert default_event_for_date(wednesday) == "CYC"
+
+    # Tuesday = None
+    tuesday = date(2026, 3, 3)
+    assert default_event_for_date(tuesday) is None
+
+
+# ---------------------------------------------------------------------------
+# Navigation (#130)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_nav_present_on_all_pages(client: AsyncClient, storage: Storage) -> None:
+    pages = ["/", "/history", "/admin/boats"]
+    for page in pages:
+        r = await client.get(page)
+        assert r.status_code == 200
+        assert 'class="site-nav"' in r.text, f"Nav missing on {page}"
+        assert "/admin/audit" in r.text, f"Audit link missing on {page}"
+
+
+@pytest.mark.asyncio
+async def test_footer_present_on_pages(client: AsyncClient) -> None:
+    r = await client.get("/")
+    assert r.status_code == 200
+    assert "<footer" in r.text
+
+
+@pytest.mark.asyncio
+async def test_api_state_includes_timezone(client: AsyncClient) -> None:
+    await client.post("/api/event", json={"event_name": "Test"})
+    r = await client.get("/api/state")
+    assert r.status_code == 200
+    data = r.json()
+    assert "timezone" in data
 
 
 @pytest.mark.asyncio

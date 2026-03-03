@@ -36,33 +36,90 @@ if TYPE_CHECKING:
 
 
 def _get_git_info() -> str:
-    """Return 'branch @ shortsha' from the current git repo, or '' on failure."""
+    """Return 'branch @ shortsha · clean/dirty' from the current git repo."""
     import subprocess
 
     try:
-        # Resolve the repo root from this file's location so the path isn't
-        # hardcoded.  The service account (j105logger) doesn't own the repo,
-        # so we must add it to safe.directory to pass git's ownership check.
         _repo = str(Path(__file__).resolve().parents[2])
         _git = ["git", "-c", f"safe.directory={_repo}"]
-        branch = subprocess.check_output(
-            [*_git, "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=_repo,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        ).strip()
-        sha = subprocess.check_output(
-            [*_git, "rev-parse", "--short=7", "HEAD"],
-            cwd=_repo,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        ).strip()
-        return f"{branch} @ {sha}"
+        def _run(args: list[str]) -> str:
+            return subprocess.check_output(
+                [*_git, *args], cwd=_repo, stderr=subprocess.DEVNULL, text=True
+            ).strip()
+
+        branch = _run(["rev-parse", "--abbrev-ref", "HEAD"])
+        sha = _run(["rev-parse", "--short=7", "HEAD"])
+
+        # Check for uncommitted changes
+        dirty = bool(_run(["status", "--porcelain"]))
+
+        # Check for unpushed commits (best-effort; skip if no upstream)
+        if not dirty:
+            try:
+                unpushed = _run(["rev-list", "@{upstream}..HEAD", "--count"])
+                if int(unpushed) > 0:
+                    dirty = True
+            except Exception:  # noqa: BLE001
+                pass  # no upstream configured
+
+        status = "dirty" if dirty else "clean"
+        return f"{branch} @ {sha} · {status}"
     except Exception:  # noqa: BLE001
         return ""
 
 
 _GIT_INFO: str = _get_git_info()
+
+# ---------------------------------------------------------------------------
+# Shared nav bar + footer
+# ---------------------------------------------------------------------------
+
+_NAV_CSS = """\
+nav.site-nav{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:8px 0;margin-bottom:8px;border-bottom:1px solid #1e3a5f}
+nav.site-nav a{color:#8892a4;text-decoration:none;font-size:.82rem;padding:4px 8px;border-radius:6px}
+nav.site-nav a:hover{color:#e8eaf0;background:#1e3a5f}
+nav.site-nav a.active{color:#7eb8f7;font-weight:600}
+nav.site-nav .spacer{flex:1}
+nav.site-nav .admin-link{display:none}
+nav.site-nav .profile-link{display:none}
+"""
+
+
+def _nav_html(current: str = "/") -> str:
+    """Return the shared navigation bar HTML.
+
+    *current* is the path of the active page (e.g. "/", "/history").
+    Admin-only links are hidden by default and revealed via JS /api/me check.
+    """
+
+    def _cls(path: str) -> str:
+        return ' class="active"' if path == current else ""
+
+    return f"""\
+<nav class="site-nav" id="site-nav">
+  <a href="/"{_cls("/")}>Home</a>
+  <a href="/history"{_cls("/history")}>History</a>
+  <a href="/admin/boats"{_cls("/admin/boats")}>Boats</a>
+  <a href="/admin/users" class="admin-link{" active" if current == "/admin/users" else ""}">Users</a>
+  <a href="/admin/audit" class="admin-link{" active" if current == "/admin/audit" else ""}">Audit</a>
+  <span class="spacer"></span>
+  <a href="/profile" class="profile-link" id="nav-profile"{_cls("/profile")}>\
+<img id="nav-avatar" src="" alt="" \
+style="width:18px;height:18px;border-radius:50%;vertical-align:middle;margin-right:3px">\
+<span id="nav-profile-name">Profile</span></a>
+</nav>
+<script>
+fetch('/api/me').then(r=>r.json()).then(u=>{{
+  if(u.role==='admin')document.querySelectorAll('.admin-link').forEach(el=>el.style.setProperty('display','inline','important'));
+  if(u.id){{const p=document.getElementById('nav-profile');if(p){{p.style.display='';document.getElementById('nav-avatar').src='/avatars/'+u.id+'.jpg';document.getElementById('nav-profile-name').textContent=u.name||'Profile';}}}}
+}}).catch(()=>{{}});
+</script>"""
+
+
+_FOOTER_HTML = (
+    '<footer style="text-align:center;padding:12px 0 8px;font-size:.7rem;color:#4a5568">'
+    "__GIT_INFO__</footer>"
+)
 
 # ---------------------------------------------------------------------------
 # HTML — inline mobile-first single-page app
@@ -78,6 +135,7 @@ _HTML = """\
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;font-size:clamp(.85rem,2vw,1rem)}
+__NAV_CSS__
 .page{max-width:480px;margin:0 auto;padding:16px 12px}
 @media(min-width:768px){.page{max-width:720px}}
 @media(min-width:1200px){.page{max-width:900px}}
@@ -163,15 +221,12 @@ background:#131f35;color:#7eb8f7;font-size:.8rem;cursor:pointer;text-decoration:
 <body>
 <div class="page">
 <div id="health-banner" style="display:none;background:#7f1d1d;color:#fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.85rem"></div>
+__NAV__
 <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px">
   <h1>J105 Logger</h1>
   <div style="display:flex;gap:6px;margin-top:2px">
-    <a class="btn-export" href="/history">📋 History</a>
-    <a class="btn-export" href="/admin/boats">⚓ Boats</a>
-    <a class="btn-export" id="nav-users" style="display:none" href="/admin/users">👥 Users</a>
     <a id="grafana-nav" class="btn-export btn-grafana" href="#" target="_blank">📊 Grafana</a>
     <a id="signalk-nav" class="btn-export" href="#" target="_blank" style="display:none">⚙ Signal K</a>
-    <a class="btn-export" id="nav-profile" style="display:none" href="/profile"><img id="nav-avatar" src="" alt="" style="width:20px;height:20px;border-radius:50%;vertical-align:middle;margin-right:4px"><span id="nav-profile-name"></span></a>
   </div>
 </div>
 <div class="sub" id="header-sub">Loading…</div>
@@ -366,12 +421,16 @@ function fmt(s) {
   return `${m}:${String(ss).padStart(2,'0')}`;
 }
 
+let _tz = 'UTC';
 function fmtTime(iso) {
   if(!iso) return '—';
-  return new Date(iso).toISOString().substring(11,19) + ' UTC';
+  try {
+    return new Date(iso).toLocaleTimeString('en-US',{timeZone:_tz,hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+  } catch(e) { return new Date(iso).toISOString().substring(11,19) + ' UTC'; }
 }
 
 function render(s) {
+  if(s.timezone) _tz = s.timezone;
   document.getElementById('header-sub').textContent =
     `${s.weekday} · ${s.event || '(no event)'}`;
 
@@ -1286,12 +1345,11 @@ setInterval(loadPolar, 2000);
 loadRecentSailors();
 checkSystemHealth();
 setInterval(checkSystemHealth, 30000);
-fetch('/api/me').then(r=>r.json()).then(u=>{if(u.role==='admin'){const el=document.getElementById('nav-users');if(el)el.style.display='';}if(u.id){const p=document.getElementById('nav-profile');const a=document.getElementById('nav-avatar');const n=document.getElementById('nav-profile-name');if(p){p.style.display='';a.src='/avatars/'+u.id+'.jpg';n.textContent=u.name||'Profile';}}}).catch(()=>{});
 document.querySelectorAll('.crew-input').forEach(inp => {
   inp.addEventListener('focus', () => { focusedCrewInput = inp; });
 });
 </script>
-<footer style="text-align:center;padding:12px 0 8px;font-size:.7rem;color:#4a5568">__GIT_INFO__</footer>
+__FOOTER__
 </div>
 </body>
 </html>
@@ -1312,6 +1370,7 @@ _HISTORY_HTML = """\
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;font-size:clamp(.85rem,2vw,1rem)}
+__NAV_CSS__
 .page{max-width:600px;margin:0 auto;padding:16px 12px}
 @media(min-width:768px){.page{max-width:860px}}
 @media(min-width:1200px){.page{max-width:1100px}}
@@ -1360,10 +1419,8 @@ background:#0a1628;color:#7eb8f7;font-size:.8rem;cursor:pointer}
 </head>
 <body>
 <div class="page">
-<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-  <a href="/" class="btn-export" style="padding:8px 14px">← Back</a>
-  <h1>Session History</h1>
-</div>
+__NAV__
+<h1 style="margin-bottom:12px">Session History</h1>
 
 <div class="card">
   <input id="q" class="event-input" placeholder="Search by name or event…"
@@ -1431,9 +1488,12 @@ async function load() {
   render(data);
 }
 
+let _tz = 'UTC';
 function fmtTime(iso) {
   if (!iso) return '—';
-  return new Date(iso).toISOString().substring(11,16) + ' UTC';
+  try {
+    return new Date(iso).toLocaleTimeString('en-US',{timeZone:_tz,hour:'2-digit',minute:'2-digit',hour12:false});
+  } catch(e) { return new Date(iso).toISOString().substring(11,16) + ' UTC'; }
 }
 
 function fmtDur(s) {
@@ -1961,9 +2021,9 @@ const now = new Date();
 const past = new Date(now - 30 * 86400000);
 document.getElementById('to-date').value = now.toISOString().substring(0,10);
 document.getElementById('from-date').value = past.toISOString().substring(0,10);
-load();
+fetch('/api/state').then(r=>r.json()).then(s=>{if(s.timezone)_tz=s.timezone;}).catch(()=>{}).finally(()=>load());
 </script>
-<footer style="text-align:center;padding:12px 0 8px;font-size:.7rem;color:#4a5568">__GIT_INFO__</footer>
+__FOOTER__
 </div>
 </body>
 </html>
@@ -1984,6 +2044,7 @@ _ADMIN_BOATS_HTML = """\
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;font-size:clamp(.85rem,2vw,1rem)}
+__NAV_CSS__
 .page{max-width:640px;margin:0 auto;padding:16px 12px}
 @media(min-width:768px){.page{max-width:860px}}
 @media(min-width:1200px){.page{max-width:1100px}}
@@ -2013,10 +2074,8 @@ tr:last-child td{border-bottom:none}
 </head>
 <body>
 <div class="page">
-<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-  <a href="/" class="btn-export" style="padding:8px 14px">← Back</a>
-  <h1>Boat Registry</h1>
-</div>
+__NAV__
+<h1 style="margin-bottom:12px">Boat Registry</h1>
 
 <div class="card">
   <div class="label">Add Boat</div>
@@ -2126,7 +2185,7 @@ async function deleteBoat(id) {
 
 loadBoats();
 </script>
-<footer style="text-align:center;padding:12px 0 8px;font-size:.7rem;color:#4a5568">__GIT_INFO__</footer>
+__FOOTER__
 </div>
 </body>
 </html>
@@ -2255,6 +2314,23 @@ font-size:1rem;font-weight:700;cursor:pointer;background:#2563eb;color:#fff}
 
 def _render_admin_users_html(users: list[dict[str, Any]], sessions: list[dict[str, Any]]) -> str:
     """Render a simple admin users management page."""
+    from logger.races import configured_tz
+
+    tz = configured_tz()
+
+    def _local_ts(utc_str: str | None) -> str:
+        if not utc_str:
+            return "—"
+        try:
+            from datetime import datetime as _dt
+
+            dt = _dt.fromisoformat(utc_str).astimezone(tz)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:  # noqa: BLE001
+            return utc_str[:19]
+
+    nav = _nav_html("/admin/users")
+    footer = _FOOTER_HTML.replace("__GIT_INFO__", _GIT_INFO)
     role_colors = {"admin": "#f59e0b", "crew": "#34d399", "viewer": "#60a5fa"}
 
     def _badge(role: str) -> str:
@@ -2264,7 +2340,7 @@ def _render_admin_users_html(users: list[dict[str, Any]], sessions: list[dict[st
     rows = "".join(
         f"<tr><td>{u['email']}</td><td>{u['name'] or '—'}</td>"
         f"<td>{_badge(u['role'])}</td>"
-        f"<td>{(u['last_seen'] or '—')[:19]}</td>"
+        f"<td>{_local_ts(u['last_seen'])}</td>"
         f'<td><button onclick="changeRole({u["id"]})" style="cursor:pointer;background:none;border:1px solid #2563eb;color:#7eb8f7;border-radius:4px;padding:2px 8px;font-size:.8rem">Change role</button></td>'
         f"</tr>"
         for u in users
@@ -2272,8 +2348,8 @@ def _render_admin_users_html(users: list[dict[str, Any]], sessions: list[dict[st
     sess_rows = "".join(
         f"<tr><td>{s.get('email', '')}</td><td>{s.get('role', '')}</td>"
         f"<td>{s.get('ip', '—')}</td>"
-        f"<td>{s['created_at'][:19]}</td>"
-        f"<td>{s['expires_at'][:19]}</td>"
+        f"<td>{_local_ts(s['created_at'])}</td>"
+        f"<td>{_local_ts(s['expires_at'])}</td>"
         f'<td><button onclick="revokeSession(\'{s["session_id"]}\')" style="cursor:pointer;background:#7f1d1d;border:none;color:#fca5a5;border-radius:4px;padding:2px 8px;font-size:.8rem">Revoke</button></td>'
         f"</tr>"
         for s in sessions
@@ -2287,6 +2363,7 @@ def _render_admin_users_html(users: list[dict[str, Any]], sessions: list[dict[st
 body{{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;padding:16px;max-width:900px;margin:0 auto}}
 h1{{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:4px}}
 h2{{font-size:1rem;font-weight:600;color:#e8eaf0;margin:20px 0 10px}}
+{_NAV_CSS}
 .card{{background:#131f35;border-radius:12px;padding:16px;margin-bottom:16px}}
 table{{width:100%;border-collapse:collapse;font-size:.85rem}}
 th{{text-align:left;padding:6px 8px;color:#8892a4;font-weight:500;border-bottom:1px solid #1e3a5f}}
@@ -2298,6 +2375,7 @@ input,select{{background:#0a1628;border:1px solid #2563eb;border-radius:6px;padd
 </style>
 </head>
 <body>
+{nav}
 <h1>Admin — Users &amp; Sessions</h1>
 <div class="card">
 <h2>Users</h2>
@@ -2347,6 +2425,7 @@ async function revokeSession(sid) {{
   location.reload();
 }}
 </script>
+{footer}
 </body></html>"""
 
 
@@ -2354,6 +2433,8 @@ def _render_profile_html(user: dict[str, Any]) -> str:
     """Render the self-service profile page."""
     import time
 
+    nav = _nav_html("/profile")
+    footer = _FOOTER_HTML.replace("__GIT_INFO__", _GIT_INFO)
     user_id = user.get("id") or 0
     name = user.get("name") or user.get("email") or "Unknown"
     email = user.get("email") or ""
@@ -2376,12 +2457,12 @@ h1{{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:12px}}
 .email{{color:#8892a4;font-size:.85rem;margin-bottom:8px}}
 .role{{background:{rc}22;color:{rc};padding:2px 10px;border-radius:4px;font-size:.8rem;display:inline-block}}
 a{{color:#7eb8f7;text-decoration:none}}
+{_NAV_CSS}
 </style>
 </head>
 <body>
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-  <h1>Profile</h1><a href="/">&larr; Home</a>
-</div>
+{nav}
+<h1 style="margin-bottom:12px">Profile</h1>
 <div class="card">
   <img class="avatar" id="avatar" src="{avatar_url}" alt="avatar" onclick="document.getElementById('file').click()"/>
   <input type="file" id="file" accept="image/*" style="display:none"/>
@@ -2404,13 +2485,29 @@ document.getElementById('file').addEventListener('change', async e => {{
   }}
 }});
 </script>
+{footer}
 </body></html>"""
 
 
 def _render_admin_audit_html(entries: list[dict[str, Any]]) -> str:
     """Render the audit log page."""
+    from logger.races import configured_tz
+
+    tz = configured_tz()
+
+    def _local_ts(utc_str: str) -> str:
+        try:
+            from datetime import datetime as _dt
+
+            dt = _dt.fromisoformat(utc_str).astimezone(tz)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:  # noqa: BLE001
+            return utc_str[:19]
+
+    nav = _nav_html("/admin/audit")
+    footer = _FOOTER_HTML.replace("__GIT_INFO__", _GIT_INFO)
     rows = "".join(
-        f"<tr><td>{e['ts'][:19]}</td>"
+        f"<tr><td>{_local_ts(e['ts'])}</td>"
         f"<td>{e.get('user_name') or e.get('user_email') or '—'}</td>"
         f"<td><code>{e['action']}</code></td>"
         f'<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{e.get("detail") or ""}</td>'  # noqa: E501
@@ -2431,19 +2528,19 @@ th{{text-align:left;padding:6px 8px;color:#8892a4;font-weight:500;border-bottom:
 td{{padding:6px 8px;border-bottom:1px solid #0d1a2e}}
 code{{background:#1e3a5f;padding:1px 5px;border-radius:3px;font-size:.78rem}}
 a{{color:#7eb8f7;text-decoration:none}}
+{_NAV_CSS}
 </style>
 </head>
 <body>
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-  <h1>Audit Log</h1>
-  <a href="/admin/users">&larr; Back to Users</a>
-</div>
+{nav}
+<h1 style="margin-bottom:12px">Audit Log</h1>
 <div class="card">
-<table><thead><tr><th>Time (UTC)</th><th>User</th><th>Action</th><th>Detail</th><th>IP</th></tr></thead>
+<table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th><th>IP</th></tr></thead>
 <tbody>{rows}</tbody>
 </table>
 {('<p style="text-align:center;color:#8892a4;padding:20px">No audit entries yet.</p>' if not entries else "")}
 </div>
+{footer}
 </body></html>"""
 
 
@@ -2475,18 +2572,28 @@ def create_app(
     from logger.races import RaceConfig
 
     cfg = RaceConfig()
-    _page = (
+
+    def _inject_shared(html: str, current: str) -> str:
+        return (
+            html.replace("__NAV_CSS__", _NAV_CSS)
+            .replace("__NAV__", _nav_html(current))
+            .replace("__FOOTER__", _FOOTER_HTML)
+            .replace("__GIT_INFO__", _GIT_INFO)
+        )
+
+    _page = _inject_shared(
         _HTML.replace("__GRAFANA_PORT__", cfg.grafana_port)
         .replace("__GRAFANA_UID__", cfg.grafana_uid)
-        .replace("__SK_PORT__", cfg.sk_port)
-        .replace("__GIT_INFO__", _GIT_INFO)
+        .replace("__SK_PORT__", cfg.sk_port),
+        "/",
     )
-    _history_page = (
-        _HISTORY_HTML.replace("__GRAFANA_PORT__", cfg.grafana_port)
-        .replace("__GRAFANA_UID__", cfg.grafana_uid)
-        .replace("__GIT_INFO__", _GIT_INFO)
+    _history_page = _inject_shared(
+        _HISTORY_HTML.replace("__GRAFANA_PORT__", cfg.grafana_port).replace(
+            "__GRAFANA_UID__", cfg.grafana_uid
+        ),
+        "/history",
     )
-    _admin_page = _ADMIN_BOATS_HTML.replace("__GIT_INFO__", _GIT_INFO)
+    _admin_page = _inject_shared(_ADMIN_BOATS_HTML, "/admin/boats")
 
     from logger.auth import (
         _is_auth_disabled,
@@ -2778,12 +2885,12 @@ def create_app(
     @app.get("/api/state")
     async def api_state() -> JSONResponse:
         from logger.races import Race as _Race
-        from logger.races import default_event_for_date
+        from logger.races import configured_tz, default_event_for_date, local_today, local_weekday
 
         now = datetime.now(UTC)
-        today = now.date()
+        today = local_today()
         date_str = today.isoformat()
-        weekday = today.strftime("%A")
+        weekday = local_weekday()
 
         default_event = default_event_for_date(today)
         custom_event = await storage.get_daily_event(date_str)
@@ -2845,6 +2952,7 @@ def create_app(
             {
                 "date": date_str,
                 "weekday": weekday,
+                "timezone": str(configured_tz()),
                 "event": event,
                 "event_is_default": event_is_default,
                 "current_race": current_dict,
@@ -2917,7 +3025,9 @@ def create_app(
         event_name = body.event_name.strip()
         if not event_name:
             raise HTTPException(status_code=422, detail="event_name must not be blank")
-        date_str = datetime.now(UTC).date().isoformat()
+        from logger.races import local_today
+
+        date_str = local_today().isoformat()
         await storage.set_daily_event(date_str, event_name)
         await _audit(request, "event.set", detail=event_name, user=_user)
 
@@ -2945,8 +3055,10 @@ def create_app(
                 detail="session_type must be 'race' or 'practice'",
             )
 
+        from logger.races import local_today
+
         now = datetime.now(UTC)
-        today = now.date()
+        today = local_today()
         date_str = today.isoformat()
 
         default_event = default_event_for_date(today)
@@ -3128,7 +3240,9 @@ def create_app(
         if fmt not in ("csv", "gpx", "json"):
             raise HTTPException(status_code=400, detail="fmt must be csv, gpx, or json")
 
-        races = await storage.list_races_for_date(datetime.now(UTC).date().isoformat())
+        from logger.races import local_today
+
+        races = await storage.list_races_for_date(local_today().isoformat())
         # Also search across all dates by fetching by id directly
         race = None
         for r in races:
@@ -3221,7 +3335,9 @@ def create_app(
     @app.get("/api/races")
     async def api_list_races(date: str | None = None) -> JSONResponse:
         if date is None:
-            date = datetime.now(UTC).date().isoformat()
+            from logger.races import local_today
+
+            date = local_today().isoformat()
         races = await storage.list_races_for_date(date)
         result = []
         for r in races:

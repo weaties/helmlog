@@ -2,6 +2,20 @@
 
 ## Unreleased (main, 2026-03-02)
 
+### Shared navigation, version footer, timezone support (#129, #130)
+
+Consistent navigation and timezone-aware timestamps across all pages:
+
+- **Shared nav bar** — Home, History, Boats, Users (admin), Audit (admin), and
+  Profile links appear on every page; admin-only links auto-hide for non-admins
+- **Version footer** — every page shows the git branch, short SHA, and
+  dirty/clean status (includes uncommitted changes and unpushed commits)
+- **Configurable timezone** — set `TIMEZONE=America/Los_Angeles` (or any IANA
+  name) in `.env` to display all timestamps in local time instead of UTC; affects
+  race date grouping, weekday event naming, and all displayed timestamps on home,
+  history, audit, and admin pages
+- 12 new tests (425 total passing)
+
 ### Environments & DNS — saillog.io (#125)
 
 Registered `saillog.io` on Cloudflare and documented the full promotion

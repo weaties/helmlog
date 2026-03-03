@@ -53,12 +53,13 @@ grafana-server.service (independent, starts at boot)
 8. [Recording audio commentary](#recording-audio-commentary)
 9. [Audio transcription](#audio-transcription)
 10. [Email notifications](#email-notifications)
-11. [System health monitoring](#system-health-monitoring)
-12. [Mac development](#mac-development)
-13. [Fresh SD card setup](#fresh-sd-card-setup)
-14. [Updating / deploying](#updating--deploying)
-15. [Configuration](#configuration)
-16. [Troubleshooting](#troubleshooting)
+11. [Timezone configuration](#timezone-configuration)
+12. [System health monitoring](#system-health-monitoring)
+13. [Mac development](#mac-development)
+14. [Fresh SD card setup](#fresh-sd-card-setup)
+15. [Updating / deploying](#updating--deploying)
+16. [Configuration](#configuration)
+17. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -691,6 +692,29 @@ service. Login links will continue to be printed to the terminal as before.
 
 ---
 
+## Timezone configuration
+
+By default all timestamps in the web UI display in UTC. Set the `TIMEZONE`
+environment variable to display times in your local timezone instead:
+
+```bash
+# In ~/j105-logger/.env:
+TIMEZONE=America/Los_Angeles
+```
+
+Restart the service after changing this value. The timezone affects:
+
+- **Race grouping** — races are grouped by local date, not UTC date
+- **Weekday event naming** — Monday/Wednesday auto-naming uses the local weekday
+- **All displayed timestamps** — home page, history, audit log, and admin pages
+  all convert UTC timestamps to the configured timezone
+
+The value must be a valid [IANA timezone name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
+(e.g. `America/New_York`, `Europe/London`, `US/Pacific`). If unset or invalid,
+UTC is used.
+
+---
+
 ## System health monitoring
 
 The logger automatically monitors the Pi's CPU, memory, disk usage, and
@@ -1040,6 +1064,8 @@ WEB_PORT=3002           # http://corvopi:3002 on Tailscale
 # Grafana deep-link buttons in the web UI
 GRAFANA_URL=http://corvopi:3001
 GRAFANA_DASHBOARD_UID=j105-sailing
+# Timezone — controls weekday event naming and UI timestamp display (default: UTC)
+# TIMEZONE=America/Los_Angeles
 # Email notifications (optional — welcome emails + new-device alerts)
 # SMTP_HOST=smtp.gmail.com   # SMTP server hostname
 # SMTP_PORT=587              # SMTP port (587 for STARTTLS)

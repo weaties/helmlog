@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
-    from datetime import date, datetime
+    from datetime import date
 
 
 # ---------------------------------------------------------------------------
@@ -45,20 +47,32 @@ class RaceConfig:
     web_host: str = field(default_factory=lambda: os.environ.get("WEB_HOST", "0.0.0.0"))
     web_port: int = field(default_factory=lambda: int(os.environ.get("WEB_PORT", "3002")))
     public_url: str = field(default_factory=lambda: os.environ.get("PUBLIC_URL", "").rstrip("/"))
-    grafana_port: str = field(
-        default_factory=lambda: os.environ.get("GRAFANA_PORT", "3001")
-    )
+    grafana_port: str = field(default_factory=lambda: os.environ.get("GRAFANA_PORT", "3001"))
     grafana_uid: str = field(
         default_factory=lambda: os.environ.get("GRAFANA_DASHBOARD_UID", "j105-sailing")
     )
-    sk_port: str = field(
-        default_factory=lambda: os.environ.get("SK_PORT", "3000")
-    )
+    sk_port: str = field(default_factory=lambda: os.environ.get("SK_PORT", "3000"))
 
 
 # ---------------------------------------------------------------------------
 # Pure functions
 # ---------------------------------------------------------------------------
+
+
+def configured_tz() -> ZoneInfo:
+    """Return the configured timezone from TIMEZONE env var, defaulting to UTC."""
+    return ZoneInfo(os.environ.get("TIMEZONE", "UTC"))
+
+
+def local_today() -> date:
+    """Return today's date in the configured timezone."""
+    return datetime.now(configured_tz()).date()
+
+
+def local_weekday() -> str:
+    """Return the full weekday name in the configured timezone (e.g. 'Monday')."""
+    return datetime.now(configured_tz()).strftime("%A")
+
 
 _WEEKDAY_EVENTS: dict[int, str] = {
     0: "BallardCup",  # Monday
