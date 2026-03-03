@@ -110,7 +110,7 @@ style="width:18px;height:18px;border-radius:50%;vertical-align:middle;margin-rig
 </nav>
 <script>
 fetch('/api/me').then(r=>r.json()).then(u=>{{
-  if(u.role==='admin')document.querySelectorAll('.admin-link').forEach(el=>el.style.display='');
+  if(u.role==='admin')document.querySelectorAll('.admin-link').forEach(el=>el.style.setProperty('display','inline','important'));
   if(u.id){{const p=document.getElementById('nav-profile');if(p){{p.style.display='';document.getElementById('nav-avatar').src='/avatars/'+u.id+'.jpg';document.getElementById('nav-profile-name').textContent=u.name||'Profile';}}}}
 }}).catch(()=>{{}});
 </script>"""
@@ -421,12 +421,16 @@ function fmt(s) {
   return `${m}:${String(ss).padStart(2,'0')}`;
 }
 
+let _tz = 'UTC';
 function fmtTime(iso) {
   if(!iso) return '—';
-  return new Date(iso).toISOString().substring(11,19) + ' UTC';
+  try {
+    return new Date(iso).toLocaleTimeString('en-US',{timeZone:_tz,hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+  } catch(e) { return new Date(iso).toISOString().substring(11,19) + ' UTC'; }
 }
 
 function render(s) {
+  if(s.timezone) _tz = s.timezone;
   document.getElementById('header-sub').textContent =
     `${s.weekday} · ${s.event || '(no event)'}`;
 
@@ -1484,9 +1488,12 @@ async function load() {
   render(data);
 }
 
+let _tz = 'UTC';
 function fmtTime(iso) {
   if (!iso) return '—';
-  return new Date(iso).toISOString().substring(11,16) + ' UTC';
+  try {
+    return new Date(iso).toLocaleTimeString('en-US',{timeZone:_tz,hour:'2-digit',minute:'2-digit',hour12:false});
+  } catch(e) { return new Date(iso).toISOString().substring(11,16) + ' UTC'; }
 }
 
 function fmtDur(s) {
@@ -2014,7 +2021,7 @@ const now = new Date();
 const past = new Date(now - 30 * 86400000);
 document.getElementById('to-date').value = now.toISOString().substring(0,10);
 document.getElementById('from-date').value = past.toISOString().substring(0,10);
-load();
+fetch('/api/state').then(r=>r.json()).then(s=>{if(s.timezone)_tz=s.timezone;}).catch(()=>{}).finally(()=>load());
 </script>
 __FOOTER__
 </div>
@@ -2307,6 +2314,21 @@ font-size:1rem;font-weight:700;cursor:pointer;background:#2563eb;color:#fff}
 
 def _render_admin_users_html(users: list[dict[str, Any]], sessions: list[dict[str, Any]]) -> str:
     """Render a simple admin users management page."""
+    from logger.races import configured_tz
+
+    tz = configured_tz()
+
+    def _local_ts(utc_str: str | None) -> str:
+        if not utc_str:
+            return "—"
+        try:
+            from datetime import datetime as _dt
+
+            dt = _dt.fromisoformat(utc_str).astimezone(tz)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:  # noqa: BLE001
+            return utc_str[:19]
+
     nav = _nav_html("/admin/users")
     footer = _FOOTER_HTML.replace("__GIT_INFO__", _GIT_INFO)
     role_colors = {"admin": "#f59e0b", "crew": "#34d399", "viewer": "#60a5fa"}
@@ -2318,7 +2340,7 @@ def _render_admin_users_html(users: list[dict[str, Any]], sessions: list[dict[st
     rows = "".join(
         f"<tr><td>{u['email']}</td><td>{u['name'] or '—'}</td>"
         f"<td>{_badge(u['role'])}</td>"
-        f"<td>{(u['last_seen'] or '—')[:19]}</td>"
+        f"<td>{_local_ts(u['last_seen'])}</td>"
         f'<td><button onclick="changeRole({u["id"]})" style="cursor:pointer;background:none;border:1px solid #2563eb;color:#7eb8f7;border-radius:4px;padding:2px 8px;font-size:.8rem">Change role</button></td>'
         f"</tr>"
         for u in users
@@ -2326,8 +2348,8 @@ def _render_admin_users_html(users: list[dict[str, Any]], sessions: list[dict[st
     sess_rows = "".join(
         f"<tr><td>{s.get('email', '')}</td><td>{s.get('role', '')}</td>"
         f"<td>{s.get('ip', '—')}</td>"
-        f"<td>{s['created_at'][:19]}</td>"
-        f"<td>{s['expires_at'][:19]}</td>"
+        f"<td>{_local_ts(s['created_at'])}</td>"
+        f"<td>{_local_ts(s['expires_at'])}</td>"
         f'<td><button onclick="revokeSession(\'{s["session_id"]}\')" style="cursor:pointer;background:#7f1d1d;border:none;color:#fca5a5;border-radius:4px;padding:2px 8px;font-size:.8rem">Revoke</button></td>'
         f"</tr>"
         for s in sessions
@@ -2469,10 +2491,23 @@ document.getElementById('file').addEventListener('change', async e => {{
 
 def _render_admin_audit_html(entries: list[dict[str, Any]]) -> str:
     """Render the audit log page."""
+    from logger.races import configured_tz
+
+    tz = configured_tz()
+
+    def _local_ts(utc_str: str) -> str:
+        try:
+            from datetime import datetime as _dt
+
+            dt = _dt.fromisoformat(utc_str).astimezone(tz)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:  # noqa: BLE001
+            return utc_str[:19]
+
     nav = _nav_html("/admin/audit")
     footer = _FOOTER_HTML.replace("__GIT_INFO__", _GIT_INFO)
     rows = "".join(
-        f"<tr><td>{e['ts'][:19]}</td>"
+        f"<tr><td>{_local_ts(e['ts'])}</td>"
         f"<td>{e.get('user_name') or e.get('user_email') or '—'}</td>"
         f"<td><code>{e['action']}</code></td>"
         f'<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{e.get("detail") or ""}</td>'  # noqa: E501
@@ -2500,7 +2535,7 @@ a{{color:#7eb8f7;text-decoration:none}}
 {nav}
 <h1 style="margin-bottom:12px">Audit Log</h1>
 <div class="card">
-<table><thead><tr><th>Time (UTC)</th><th>User</th><th>Action</th><th>Detail</th><th>IP</th></tr></thead>
+<table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th><th>IP</th></tr></thead>
 <tbody>{rows}</tbody>
 </table>
 {('<p style="text-align:center;color:#8892a4;padding:20px">No audit entries yet.</p>' if not entries else "")}
