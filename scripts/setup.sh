@@ -65,7 +65,12 @@ sudo apt-get install -y \
     unattended-upgrades apt-listchanges \
     usbmuxd libimobiledevice-utils \
     hostapd dnsmasq \
-    nginx certbot python3-certbot-dns-cloudflare
+    nginx certbot python3-certbot-dns-cloudflare \
+    tmux locales
+
+# Ensure en_US.UTF-8 locale is generated (prevents setlocale warnings on SSH)
+sudo sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+sudo locale-gen
 
 # iptables-persistent asks interactive questions — pre-seed answers
 echo iptables-persistent iptables-persistent/autosave_v4 boolean true | sudo debconf-set-selections
