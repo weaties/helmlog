@@ -9,29 +9,32 @@ publicly via Cloudflare Tunnel everywhere else.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Raspberry Pi (corvo)                                   │
-│                                                         │
-│  ┌──────────┐  ┌──────────┐  ┌────────────┐            │
-│  │ hostapd  │  │ dnsmasq  │  │  nginx     │            │
-│  │ (wlan0)  │  │ DHCP+DNS │  │  TLS proxy │            │
-│  └──────────┘  └──────────┘  └────────────┘            │
-│        │              │              │                   │
-│        └──────────────┴──────────────┘                  │
-│                       │                                  │
-│  ┌──────────┐   ┌───────────┐   ┌───────────┐          │
-│  │ eth1     │   │cloudflared│   │ web app   │          │
-│  │ (iPhone) │   │ (tunnel)  │   │ :3002     │          │
-│  └──────────┘   └───────────┘   └───────────┘          │
-│        │              │                                  │
-│  ┌──────────┐         │                                  │
-│  │ tailscale│         │                                  │
-│  │ (tailnet)│         │                                  │
-│  └──────────┘         │                                  │
-└───────────────────────┘─────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Raspberry Pi (corvo)                                        │
+│                                                              │
+│  ┌──────────┐  ┌──────────┐  ┌─────────────────────────┐    │
+│  │ hostapd  │  │ dnsmasq  │  │  nginx                  │    │
+│  │ (wlan0)  │  │ DHCP+DNS │  │  192.168.4.1:443 (TLS)  │    │
+│  └──────────┘  └──────────┘  │  127.0.0.1:8080 (CF)    │    │
+│        │              │      └─────────────────────────┘    │
+│        └──────────────┴──────────────┤                       │
+│                                      │                       │
+│  ┌──────────┐   ┌───────────┐   ┌────┴──────────────────┐   │
+│  │ eth1     │   │cloudflared│   │ /grafana/ → :3001     │   │
+│  │ (iPhone) │   │ → :8080   │   │ /signalk/ → :3000     │   │
+│  └──────────┘   └───────────┘   │ /         → :3002     │   │
+│        │                        └───────────────────────┘   │
+│  ┌──────────┐                                                │
+│  │ tailscale│  Funnel strips prefixes directly:              │
+│  │ (tailnet)│  /grafana/ → :3001, /signalk/ → :3000          │
+│  └──────────┘                                                │
+└──────────────────────────────────────────────────────────────┘
 
-Hotspot clients:  corvo.saillog.io → 192.168.4.1 (local, via dnsmasq)
-Remote users:     corvo.saillog.io → Cloudflare edge → tunnel → Pi :3002
+Hotspot clients:  corvo.live.saillog.io → 192.168.4.1 (local, via dnsmasq)
+                    → nginx strips /grafana/, /signalk/ prefixes → backends
+Remote users:     corvo.saillog.io → Cloudflare edge → tunnel → nginx :8080
+                    → nginx strips /grafana/, /signalk/ prefixes → backends
+Tailscale users:  corvopi.<tailnet>.ts.net → Funnel strips prefixes → backends
 ```
 
 > **Why Cloudflare Tunnel?** Mint Mobile (T-Mobile MVNO) uses CGNAT — inbound
@@ -244,33 +247,100 @@ Verify auto-renewal: `sudo systemctl status certbot.timer`
 
 ## Step 7 — nginx Reverse Proxy
 
-nginx serves TLS for hotspot clients hitting `corvo.saillog.io` locally.
-It binds only to `192.168.4.1` to avoid conflicting with Tailscale Funnel
-on the Tailscale IP.
+nginx serves two roles:
+
+1. **TLS reverse proxy for hotspot clients** — serves `corvo.live.saillog.io`
+   on the hotspot IP (`192.168.4.1`) with path-based routing to Grafana and
+   Signal K.
+2. **Path-routing proxy for Cloudflare Tunnel** — listens on `127.0.0.1:8080`
+   and strips `/grafana/` and `/signalk/` prefixes before proxying to the
+   respective backend services. cloudflared routes all `corvo.saillog.io`
+   traffic here (see Step 8).
 
 ```bash
 sudo apt install nginx
 ```
 
-Create `/etc/nginx/sites-available/corvo`:
+### Hotspot site — `/etc/nginx/sites-available/corvo`
 
 ```nginx
 server {
     listen 192.168.4.1:80;
-    server_name corvo.saillog.io;
+    server_name corvo.live.saillog.io;
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 192.168.4.1:443 ssl;
-    server_name corvo.saillog.io;
+    server_name corvo.live.saillog.io;
 
-    ssl_certificate     /etc/letsencrypt/live/corvo.saillog.io/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/corvo.saillog.io/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/corvo.live.saillog.io/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/corvo.live.saillog.io/privkey.pem;
 
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
+
+    location /grafana/ {
+        proxy_pass http://127.0.0.1:3001/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /signalk/ {
+        proxy_pass http://127.0.0.1:3000/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3002;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### Cloudflare Tunnel proxy — `/etc/nginx/conf.d/cloudflare-tunnel.conf`
+
+This config is written automatically by `deploy.sh` on every deploy.
+
+```nginx
+server {
+    listen 127.0.0.1:8080;
+
+    location /grafana/ {
+        proxy_pass http://127.0.0.1:3001/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /signalk/ {
+        proxy_pass http://127.0.0.1:3000/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
 
     location / {
         proxy_pass http://127.0.0.1:3002;
@@ -345,9 +415,21 @@ protocol: http2
 
 ingress:
   - hostname: corvo.saillog.io
-    service: http://127.0.0.1:3002
+    service: http://127.0.0.1:8080
   - service: http_status:404
 ```
+
+Traffic routes through **nginx on port 8080** which handles path-based routing:
+`/grafana/` → Grafana (3001), `/signalk/` → Signal K (3000), everything else →
+j105-logger (3002). This is needed because cloudflared passes request paths
+through unchanged (unlike Tailscale Funnel which strips path prefixes), and
+Grafana doesn't serve from the `/grafana/` sub-path. The nginx proxy strips the
+prefix before forwarding. See Step 7 for the nginx config.
+
+`deploy.sh` manages this config automatically — it reads the tunnel ID and
+credentials from the existing config, writes the updated ingress rules to both
+`/etc/cloudflared/config.yml` (used by the systemd service) and
+`~/.cloudflared/config.yml` (used for manual runs), then restarts cloudflared.
 
 > **Why `protocol: http2`?** Cellular carriers (T-Mobile/Mint) often
 > throttle or block UDP, which breaks the default QUIC protocol.
@@ -446,6 +528,7 @@ tailscale status                                     # tailscale up
 | `/etc/dnsmasq.d/hotspot.conf` | DHCP + split-horizon DNS |
 | `/etc/sysctl.d/90-hotspot.conf` | IP forwarding |
 | `/etc/nginx/sites-available/corvo` | TLS + reverse proxy (hotspot clients) |
+| `/etc/nginx/conf.d/cloudflare-tunnel.conf` | Path-routing proxy for Cloudflare Tunnel (managed by deploy.sh) |
 | `/etc/letsencrypt/cloudflare.ini` | Cloudflare API creds for certbot |
 | `/etc/letsencrypt/renewal-hooks/post/reload-nginx.sh` | Reload nginx on cert renewal |
 | `~/.cloudflared/config.yml` | Cloudflare Tunnel config |

@@ -29,6 +29,20 @@ sudo rsync "$PROVISION_SRC" "$PROVISION_DEST"
 echo "==> Copying datasource provisioning config"
 sudo rsync "$DATASOURCE_SRC" "$DATASOURCE_DEST"
 
+# Ensure the InfluxDB datasource has the real token (not the placeholder)
+INFLUX_TOKEN_FILE="$HOME/influx-token.txt"
+INFLUX_DS="/etc/grafana/provisioning/datasources/influxdb.yaml"
+if [[ -f "$INFLUX_TOKEN_FILE" ]] && [[ -f "$INFLUX_DS" ]]; then
+    INFLUX_TOKEN="$(cat "$INFLUX_TOKEN_FILE")"
+    if grep -q 'REPLACE_WITH_INFLUX_TOKEN' "$INFLUX_DS" 2>/dev/null; then
+        echo "==> Updating InfluxDB datasource token from $INFLUX_TOKEN_FILE"
+        TMPDS="$(mktemp)"
+        sed "s/REPLACE_WITH_INFLUX_TOKEN/${INFLUX_TOKEN}/" "$INFLUX_DS" > "$TMPDS"
+        sudo rsync "$TMPDS" "$INFLUX_DS"
+        rm -f "$TMPDS"
+    fi
+fi
+
 echo "==> Restarting grafana-server"
 sudo systemctl restart grafana-server
 

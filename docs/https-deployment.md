@@ -70,10 +70,11 @@ cloudflared tunnel create j105-logger
 cat > ~/.cloudflared/config.yml << 'EOF'
 tunnel: j105-logger
 credentials-file: /home/pi/.cloudflared/<tunnel-id>.json
+protocol: http2
 
 ingress:
   - hostname: logger.yourboat.com
-    service: http://localhost:3002
+    service: http://localhost:8080
   - service: http_status:404
 EOF
 
@@ -84,6 +85,12 @@ cloudflared tunnel route dns j105-logger logger.yourboat.com
 sudo cloudflared service install
 sudo systemctl start cloudflared
 ```
+
+Traffic is routed through **nginx on port 8080** which handles path-based
+routing — stripping `/grafana/` and `/signalk/` prefixes before proxying to
+the respective backend services. `deploy.sh` writes the nginx config at
+`/etc/nginx/conf.d/cloudflare-tunnel.conf` automatically. See the
+[Corvo hotspot guide](corvo-hotspot-network-setup.md) for the full nginx config.
 
 No router changes needed.  HTTPS is provided by Cloudflare.
 

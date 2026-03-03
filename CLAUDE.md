@@ -225,6 +225,8 @@ On the Pi (`corvopi`), the service runs as a dedicated `j105logger` system accou
 - `sudo` access for `weaties` is scoped to specific service commands (see `/etc/sudoers.d/j105-logger-allowed`)
 - InfluxDB binds to `127.0.0.1:8086` only; Grafana binds to `127.0.0.1:3001` only
 - Signal K is on `*:3000`; exposed publicly via Tailscale Funnel at `/signalk/`
+- **Two public ingress paths** — Tailscale Funnel (path stripping built-in) and Cloudflare Tunnel (routes via nginx on `127.0.0.1:8080` which strips `/grafana/` and `/signalk/` prefixes)
+- nginx config for Cloudflare Tunnel: `/etc/nginx/conf.d/cloudflare-tunnel.conf` (managed by `deploy.sh`)
 - Grafana auth: anonymous disabled; `GF_AUTH_ANONYMOUS_ENABLED=false` via systemd `Environment=`
 - Signal K auth: `@signalk/sk-simple-token-security`; admin password in `~/.signalk-admin-pass.txt`
 

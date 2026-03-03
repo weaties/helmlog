@@ -249,20 +249,40 @@ if [[ ! -f "$NGINX_SITE" ]]; then
     sudo tee "$NGINX_SITE" > /dev/null << 'EOF'
 server {
     listen 192.168.4.1:80;
-    server_name corvo.saillog.io;
+    server_name corvo.live.saillog.io;
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 192.168.4.1:443 ssl;
-    server_name corvo.saillog.io;
+    server_name corvo.live.saillog.io;
 
-    ssl_certificate     /etc/letsencrypt/live/corvo.saillog.io/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/corvo.saillog.io/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/corvo.live.saillog.io/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/corvo.live.saillog.io/privkey.pem;
 
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
+
+    location /grafana/ {
+        proxy_pass http://127.0.0.1:3001/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /signalk/ {
+        proxy_pass http://127.0.0.1:3000/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
 
     location / {
         proxy_pass http://127.0.0.1:3002;
@@ -479,8 +499,14 @@ influx setup \
 # Capture token for downstream configs
 INFLUX_TOKEN="$(influx auth list --json 2>/dev/null | jq -r '.[0].token' || echo '')"
 if [[ -z "$INFLUX_TOKEN" || "$INFLUX_TOKEN" == "null" ]]; then
-    warn "Could not retrieve InfluxDB token. Plugin config will need manual token update."
-    INFLUX_TOKEN="REPLACE_WITH_INFLUX_TOKEN"
+    # Fall back to saved token file if `influx` CLI can't retrieve it
+    if [[ -f "$INFLUX_TOKEN_FILE" ]]; then
+        INFLUX_TOKEN="$(cat "$INFLUX_TOKEN_FILE")"
+        info "InfluxDB token read from: $INFLUX_TOKEN_FILE"
+    else
+        warn "Could not retrieve InfluxDB token. Plugin config will need manual token update."
+        INFLUX_TOKEN="REPLACE_WITH_INFLUX_TOKEN"
+    fi
 else
     echo "$INFLUX_TOKEN" > "$INFLUX_TOKEN_FILE"
     chmod 600 "$INFLUX_TOKEN_FILE"

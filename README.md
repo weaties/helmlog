@@ -229,19 +229,23 @@ ip -details link show can0
 
 ## Web interfaces
 
-All interfaces are available locally over Tailscale and — after `setup.sh` configures
-Tailscale Funnel — publicly via `https://corvopi.<tailnet>.ts.net`:
+All interfaces are available locally over Tailscale and publicly via two ingress
+paths — Tailscale Funnel and Cloudflare Tunnel:
 
-| Interface | Local URL | Public URL (Funnel) | Purpose |
+| Interface | Local URL | Tailscale Funnel | Cloudflare Tunnel |
 |---|---|---|---|
-| j105-logger | `http://corvopi:3002` | `https://corvopi.<tailnet>.ts.net/` | Race marker, history, exports |
-| Grafana | `http://corvopi:3001` | `https://corvopi.<tailnet>.ts.net/grafana/` | Real-time sailing dashboards |
-| Signal K | `http://corvopi:3000` | `https://corvopi.<tailnet>.ts.net/signalk/` | NMEA 2000 data explorer, plugin management |
-| InfluxDB | `http://corvopi:8086` | — (not exposed) | Time-series data explorer, query UI |
+| j105-logger | `http://corvopi:3002` | `https://corvopi.<tailnet>.ts.net/` | `https://corvo.saillog.io/` |
+| Grafana | `http://corvopi:3001` | `https://corvopi.<tailnet>.ts.net/grafana/` | `https://corvo.saillog.io/grafana/` |
+| Signal K | `http://corvopi:3000` | `https://corvopi.<tailnet>.ts.net/signalk/` | `https://corvo.saillog.io/signalk/` |
+| InfluxDB | `http://corvopi:8086` | — (not exposed) | — (not exposed) |
 
-`setup.sh` configures all three public routes automatically when Tailscale is connected.
-The public URL is written to `PUBLIC_URL` in `.env` so the webapp generates correct
-Grafana deep-links.
+Both ingress paths strip the `/grafana/` and `/signalk/` prefixes before proxying
+to the backend services. Tailscale Funnel handles this natively; Cloudflare Tunnel
+routes through an nginx reverse proxy on `127.0.0.1:8080` (managed by `deploy.sh`).
+
+`setup.sh` configures the Tailscale Funnel routes automatically when Tailscale is
+connected. The public URL is written to `PUBLIC_URL` in `.env` so the webapp
+generates correct Grafana deep-links.
 
 Grafana default credentials: `admin` / `changeme123` — **change after first login**.
 InfluxDB is bound to loopback only (127.0.0.1:8086) — access it via SSH tunnel or from the Pi directly.
