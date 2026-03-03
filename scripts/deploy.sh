@@ -176,6 +176,130 @@ else
     echo "    tailscale CLI not found — skipping."
 fi
 
+# ---------------------------------------------------------------------------
+# Cloudflare Tunnel — update ingress to route /grafana/ and /signalk/ via nginx
+# ---------------------------------------------------------------------------
+# The systemd-managed cloudflared reads from /etc/cloudflared/config.yml;
+# the user-level copy at ~/.cloudflared/config.yml is only used for manual runs.
+CF_SYSTEM_CONFIG="/etc/cloudflared/config.yml"
+CF_USER_CONFIG="$HOME/.cloudflared/config.yml"
+if [[ -f "$CF_SYSTEM_CONFIG" ]] || [[ -f "$CF_USER_CONFIG" ]]; then
+    echo "==> Configuring Cloudflare Tunnel ingress..."
+    # Read tunnel metadata from whichever config exists
+    CF_SRC="${CF_SYSTEM_CONFIG}"
+    [[ -f "$CF_SRC" ]] || CF_SRC="$CF_USER_CONFIG"
+    TUNNEL_ID="$(grep '^tunnel:' "$CF_SRC" | awk '{print $2}')"
+    CRED_FILE="$(grep '^credentials-file:' "$CF_SRC" | awk '{print $2}')"
+    if [[ -n "$TUNNEL_ID" && -n "$CRED_FILE" ]]; then
+        TMPCF="$(mktemp)"
+        cat > "$TMPCF" << EOF
+tunnel: ${TUNNEL_ID}
+credentials-file: ${CRED_FILE}
+protocol: http2
+
+ingress:
+  - hostname: corvo.saillog.io
+    service: http://127.0.0.1:8080
+  - service: http_status:404
+EOF
+        # Update both the system and user configs
+        [[ -f "$CF_SYSTEM_CONFIG" ]] && sudo rsync "$TMPCF" "$CF_SYSTEM_CONFIG"
+        cp "$TMPCF" "$CF_USER_CONFIG"
+        rm -f "$TMPCF"
+        echo "    cloudflared config updated (routing via nginx on :8080)."
+    else
+        echo "    WARNING: could not parse tunnel/credentials from $CF_SRC — skipping."
+    fi
+else
+    echo "    No cloudflared config found — skipping."
+fi
+
+# ---------------------------------------------------------------------------
+# nginx — reverse proxy for Cloudflare Tunnel (path-based routing) and hotspot
+# ---------------------------------------------------------------------------
+echo "==> Configuring nginx reverse proxy..."
+NGINX_CONF="/etc/nginx/conf.d/cloudflare-tunnel.conf"
+TMPNGINX="$(mktemp)"
+cat > "$TMPNGINX" << 'EOF'
+# Reverse proxy for Cloudflare Tunnel — routes sub-paths to backend services.
+# cloudflared sends all corvo.saillog.io traffic here on 127.0.0.1:8080.
+server {
+    listen 127.0.0.1:8080;
+
+    location /grafana/ {
+        proxy_pass http://127.0.0.1:3001/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /signalk/ {
+        proxy_pass http://127.0.0.1:3000/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3002;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+EOF
+sudo rsync "$TMPNGINX" "$NGINX_CONF"
+rm -f "$TMPNGINX"
+echo "    nginx cloudflare-tunnel.conf written."
+
+# Also update the hotspot site config with Grafana/Signal K routes
+NGINX_SITE="/etc/nginx/sites-available/corvo"
+if [[ -f "$NGINX_SITE" ]]; then
+    if ! grep -q '/grafana/' "$NGINX_SITE" 2>/dev/null; then
+        # Insert Grafana and Signal K location blocks before the catch-all location /
+        sudo sed -i '/location \/ {/i \
+    location /grafana/ {\
+        proxy_pass http://127.0.0.1:3001/;\
+        proxy_http_version 1.1;\
+        proxy_set_header Host $host;\
+        proxy_set_header X-Real-IP $remote_addr;\
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\
+        proxy_set_header X-Forwarded-Proto $scheme;\
+    }\
+\
+    location /signalk/ {\
+        proxy_pass http://127.0.0.1:3000/;\
+        proxy_http_version 1.1;\
+        proxy_set_header Upgrade $http_upgrade;\
+        proxy_set_header Connection "upgrade";\
+        proxy_set_header Host $host;\
+        proxy_set_header X-Real-IP $remote_addr;\
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\
+        proxy_set_header X-Forwarded-Proto $scheme;\
+    }\
+' "$NGINX_SITE"
+        echo "    nginx hotspot site updated with /grafana/ and /signalk/ routes."
+    fi
+fi
+
+sudo nginx -t && sudo systemctl reload nginx
+echo "    nginx reloaded."
+
+if systemctl is-active cloudflared &>/dev/null; then
+    sudo systemctl restart cloudflared
+    echo "    cloudflared restarted."
+fi
+
 echo "==> Restarting j105-logger service..."
 sudo systemctl restart j105-logger
 
