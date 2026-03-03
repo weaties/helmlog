@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import signal
 import sys
 from datetime import UTC, datetime
@@ -393,6 +394,7 @@ async def _list_audio() -> None:
 
 async def _add_user(email: str, name: str | None, role: str) -> None:
     """Create a user directly in the DB (admin bootstrap; no email required)."""
+    from logger.auth import generate_token, invite_expires_at
     from logger.storage import Storage, StorageConfig
 
     valid_roles = {"admin", "crew", "viewer"}
@@ -411,9 +413,28 @@ async def _add_user(email: str, name: str | None, role: str) -> None:
                 existing["id"],
                 existing["role"],
             )
-            return
-        user_id = await storage.create_user(email, name, role)
-        logger.info("Created user id={} email={} name={!r} role={}", user_id, email, name, role)
+            user_id = existing["id"]
+        else:
+            user_id = await storage.create_user(email, name, role)
+            logger.info("Created user id={} email={} name={!r} role={}", user_id, email, name, role)
+
+        # Generate an invite token so the user can log in
+        token = generate_token()
+        await storage.create_invite_token(token, email, role, user_id, invite_expires_at())
+        base = os.environ.get("PUBLIC_URL", f"http://localhost:{os.environ.get('WEB_PORT', '3002')}").rstrip(".")
+        login_url = f"{base}/login?token={token}"
+        logger.info("Login link (expires in 7 days):\n  {}", login_url)
+
+        from logger.email import send_welcome_email, smtp_configured
+
+        if smtp_configured() and email:
+            sent = await send_welcome_email(name, email, role, login_url)
+            if sent:
+                logger.info("Welcome email sent to {}", email)
+            else:
+                logger.warning("Welcome email to {} failed — link printed above", email)
+        else:
+            logger.debug("SMTP not configured — skipping welcome email")
     finally:
         await storage.close()
 
@@ -433,6 +454,54 @@ async def _build_polar(min_sessions: int) -> None:
     try:
         count = await polar.build_polar_baseline(storage, min_sessions=min_sessions)
         print(f"Polar baseline built: {count} bins")
+    finally:
+        await storage.close()
+
+
+async def _scan_transcript(session_id: int | None, scan_all: bool) -> None:
+    """Scan transcripts for trigger keywords and create auto-notes."""
+    import json as _json
+
+    from logger.storage import Storage, StorageConfig
+    from logger.triggers import scan_transcript
+
+    storage = Storage(StorageConfig())
+    await storage.connect()
+    try:
+        if session_id is not None:
+            ids = [session_id]
+        else:
+            # Get all audio sessions that have transcripts
+            db = storage._conn()
+            cur = await db.execute(
+                "SELECT a.id FROM audio_sessions a"
+                " JOIN transcripts t ON a.id = t.audio_session_id"
+                " WHERE t.status = 'done'"
+            )
+            ids = [row["id"] for row in await cur.fetchall()]
+
+        total = 0
+        for aid in ids:
+            t = await storage.get_transcript(aid)
+            if t is None or t.get("status") != "done":
+                logger.info("Skipping audio session {} (no completed transcript)", aid)
+                continue
+            if t.get("segments_json"):
+                segments = _json.loads(t["segments_json"])
+            elif t.get("text"):
+                # Plain whisper (no diarisation) — synthesize a single segment
+                segments = [{"start": 0.0, "end": 0.0, "text": t["text"]}]
+            else:
+                logger.info("Skipping audio session {} (no text or segments)", aid)
+                continue
+            row = await storage.get_audio_session_row(aid)
+            if row is None:
+                continue
+            count = await scan_transcript(storage, aid, row["start_utc"], segments)
+            total += count
+            logger.info("Audio session {}: {} auto-notes created", aid, count)
+
+        print(f"Scan complete: {total} auto-notes created across {len(ids)} session(s)")
     finally:
         await storage.close()
 
@@ -537,6 +606,14 @@ def _build_parser() -> argparse.ArgumentParser:
     bp = sub.add_parser("build-polar", help="Rebuild polar baseline from historical session data")
     bp.add_argument("--min-sessions", type=int, default=3, metavar="N")
 
+    st = sub.add_parser(
+        "scan-transcript",
+        help="Scan transcripts for trigger keywords and create auto-notes",
+    )
+    st_target = st.add_mutually_exclusive_group(required=True)
+    st_target.add_argument("--session", type=int, metavar="ID", help="Audio session ID to scan")
+    st_target.add_argument("--all", action="store_true", help="Scan all sessions with transcripts")
+
     return parser
 
 
@@ -571,6 +648,8 @@ def main() -> None:
                 asyncio.run(_add_user(args.email, args.name, args.role))
             case "build-polar":
                 asyncio.run(_build_polar(args.min_sessions))
+            case "scan-transcript":
+                asyncio.run(_scan_transcript(args.session, getattr(args, "all", False)))
     except KeyboardInterrupt:
         logger.info("Interrupted by user — shutting down")
     except Exception as exc:

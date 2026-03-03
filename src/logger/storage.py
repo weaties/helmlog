@@ -71,7 +71,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 18
+_CURRENT_VERSION: int = 19
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -371,6 +371,43 @@ _MIGRATIONS: dict[int, str] = {
             UNIQUE(tws_bin, twa_bin)
         );
         CREATE INDEX IF NOT EXISTS idx_polar_tws_twa ON polar_baseline(tws_bin, twa_bin);
+    """,
+    19: """
+        -- Audit log (#93)
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts          TEXT NOT NULL,
+            user_id     INTEGER REFERENCES users(id),
+            action      TEXT NOT NULL,
+            detail      TEXT,
+            ip_address  TEXT,
+            user_agent  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+
+        -- Tags (#99)
+        CREATE TABLE IF NOT EXISTS tags (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL UNIQUE,
+            color      TEXT,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS session_tags (
+            session_id INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+            tag_id     INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            PRIMARY KEY (session_id, tag_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS note_tags (
+            note_id    INTEGER NOT NULL REFERENCES session_notes(id) ON DELETE CASCADE,
+            tag_id     INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            PRIMARY KEY (note_id, tag_id)
+        );
+
+        -- Headshots (#100)
+        ALTER TABLE users ADD COLUMN avatar_path TEXT;
     """,
 }
 
@@ -896,7 +933,8 @@ class Storage:
     async def get_audio_session_row(self, session_id: int) -> dict[str, Any] | None:
         """Return a single audio_sessions row as a dict, or None if not found."""
         cur = await self._conn().execute(
-            "SELECT id, file_path, device_name, start_utc, end_utc, sample_rate, channels"
+            "SELECT id, file_path, device_name, start_utc, end_utc, sample_rate, channels,"
+            " race_id, session_type, name"
             " FROM audio_sessions WHERE id = ?",
             (session_id,),
         )
@@ -1967,7 +2005,7 @@ class Storage:
 
     async def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
         cur = await self._conn().execute(
-            "SELECT id, email, name, role, created_at, last_seen FROM users WHERE id = ?",
+            "SELECT id, email, name, role, created_at, last_seen, avatar_path FROM users WHERE id = ?",
             (user_id,),
         )
         row = await cur.fetchone()
@@ -1975,7 +2013,7 @@ class Storage:
 
     async def get_user_by_email(self, email: str) -> dict[str, Any] | None:
         cur = await self._conn().execute(
-            "SELECT id, email, name, role, created_at, last_seen FROM users WHERE email = ?",
+            "SELECT id, email, name, role, created_at, last_seen, avatar_path FROM users WHERE email = ?",
             (email.lower().strip(),),
         )
         row = await cur.fetchone()
@@ -2097,6 +2135,195 @@ class Storage:
         db = self._conn()
         await db.execute("DELETE FROM auth_sessions WHERE expires_at < ?", (now,))
         await db.commit()
+
+    # ------------------------------------------------------------------
+    # Audit log (#93)
+    # ------------------------------------------------------------------
+
+    async def log_action(
+        self,
+        action: str,
+        *,
+        detail: str | None = None,
+        user_id: int | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> int:
+        """Insert an audit log entry. Returns the row id."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        ts = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        cur = await db.execute(
+            "INSERT INTO audit_log (ts, user_id, action, detail, ip_address, user_agent)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (ts, user_id, action, detail, ip_address, user_agent),
+        )
+        await db.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+
+    async def list_audit_log(self, *, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+        """Return recent audit log entries, newest first."""
+        cur = await self._conn().execute(
+            "SELECT a.id, a.ts, a.action, a.detail, a.ip_address, a.user_agent,"
+            " a.user_id, u.name AS user_name, u.email AS user_email"
+            " FROM audit_log a LEFT JOIN users u ON a.user_id = u.id"
+            " ORDER BY a.ts DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Tags (#99)
+    # ------------------------------------------------------------------
+
+    async def create_tag(self, name: str, color: str | None = None) -> int:
+        """Create a tag. Returns the tag id."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        name = name.strip().lower()
+        ts = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        cur = await db.execute(
+            "INSERT INTO tags (name, color, created_at) VALUES (?, ?, ?)",
+            (name, color, ts),
+        )
+        await db.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+
+    async def get_tag_by_name(self, name: str) -> dict[str, Any] | None:
+        """Fetch a tag by name (case-insensitive)."""
+        cur = await self._conn().execute(
+            "SELECT id, name, color, created_at FROM tags WHERE name = ?",
+            (name.strip().lower(),),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def list_tags(self) -> list[dict[str, Any]]:
+        """Return all tags with usage counts."""
+        cur = await self._conn().execute(
+            "SELECT t.id, t.name, t.color, t.created_at,"
+            " (SELECT COUNT(*) FROM session_tags st WHERE st.tag_id = t.id) AS session_count,"
+            " (SELECT COUNT(*) FROM note_tags nt WHERE nt.tag_id = t.id) AS note_count"
+            " FROM tags t ORDER BY t.name"
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def add_session_tag(self, session_id: int, tag_id: int) -> None:
+        """Tag a session. Idempotent."""
+        db = self._conn()
+        await db.execute(
+            "INSERT OR IGNORE INTO session_tags (session_id, tag_id) VALUES (?, ?)",
+            (session_id, tag_id),
+        )
+        await db.commit()
+
+    async def remove_session_tag(self, session_id: int, tag_id: int) -> None:
+        """Remove a tag from a session."""
+        db = self._conn()
+        await db.execute(
+            "DELETE FROM session_tags WHERE session_id = ? AND tag_id = ?",
+            (session_id, tag_id),
+        )
+        await db.commit()
+
+    async def get_session_tags(self, session_id: int) -> list[dict[str, Any]]:
+        """Return tags for a session."""
+        cur = await self._conn().execute(
+            "SELECT t.id, t.name, t.color FROM tags t"
+            " JOIN session_tags st ON t.id = st.tag_id"
+            " WHERE st.session_id = ? ORDER BY t.name",
+            (session_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def add_note_tag(self, note_id: int, tag_id: int) -> None:
+        """Tag a note. Idempotent."""
+        db = self._conn()
+        await db.execute(
+            "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?, ?)",
+            (note_id, tag_id),
+        )
+        await db.commit()
+
+    async def remove_note_tag(self, note_id: int, tag_id: int) -> None:
+        """Remove a tag from a note."""
+        db = self._conn()
+        await db.execute(
+            "DELETE FROM note_tags WHERE note_id = ? AND tag_id = ?",
+            (note_id, tag_id),
+        )
+        await db.commit()
+
+    async def get_note_tags(self, note_id: int) -> list[dict[str, Any]]:
+        """Return tags for a note."""
+        cur = await self._conn().execute(
+            "SELECT t.id, t.name, t.color FROM tags t"
+            " JOIN note_tags nt ON t.id = nt.tag_id"
+            " WHERE nt.note_id = ? ORDER BY t.name",
+            (note_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def get_or_create_tag(self, name: str, color: str | None = None) -> int:
+        """Return the tag id for *name*, creating it if it doesn't exist."""
+        tag = await self.get_tag_by_name(name)
+        if tag:
+            return tag["id"]  # type: ignore[no-any-return]
+        return await self.create_tag(name, color)
+
+    async def update_tag(
+        self, tag_id: int, *, name: str | None = None, color: str | None = None
+    ) -> bool:
+        """Update a tag's name or color. Returns True if found."""
+        parts: list[str] = []
+        params: list[Any] = []
+        if name is not None:
+            parts.append("name = ?")
+            params.append(name.strip().lower())
+        if color is not None:
+            parts.append("color = ?")
+            params.append(color)
+        if not parts:
+            return True
+        params.append(tag_id)
+        db = self._conn()
+        cur = await db.execute(
+            f"UPDATE tags SET {', '.join(parts)} WHERE id = ?",
+            params,  # noqa: S608
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+    async def delete_tag(self, tag_id: int) -> bool:
+        """Delete a tag and all its associations. Returns True if found."""
+        db = self._conn()
+        await db.execute("DELETE FROM session_tags WHERE tag_id = ?", (tag_id,))
+        await db.execute("DELETE FROM note_tags WHERE tag_id = ?", (tag_id,))
+        cur = await db.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Avatars (#100)
+    # ------------------------------------------------------------------
+
+    async def set_avatar_path(self, user_id: int, avatar_path: str) -> None:
+        """Set the avatar_path for a user."""
+        db = self._conn()
+        await db.execute("UPDATE users SET avatar_path = ? WHERE id = ?", (avatar_path, user_id))
+        await db.commit()
+
+    async def get_avatar_path(self, user_id: int) -> str | None:
+        """Return the avatar_path for a user, or None."""
+        cur = await self._conn().execute("SELECT avatar_path FROM users WHERE id = ?", (user_id,))
+        row = await cur.fetchone()
+        return row["avatar_path"] if row else None
 
     # ------------------------------------------------------------------
     # Helpers

@@ -17,18 +17,15 @@ DASHBOARD_DEST_DIR="/var/lib/grafana/dashboards"
 PROVISION_DEST="/etc/grafana/provisioning/dashboards/j105-logger.yaml"
 DATASOURCE_DEST="/etc/grafana/provisioning/datasources/j105-logger.yaml"
 
-echo "==> Creating dashboard directory: $DASHBOARD_DEST_DIR"
-sudo mkdir -p "$DASHBOARD_DEST_DIR"
-
 echo "==> Copying dashboard JSONs"
-sudo cp "$DASHBOARD_SRC" "$DASHBOARD_DEST_DIR/sailing-data.json"
-sudo cp "$PI_HEALTH_SRC" "$DASHBOARD_DEST_DIR/pi-health.json"
+sudo rsync --mkpath "$DASHBOARD_SRC" "$DASHBOARD_DEST_DIR/sailing-data.json"
+sudo rsync "$PI_HEALTH_SRC" "$DASHBOARD_DEST_DIR/pi-health.json"
 
 echo "==> Copying dashboard provisioning config"
-sudo cp "$PROVISION_SRC" "$PROVISION_DEST"
+sudo rsync "$PROVISION_SRC" "$PROVISION_DEST"
 
 echo "==> Copying datasource provisioning config"
-sudo cp "$DATASOURCE_SRC" "$DATASOURCE_DEST"
+sudo rsync "$DATASOURCE_SRC" "$DATASOURCE_DEST"
 
 echo "==> Restarting grafana-server"
 sudo systemctl restart grafana-server

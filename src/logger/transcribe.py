@@ -71,6 +71,7 @@ async def transcribe_session(
                 audio_session_id,
                 len(text),
             )
+            segments: list[dict[str, object]] = json.loads(segments_json_str)
         else:
             text = await asyncio.to_thread(_run_whisper, file_path=file_path, model_size=model_size)
             await storage.update_transcript(transcript_id, status="done", text=text)
@@ -79,9 +80,43 @@ async def transcribe_session(
                 audio_session_id,
                 len(text),
             )
+            # Synthesize a single segment so trigger scan can still run
+            segments = [{"start": 0.0, "end": 0.0, "text": text}]
+
+        # Auto-scan for trigger keywords and create tagged notes
+        await _run_trigger_scan(storage, audio_session_id, row, segments)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Transcription failed: audio_session_id={} err={}", audio_session_id, exc)
         await storage.update_transcript(transcript_id, status="error", error_msg=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Trigger scan — auto-create tagged notes from transcript keywords
+# ---------------------------------------------------------------------------
+
+
+async def _run_trigger_scan(
+    storage: Storage,
+    audio_session_id: int,
+    audio_row: dict[str, object],
+    segments: list[dict[str, object]],
+) -> None:
+    """Run trigger keyword scan on transcript segments (best-effort)."""
+    from logger.triggers import scan_transcript
+
+    start_utc = str(audio_row.get("start_utc") or "")
+    if not start_utc:
+        return
+    try:
+        count = await scan_transcript(storage, audio_session_id, start_utc, segments)
+        if count:
+            logger.info(
+                "Trigger scan created {} auto-note(s) for audio_session_id={}",
+                count,
+                audio_session_id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Trigger scan failed for audio_session_id={}: {}", audio_session_id, exc)
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@ dependencies = [
     "faster-whisper>=1.2.1",
     # Speaker diarisation (optional at runtime — only runs when HF_TOKEN is set)
     "pyannote-audio>=1.1",
+    "pillow>=12.1.1",
     "slowapi>=0.1.9",
 ]
 

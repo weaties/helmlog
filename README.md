@@ -52,12 +52,13 @@ grafana-server.service (independent, starts at boot)
 7. [External data — weather and tides](#external-data--weather-and-tides)
 8. [Recording audio commentary](#recording-audio-commentary)
 9. [Audio transcription](#audio-transcription)
-10. [System health monitoring](#system-health-monitoring)
-11. [Mac development](#mac-development)
-12. [Fresh SD card setup](#fresh-sd-card-setup)
-13. [Updating / deploying](#updating--deploying)
-14. [Configuration](#configuration)
-15. [Troubleshooting](#troubleshooting)
+10. [Email notifications](#email-notifications)
+11. [System health monitoring](#system-health-monitoring)
+12. [Mac development](#mac-development)
+13. [Fresh SD card setup](#fresh-sd-card-setup)
+14. [Updating / deploying](#updating--deploying)
+15. [Configuration](#configuration)
+16. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -634,6 +635,62 @@ Transcription will continue to work using the plain Whisper path.
 
 ---
 
+## Email notifications
+
+When SMTP is configured, the logger sends two types of email:
+
+- **Welcome emails** — sent when a user is created via `add-user` CLI or invited
+  from the admin web UI. Contains the login link so you don't have to copy/paste
+  it manually.
+- **New-device alerts** — sent to a user when they log in from a new device,
+  so they know if someone else used their invite link.
+
+Email is entirely optional. If SMTP is not configured, everything works as
+before — login links are printed to the terminal or returned in the API response.
+
+### Setup
+
+Add these variables to `.env` on the Pi:
+
+```bash
+SMTP_HOST=smtp.gmail.com     # your SMTP server
+SMTP_PORT=587                # typically 587 (STARTTLS)
+SMTP_FROM=you@gmail.com      # sender address
+SMTP_USER=you@gmail.com      # SMTP login username
+SMTP_PASSWORD=xxxx xxxx xxxx xxxx  # SMTP password or app password
+```
+
+All five variables must be set for email to activate. `SMTP_USER` and
+`SMTP_PASSWORD` can be omitted if your SMTP server doesn't require authentication.
+
+### Using Gmail
+
+1. Enable **2-Step Verification** on your Google Account (Security > 2-Step
+   Verification).
+2. Go to **App passwords** (Security > 2-Step Verification > App passwords, or
+   navigate directly to `myaccount.google.com/apppasswords`).
+3. Create an app password — name it anything (e.g. "j105"). Google gives you a
+   16-character password.
+4. Use that password as `SMTP_PASSWORD` in `.env`. Do **not** use your regular
+   Gmail password.
+
+### Testing
+
+```bash
+# Quick test — creates a user and sends the welcome email
+j105-logger add-user --email you@example.com --name "Test" --role viewer
+```
+
+Check your inbox. If the email doesn't arrive, check the logger output for
+warnings — SMTP errors are logged but never crash the service.
+
+### Disabling
+
+Remove or comment out the `SMTP_*` variables from `.env` and restart the
+service. Login links will continue to be printed to the terminal as before.
+
+---
+
 ## System health monitoring
 
 The logger automatically monitors the Pi's CPU, memory, disk usage, and
@@ -983,6 +1040,12 @@ WEB_PORT=3002           # http://corvopi:3002 on Tailscale
 # Grafana deep-link buttons in the web UI
 GRAFANA_URL=http://corvopi:3001
 GRAFANA_DASHBOARD_UID=j105-sailing
+# Email notifications (optional — welcome emails + new-device alerts)
+# SMTP_HOST=smtp.gmail.com   # SMTP server hostname
+# SMTP_PORT=587              # SMTP port (587 for STARTTLS)
+# SMTP_USER=                 # SMTP login username
+# SMTP_PASSWORD=             # SMTP password or app password
+# SMTP_FROM=j105@example.com # sender address
 # Authentication
 # AUTH_DISABLED=true          # bypass auth entirely — only for local/LAN dev; NEVER with Tailscale Funnel
 AUTH_SESSION_TTL_DAYS=90      # session cookie lifetime in days

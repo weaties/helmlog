@@ -168,8 +168,10 @@ background:#131f35;color:#7eb8f7;font-size:.8rem;cursor:pointer;text-decoration:
   <div style="display:flex;gap:6px;margin-top:2px">
     <a class="btn-export" href="/history">📋 History</a>
     <a class="btn-export" href="/admin/boats">⚓ Boats</a>
+    <a class="btn-export" id="nav-users" style="display:none" href="/admin/users">👥 Users</a>
     <a id="grafana-nav" class="btn-export btn-grafana" href="#" target="_blank">📊 Grafana</a>
     <a id="signalk-nav" class="btn-export" href="#" target="_blank" style="display:none">⚙ Signal K</a>
+    <a class="btn-export" id="nav-profile" style="display:none" href="/profile"><img id="nav-avatar" src="" alt="" style="width:20px;height:20px;border-radius:50%;vertical-align:middle;margin-right:4px"><span id="nav-profile-name"></span></a>
   </div>
 </div>
 <div class="sub" id="header-sub">Loading…</div>
@@ -1284,6 +1286,7 @@ setInterval(loadPolar, 2000);
 loadRecentSailors();
 checkSystemHealth();
 setInterval(checkSystemHealth, 30000);
+fetch('/api/me').then(r=>r.json()).then(u=>{if(u.role==='admin'){const el=document.getElementById('nav-users');if(el)el.style.display='';}if(u.id){const p=document.getElementById('nav-profile');const a=document.getElementById('nav-avatar');const n=document.getElementById('nav-profile-name');if(p){p.style.display='';a.src='/avatars/'+u.id+'.jpg';n.textContent=u.name||'Profile';}}}).catch(()=>{});
 document.querySelectorAll('.crew-input').forEach(inp => {
   inp.addEventListener('focus', () => { focusedCrewInput = inp; });
 });
@@ -2306,6 +2309,7 @@ input,select{{background:#0a1628;border:1px solid #2563eb;border-radius:6px;padd
 <h2>Invite a user</h2>
 <form id="invite-form">
 <label>Email</label><input type="email" id="inv-email" required/>
+<label>Name</label><input type="text" id="inv-name" placeholder="Optional"/>
 <label>Role</label>
 <select id="inv-role"><option value="viewer">viewer</option><option value="crew">crew</option><option value="admin">admin</option></select><br/>
 <button class="btn" type="submit">Generate invite link</button>
@@ -2322,9 +2326,11 @@ input,select{{background:#0a1628;border:1px solid #2563eb;border-radius:6px;padd
 document.getElementById('invite-form').addEventListener('submit', async e => {{
   e.preventDefault();
   const email = document.getElementById('inv-email').value;
+  const name = document.getElementById('inv-name').value;
   const role = document.getElementById('inv-role').value;
   const fd = new FormData();
   fd.append('email', email);
+  fd.append('name', name);
   fd.append('role', role);
   const r = await fetch('/admin/users/invite', {{method:'POST', body:fd}});
   const d = await r.json();
@@ -2341,6 +2347,103 @@ async function revokeSession(sid) {{
   location.reload();
 }}
 </script>
+</body></html>"""
+
+
+def _render_profile_html(user: dict[str, Any]) -> str:
+    """Render the self-service profile page."""
+    import time
+
+    user_id = user.get("id") or 0
+    name = user.get("name") or user.get("email") or "Unknown"
+    email = user.get("email") or ""
+    role = user.get("role", "viewer")
+    role_colors = {"admin": "#f59e0b", "crew": "#34d399", "viewer": "#60a5fa"}
+    rc = role_colors.get(role, "#8892a4")
+    cache_bust = int(time.time())
+    avatar_url = f"/avatars/{user_id}.jpg?v={cache_bust}" if user_id else ""
+    return f"""<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>J105 Logger — Profile</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;padding:16px;max-width:500px;margin:0 auto}}
+h1{{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:12px}}
+.card{{background:#131f35;border-radius:12px;padding:24px;text-align:center}}
+.avatar{{width:128px;height:128px;border-radius:50%;object-fit:cover;cursor:pointer;border:3px solid {rc};margin-bottom:16px}}
+.name{{font-size:1.2rem;font-weight:600;margin-bottom:4px}}
+.email{{color:#8892a4;font-size:.85rem;margin-bottom:8px}}
+.role{{background:{rc}22;color:{rc};padding:2px 10px;border-radius:4px;font-size:.8rem;display:inline-block}}
+a{{color:#7eb8f7;text-decoration:none}}
+</style>
+</head>
+<body>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+  <h1>Profile</h1><a href="/">&larr; Home</a>
+</div>
+<div class="card">
+  <img class="avatar" id="avatar" src="{avatar_url}" alt="avatar" onclick="document.getElementById('file').click()"/>
+  <input type="file" id="file" accept="image/*" style="display:none"/>
+  <div class="name">{name}</div>
+  <div class="email">{email}</div>
+  <div class="role">{role}</div>
+</div>
+<script>
+document.getElementById('file').addEventListener('change', async e => {{
+  const f = e.target.files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append('file', f);
+  const r = await fetch('/profile/avatar', {{method:'POST', body:fd}});
+  if (r.ok) {{
+    window.location.reload();
+  }} else {{
+    const d = await r.json();
+    alert(d.detail || 'Upload failed');
+  }}
+}});
+</script>
+</body></html>"""
+
+
+def _render_admin_audit_html(entries: list[dict[str, Any]]) -> str:
+    """Render the audit log page."""
+    rows = "".join(
+        f"<tr><td>{e['ts'][:19]}</td>"
+        f"<td>{e.get('user_name') or e.get('user_email') or '—'}</td>"
+        f"<td><code>{e['action']}</code></td>"
+        f'<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{e.get("detail") or ""}</td>'  # noqa: E501
+        f'<td style="font-size:.7rem">{e.get("ip_address") or ""}</td></tr>'
+        for e in entries
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>J105 Logger — Audit Log</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;padding:16px;max-width:1000px;margin:0 auto}}
+h1{{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:12px}}
+.card{{background:#131f35;border-radius:12px;padding:16px;margin-bottom:16px}}
+table{{width:100%;border-collapse:collapse;font-size:.82rem}}
+th{{text-align:left;padding:6px 8px;color:#8892a4;font-weight:500;border-bottom:1px solid #1e3a5f}}
+td{{padding:6px 8px;border-bottom:1px solid #0d1a2e}}
+code{{background:#1e3a5f;padding:1px 5px;border-radius:3px;font-size:.78rem}}
+a{{color:#7eb8f7;text-decoration:none}}
+</style>
+</head>
+<body>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+  <h1>Audit Log</h1>
+  <a href="/admin/users">&larr; Back to Users</a>
+</div>
+<div class="card">
+<table><thead><tr><th>Time (UTC)</th><th>User</th><th>Action</th><th>Detail</th><th>IP</th></tr></thead>
+<tbody>{rows}</tbody>
+</table>
+{('<p style="text-align:center;color:#8892a4;padding:20px">No audit entries yet.</p>' if not entries else "")}
+</div>
 </body></html>"""
 
 
@@ -2394,7 +2497,19 @@ def create_app(
         session_expires_at,
     )
 
-    _PUBLIC_PATHS = {"/login", "/logout", "/healthz"}
+    _PUBLIC_PATHS = {"/login", "/logout", "/healthz", "/avatars"}
+
+    async def _audit(
+        request: Request,
+        action: str,
+        detail: str | None = None,
+        user: dict[str, Any] | None = None,
+    ) -> None:
+        """Fire-and-forget audit log entry."""
+        uid = user.get("id") if user else None
+        ip = request.client.host if request.client else None
+        ua = request.headers.get("user-agent")
+        await storage.log_action(action, detail=detail, user_id=uid, ip_address=ip, user_agent=ua)
 
     @app.middleware("http")
     async def auth_middleware(  # type: ignore[no-untyped-def]
@@ -2402,7 +2517,12 @@ def create_app(
         call_next,  # noqa: ANN001
     ) -> Response:
         path = request.url.path
-        if _is_auth_disabled() or path in _PUBLIC_PATHS:
+        if _is_auth_disabled():
+            from logger.auth import _MOCK_ADMIN
+
+            request.state.user = _MOCK_ADMIN
+            return await call_next(request)  # type: ignore[no-any-return]
+        if path in _PUBLIC_PATHS or path.startswith("/notes/"):
             return await call_next(request)  # type: ignore[no-any-return]
         from http.cookies import SimpleCookie
 
@@ -2430,6 +2550,22 @@ def create_app(
     @app.get("/healthz", include_in_schema=False)
     async def healthz() -> JSONResponse:
         return JSONResponse({"status": "ok"})
+
+    @app.get("/api/me")
+    async def api_me(request: Request) -> JSONResponse:
+        """Return the current user's identity and role."""
+        user: dict[str, Any] | None = getattr(request.state, "user", None)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        return JSONResponse(
+            {
+                "id": user.get("id"),
+                "email": user.get("email"),
+                "name": user.get("name"),
+                "role": user.get("role"),
+                "avatar_path": user.get("avatar_path"),
+            }
+        )
 
     @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
     async def login_page(next: str = "/", token: str = "") -> HTMLResponse:
@@ -2505,6 +2641,19 @@ def create_app(
             samesite="lax",
             max_age=int(os.getenv("AUTH_SESSION_TTL_DAYS", "90")) * 86400,
         )
+
+        # Best-effort new-device alert email
+        from logger.email import send_device_alert, smtp_configured
+
+        if smtp_configured():
+            asyncio.ensure_future(
+                send_device_alert(
+                    row["email"],
+                    request.client.host if request.client else None,
+                    request.headers.get("user-agent"),
+                )
+            )
+
         return response
 
     @app.post("/logout", include_in_schema=False)
@@ -2551,6 +2700,7 @@ def create_app(
         request: Request,
         email: str = Form(...),
         role: str = Form(...),
+        name: str = Form(default=""),
         _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
     ) -> JSONResponse:
         if role not in ("admin", "crew", "viewer"):
@@ -2558,14 +2708,27 @@ def create_app(
         email = email.strip().lower()
         if not email:
             raise HTTPException(status_code=422, detail="email must not be blank")
+        clean_name = name.strip() or None
         token = generate_token()
         base = str(request.base_url).rstrip("/")
         await storage.create_invite_token(token, email, role, _user["id"], invite_expires_at())
         invite_url = f"{base}/login?token={token}"
-        return JSONResponse({"invite_url": invite_url, "token": token}, status_code=201)
+        await _audit(request, "user.invite", detail=f"{email} as {role}", user=_user)
+
+        from logger.email import send_welcome_email, smtp_configured
+
+        email_sent = False
+        if smtp_configured() and email:
+            email_sent = await send_welcome_email(clean_name, email, role, invite_url)
+
+        return JSONResponse(
+            {"invite_url": invite_url, "token": token, "email_sent": email_sent},
+            status_code=201,
+        )
 
     @app.put("/admin/users/{user_id}/role", status_code=204, include_in_schema=False)
     async def admin_update_role(
+        request: Request,
         user_id: int,
         body: dict[str, Any],
         _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
@@ -2577,13 +2740,36 @@ def create_app(
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
         await storage.update_user_role(user_id, role)
+        await _audit(request, "user.role", detail=f"user={user_id} role={role}", user=_user)
 
     @app.delete("/admin/sessions/{session_id}", status_code=204, include_in_schema=False)
     async def admin_revoke_session(
+        request: Request,
         session_id: str,
         _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
     ) -> None:
         await storage.delete_session(session_id)
+        await _audit(request, "session.revoke", detail=session_id[:16], user=_user)
+
+    # ------------------------------------------------------------------
+    # /admin/audit (#93)
+    # ------------------------------------------------------------------
+
+    @app.get("/admin/audit", response_class=HTMLResponse, include_in_schema=False)
+    async def admin_audit_page(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> HTMLResponse:
+        entries = await storage.list_audit_log(limit=200)
+        return HTMLResponse(_render_admin_audit_html(entries))
+
+    @app.get("/api/audit")
+    async def api_audit_log(
+        limit: int = Query(default=200, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        entries = await storage.list_audit_log(limit=limit, offset=offset)
+        return JSONResponse(entries)
 
     # ------------------------------------------------------------------
     # /api/state
@@ -2724,6 +2910,7 @@ def create_app(
 
     @app.post("/api/event", status_code=204)
     async def api_set_event(
+        request: Request,
         body: EventRequest,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> None:
@@ -2732,6 +2919,7 @@ def create_app(
             raise HTTPException(status_code=422, detail="event_name must not be blank")
         date_str = datetime.now(UTC).date().isoformat()
         await storage.set_daily_event(date_str, event_name)
+        await _audit(request, "event.set", detail=event_name, user=_user)
 
     # ------------------------------------------------------------------
     # /api/races/start
@@ -2739,6 +2927,7 @@ def create_app(
 
     @app.post("/api/races/start", status_code=201)
     async def api_start_race(
+        request: Request,
         session_type: str = Query(default="race"),
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> JSONResponse:
@@ -2806,6 +2995,7 @@ def create_app(
             except AudioDeviceNotFoundError as exc:
                 logger.warning("Audio unavailable for race {}: {}", race.name, exc)
 
+        await _audit(request, "race.start", detail=race.name, user=_user)
         return JSONResponse(
             {
                 "id": race.id,
@@ -2824,12 +3014,14 @@ def create_app(
 
     @app.post("/api/races/{race_id}/end", status_code=204)
     async def api_end_race(
+        request: Request,
         race_id: int,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> None:
         nonlocal _audio_session_id
         now = datetime.now(UTC)
         await storage.end_race(race_id, now)
+        await _audit(request, "race.end", detail=str(race_id), user=_user)
 
         if recorder is not None and _audio_session_id is not None:
             completed = await recorder.stop()
@@ -2844,6 +3036,7 @@ def create_app(
 
     @app.post("/api/races/{race_id}/debrief/start", status_code=201)
     async def api_start_debrief(
+        request: Request,
         race_id: int,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> JSONResponse:
@@ -2895,6 +3088,7 @@ def create_app(
         _debrief_start_utc = now
         logger.info("Debrief recording started: {}", session.file_path)
 
+        await _audit(request, "debrief.start", detail=row["name"], user=_user)
         return JSONResponse(
             {"race_id": race_id, "race_name": row["name"], "start_utc": now.isoformat()},
             status_code=201,
@@ -2906,6 +3100,7 @@ def create_app(
 
     @app.post("/api/debrief/stop", status_code=204)
     async def api_stop_debrief(
+        request: Request,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> None:
         nonlocal _debrief_audio_session_id, _debrief_race_id, _debrief_race_name, _debrief_start_utc
@@ -2918,6 +3113,7 @@ def create_app(
         await storage.update_audio_session_end(_debrief_audio_session_id, completed.end_utc)
         logger.info("Debrief recording saved: {}", completed.file_path)
 
+        await _audit(request, "debrief.stop", user=_user)
         _debrief_audio_session_id = None
         _debrief_race_id = None
         _debrief_race_name = None
@@ -3052,6 +3248,7 @@ def create_app(
 
     @app.post("/api/races/{race_id}/crew", status_code=204)
     async def api_set_crew(
+        request: Request,
         race_id: int,
         body: list[CrewEntry],
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
@@ -3069,6 +3266,7 @@ def create_app(
 
         crew = [{"position": e.position, "sailor": e.sailor} for e in body if e.sailor.strip()]
         await storage.set_race_crew(race_id, crew)
+        await _audit(request, "crew.set", detail=str(race_id), user=_user)
 
     @app.get("/api/races/{race_id}/crew")
     async def api_get_crew(race_id: int) -> JSONResponse:
@@ -3103,6 +3301,7 @@ def create_app(
 
     @app.post("/api/boats", status_code=201)
     async def api_create_boat(
+        request: Request,
         body: BoatCreate,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> JSONResponse:
@@ -3110,10 +3309,12 @@ def create_app(
         if not sail:
             raise HTTPException(status_code=422, detail="sail_number must not be blank")
         boat_id = await storage.add_boat(sail, body.name, body.class_name)
+        await _audit(request, "boat.add", detail=sail, user=_user)
         return JSONResponse({"id": boat_id}, status_code=201)
 
     @app.patch("/api/boats/{boat_id}", status_code=204)
     async def api_update_boat(
+        request: Request,
         boat_id: int,
         body: BoatUpdate,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
@@ -3128,9 +3329,11 @@ def create_app(
         name = body.name if body.name is not None else row["name"]
         class_name = body.class_name if body.class_name is not None else row["class"]
         await storage.update_boat(boat_id, sail, name, class_name)
+        await _audit(request, "boat.update", detail=str(boat_id), user=_user)
 
     @app.delete("/api/boats/{boat_id}", status_code=204)
     async def api_delete_boat(
+        request: Request,
         boat_id: int,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> None:
@@ -3138,6 +3341,7 @@ def create_app(
         if await cur.fetchone() is None:
             raise HTTPException(status_code=404, detail="Boat not found")
         await storage.delete_boat(boat_id)
+        await _audit(request, "boat.delete", detail=str(boat_id), user=_user)
 
     # ------------------------------------------------------------------
     # /api/sessions/{race_id}/results
@@ -3150,6 +3354,7 @@ def create_app(
 
     @app.post("/api/sessions/{race_id}/results", status_code=201)
     async def api_upsert_result(
+        request: Request,
         race_id: int,
         body: RaceResultEntry,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
@@ -3181,6 +3386,9 @@ def create_app(
             dns=body.dns,
             notes=body.notes,
         )
+        await _audit(
+            request, "result.upsert", detail=f"race={race_id} place={body.place}", user=_user
+        )
         return JSONResponse({"id": result_id}, status_code=201)
 
     # ------------------------------------------------------------------
@@ -3189,6 +3397,7 @@ def create_app(
 
     @app.delete("/api/results/{result_id}", status_code=204)
     async def api_delete_result(
+        request: Request,
         result_id: int,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> None:
@@ -3198,6 +3407,7 @@ def create_app(
         if await cur.fetchone() is None:
             raise HTTPException(status_code=404, detail="Result not found")
         await storage.delete_race_result(result_id)
+        await _audit(request, "result.delete", detail=str(result_id), user=_user)
 
     # ------------------------------------------------------------------
     # /api/sessions/{session_id}/notes  &  /api/notes/{note_id}
@@ -3217,6 +3427,7 @@ def create_app(
 
     @app.post("/api/sessions/{session_id}/notes", status_code=201)
     async def api_create_note(
+        request: Request,
         session_id: int,
         body: NoteCreate,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
@@ -3259,10 +3470,12 @@ def create_app(
             race_id=race_id,
             note_id=note_id,
         )
+        await _audit(request, "note.add", detail=body.note_type, user=_user)
         return JSONResponse({"id": note_id, "ts": ts}, status_code=201)
 
     @app.post("/api/sessions/{session_id}/notes/photo", status_code=201)
     async def api_create_photo_note(
+        request: Request,
         session_id: int,
         file: UploadFile,
         ts: str = Form(default=""),
@@ -3304,6 +3517,7 @@ def create_app(
             race_id=race_id,
             note_id=note_id,
         )
+        await _audit(request, "note.photo", detail=photo_path, user=_user)
         return JSONResponse(
             {"id": note_id, "ts": actual_ts, "photo_path": photo_path}, status_code=201
         )
@@ -3340,12 +3554,14 @@ def create_app(
 
     @app.delete("/api/notes/{note_id}", status_code=204)
     async def api_delete_note(
+        request: Request,
         note_id: int,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> None:
         found = await storage.delete_note(note_id)
         if not found:
             raise HTTPException(status_code=404, detail="Note not found")
+        await _audit(request, "note.delete", detail=str(note_id), user=_user)
 
     @app.get("/api/notes/settings-keys")
     async def api_settings_keys() -> JSONResponse:
@@ -3493,6 +3709,7 @@ def create_app(
 
     @app.post("/api/sessions/{session_id}/videos", status_code=201)
     async def api_add_video(
+        request: Request,
         session_id: int,
         body: VideoCreate,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
@@ -3550,10 +3767,12 @@ def create_app(
         )
         rows = await storage.list_race_videos(session_id)
         row = next(r for r in rows if r["id"] == row_id)
+        await _audit(request, "video.add", detail=body.youtube_url, user=_user)
         return JSONResponse(_video_deep_link(row), status_code=201)
 
     @app.patch("/api/videos/{video_id}", status_code=200)
     async def api_update_video(
+        request: Request,
         video_id: int,
         body: VideoUpdate,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
@@ -3575,10 +3794,12 @@ def create_app(
         )
         if not found:
             raise HTTPException(status_code=404, detail="Video not found")
+        await _audit(request, "video.update", detail=str(video_id), user=_user)
         return JSONResponse({"id": video_id, "updated": True})
 
     @app.delete("/api/videos/{video_id}", status_code=204)
     async def api_delete_video(
+        request: Request,
         video_id: int,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> None:
@@ -3586,6 +3807,7 @@ def create_app(
         found = await storage.delete_race_video(video_id)
         if not found:
             raise HTTPException(status_code=404, detail="Video not found")
+        await _audit(request, "video.delete", detail=str(video_id), user=_user)
 
     # ------------------------------------------------------------------
     # /api/grafana/annotations
@@ -3651,6 +3873,7 @@ def create_app(
 
     @app.post("/api/sails", status_code=201)
     async def api_add_sail(
+        request: Request,
         body: SailCreate,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> JSONResponse:
@@ -3669,12 +3892,14 @@ def create_app(
                 status_code=409,
                 detail=f"Sail already exists: type={body.type!r} name={body.name!r}",
             ) from exc
+        await _audit(request, "sail.add", detail=f"{body.type}/{body.name}", user=_user)
         return JSONResponse(
             {"id": sail_id, "type": body.type, "name": body.name.strip()}, status_code=201
         )
 
     @app.patch("/api/sails/{sail_id}", status_code=200)
     async def api_update_sail(
+        request: Request,
         sail_id: int,
         body: SailUpdate,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
@@ -3685,6 +3910,7 @@ def create_app(
         )
         if not found:
             raise HTTPException(status_code=404, detail="Sail not found")
+        await _audit(request, "sail.update", detail=str(sail_id), user=_user)
         return JSONResponse({"id": sail_id, "updated": True})
 
     @app.get("/api/sessions/{session_id}/sails")
@@ -3698,6 +3924,7 @@ def create_app(
 
     @app.put("/api/sessions/{session_id}/sails", status_code=200)
     async def api_set_session_sails(
+        request: Request,
         session_id: int,
         body: RaceSailsSet,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
@@ -3732,6 +3959,7 @@ def create_app(
             spinnaker_id=body.spinnaker_id,
         )
         sails = await storage.get_race_sails(session_id)
+        await _audit(request, "sails.set", detail=str(session_id), user=_user)
         return JSONResponse(sails)
 
     # ------------------------------------------------------------------
@@ -3800,6 +4028,7 @@ def create_app(
 
     @app.post("/api/audio/{session_id}/transcribe", status_code=202)
     async def api_transcribe(
+        request: Request,
         session_id: int,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> JSONResponse:
@@ -3826,6 +4055,7 @@ def create_app(
                 storage, session_id, transcript_id, model_size=model, diarize=diarize
             )
         )
+        await _audit(request, "transcribe.start", detail=str(session_id), user=_user)
         return JSONResponse({"status": "accepted", "transcript_id": transcript_id}, status_code=202)
 
     @app.get("/api/audio/{session_id}/transcript")
@@ -3840,5 +4070,218 @@ def create_app(
             t["segments"] = _json.loads(t["segments_json"])
         del t["segments_json"]
         return JSONResponse(t)
+
+    # ------------------------------------------------------------------
+    # Tags (#99)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/tags")
+    async def api_list_tags() -> JSONResponse:
+        tags = await storage.list_tags()
+        return JSONResponse(tags)
+
+    @app.post("/api/tags", status_code=201)
+    async def api_create_tag(
+        request: Request,
+        body: dict[str, Any],
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        name = (body.get("name") or "").strip().lower()
+        if not name:
+            raise HTTPException(status_code=422, detail="name is required")
+        color = body.get("color")
+        tag = await storage.get_tag_by_name(name)
+        if tag:
+            raise HTTPException(status_code=409, detail="Tag already exists")
+        tag_id = await storage.create_tag(name, color)
+        await _audit(request, "tag.create", detail=name, user=_user)
+        return JSONResponse({"id": tag_id, "name": name, "color": color}, status_code=201)
+
+    @app.patch("/api/tags/{tag_id}", status_code=200)
+    async def api_update_tag(
+        request: Request,
+        tag_id: int,
+        body: dict[str, Any],
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        found = await storage.update_tag(tag_id, name=body.get("name"), color=body.get("color"))
+        if not found:
+            raise HTTPException(status_code=404, detail="Tag not found")
+        await _audit(request, "tag.update", detail=str(tag_id), user=_user)
+        return JSONResponse({"id": tag_id, "updated": True})
+
+    @app.delete("/api/tags/{tag_id}", status_code=204)
+    async def api_delete_tag(
+        request: Request,
+        tag_id: int,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> None:
+        found = await storage.delete_tag(tag_id)
+        if not found:
+            raise HTTPException(status_code=404, detail="Tag not found")
+        await _audit(request, "tag.delete", detail=str(tag_id), user=_user)
+
+    @app.post("/api/sessions/{session_id}/tags", status_code=201)
+    async def api_add_session_tag(
+        request: Request,
+        session_id: int,
+        body: dict[str, Any],
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        tag_id = body.get("tag_id")
+        tag_name = body.get("tag_name")
+        if tag_id is None and not tag_name:
+            raise HTTPException(status_code=422, detail="tag_id or tag_name is required")
+        if tag_id is None:
+            assert isinstance(tag_name, str)
+            tag_id = await storage.get_or_create_tag(tag_name)
+        await storage.add_session_tag(session_id, tag_id)
+        await _audit(
+            request, "session.tag.add", detail=f"session={session_id} tag={tag_id}", user=_user
+        )
+        return JSONResponse({"session_id": session_id, "tag_id": tag_id}, status_code=201)
+
+    @app.delete("/api/sessions/{session_id}/tags/{tag_id}", status_code=204)
+    async def api_remove_session_tag(
+        request: Request,
+        session_id: int,
+        tag_id: int,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> None:
+        await storage.remove_session_tag(session_id, tag_id)
+        await _audit(
+            request, "session.tag.remove", detail=f"session={session_id} tag={tag_id}", user=_user
+        )
+
+    @app.get("/api/sessions/{session_id}/tags")
+    async def api_get_session_tags(session_id: int) -> JSONResponse:
+        tags = await storage.get_session_tags(session_id)
+        return JSONResponse(tags)
+
+    @app.post("/api/notes/{note_id}/tags", status_code=201)
+    async def api_add_note_tag(
+        request: Request,
+        note_id: int,
+        body: dict[str, Any],
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        tag_id = body.get("tag_id")
+        tag_name = body.get("tag_name")
+        if tag_id is None and not tag_name:
+            raise HTTPException(status_code=422, detail="tag_id or tag_name is required")
+        if tag_id is None:
+            assert isinstance(tag_name, str)
+            tag_id = await storage.get_or_create_tag(tag_name)
+        await storage.add_note_tag(note_id, tag_id)
+        await _audit(request, "note.tag.add", detail=f"note={note_id} tag={tag_id}", user=_user)
+        return JSONResponse({"note_id": note_id, "tag_id": tag_id}, status_code=201)
+
+    @app.delete("/api/notes/{note_id}/tags/{tag_id}", status_code=204)
+    async def api_remove_note_tag(
+        request: Request,
+        note_id: int,
+        tag_id: int,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> None:
+        await storage.remove_note_tag(note_id, tag_id)
+        await _audit(request, "note.tag.remove", detail=f"note={note_id} tag={tag_id}", user=_user)
+
+    @app.get("/api/notes/{note_id}/tags")
+    async def api_get_note_tags(note_id: int) -> JSONResponse:
+        tags = await storage.get_note_tags(note_id)
+        return JSONResponse(tags)
+
+    # ------------------------------------------------------------------
+    # Profile & Avatars (#100)
+    # ------------------------------------------------------------------
+
+    @app.get("/profile", response_class=HTMLResponse, include_in_schema=False)
+    async def profile_page(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> HTMLResponse:
+        return HTMLResponse(_render_profile_html(_user))
+
+    @app.post("/profile/avatar", status_code=200, include_in_schema=False)
+    async def upload_avatar(
+        request: Request,
+        file: UploadFile,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        user_id = _user.get("id")
+        if user_id is None:
+            raise HTTPException(status_code=400, detail="Cannot set avatar for mock user")
+
+        # Validate content type
+        ct = (file.content_type or "").lower()
+        if ct not in ("image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"):
+            raise HTTPException(status_code=422, detail="Unsupported image type")
+
+        data = await file.read()
+        if len(data) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=422, detail="File too large (max 10 MB)")
+
+        avatar_dir = Path(os.environ.get("AVATAR_DIR", "data/avatars"))
+        await asyncio.to_thread(avatar_dir.mkdir, parents=True, exist_ok=True)
+        dest = avatar_dir / f"{user_id}.jpg"
+
+        try:
+            import io
+
+            from PIL import Image  # noqa: PLC0415
+
+            opened = Image.open(io.BytesIO(data))
+            rgb = opened.convert("RGB")
+            # Centre-crop to square
+            w, h = rgb.size
+            side = min(w, h)
+            left = (w - side) // 2
+            top = (h - side) // 2
+            cropped = rgb.crop((left, top, left + side, top + side))
+            resized = cropped.resize((256, 256), Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            resized.save(buf, format="JPEG", quality=85)
+            await asyncio.to_thread(dest.write_bytes, buf.getvalue())
+        except ImportError:
+            # Pillow not installed — save raw bytes as fallback
+            await asyncio.to_thread(dest.write_bytes, data)
+
+        rel_path = f"{user_id}.jpg"
+        await storage.set_avatar_path(user_id, rel_path)
+        await _audit(request, "avatar.upload", user=_user)
+        return JSONResponse({"avatar_path": rel_path})
+
+    @app.get("/avatars/{user_id}.jpg", include_in_schema=False)
+    async def serve_avatar(user_id: int) -> Response:
+        avatar_dir = Path(os.environ.get("AVATAR_DIR", "data/avatars"))
+        path = avatar_dir / f"{user_id}.jpg"
+        if path.exists():
+            mtime = int(path.stat().st_mtime)
+            return FileResponse(
+                path,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=60", "ETag": f'"{user_id}-{mtime}"'},
+            )
+        # Generate initials SVG fallback
+        user = await storage.get_user_by_id(user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        name = user.get("name") or user.get("email") or "?"
+        parts = name.split()
+        initials = (parts[0][0] + (parts[1][0] if len(parts) > 1 else "")).upper()
+        role = user.get("role", "viewer")
+        colors = {"admin": "#2563eb", "crew": "#059669", "viewer": "#6b7280"}
+        bg = colors.get(role, "#6b7280")
+        svg = (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">'
+            f'<rect width="256" height="256" rx="128" fill="{bg}"/>'
+            f'<text x="128" y="128" text-anchor="middle" dy=".35em"'
+            f' font-family="system-ui,sans-serif" font-size="96" font-weight="700"'
+            f' fill="white">{initials}</text></svg>'
+        )
+        return Response(
+            content=svg,
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     return app
