@@ -139,22 +139,25 @@ async def _web_loop(
     assert isinstance(storage, Storage)
     _recorder = recorder if isinstance(recorder, AudioRecorder) else None
     _audio_config = audio_config if isinstance(audio_config, AudioConfig) else None
-    cfg = RaceConfig()
-    server = uvicorn.Server(
-        uvicorn.Config(
-            create_app(storage, _recorder, _audio_config),
-            host=cfg.web_host,
-            port=cfg.web_port,
-            log_level="warning",
-            access_log=False,
-        )
-    )
-    server.install_signal_handlers = False  # type: ignore[attr-defined]
-    logger.info("Web interface: http://{}:{}", cfg.web_host, cfg.web_port)
     try:
+        cfg = RaceConfig()
+        server = uvicorn.Server(
+            uvicorn.Config(
+                create_app(storage, _recorder, _audio_config),
+                host=cfg.web_host,
+                port=cfg.web_port,
+                log_level="warning",
+                access_log=False,
+            )
+        )
+        server.install_signal_handlers = False  # type: ignore[attr-defined]
+        logger.info("Web interface: http://{}:{}", cfg.web_host, cfg.web_port)
         await server.serve()
     except asyncio.CancelledError:
-        server.should_exit = True
+        server.should_exit = True  # type: ignore[possibly-undefined]
+        raise
+    except Exception:
+        logger.exception("Web server failed to start")
         raise
 
 
