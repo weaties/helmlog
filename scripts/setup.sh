@@ -23,6 +23,7 @@
 #   i)   netdev group membership
 #   j)   CAN interface systemd service
 #   k)   j105-logger systemd service (runs as j105logger)
+#   k.1) Loki + Promtail (centralized log management)
 #   l)   Scoped NOPASSWD sudo (replaces blanket Pi OS default)
 #   m)   Summary
 
@@ -657,6 +658,51 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# k.1) Loki + Promtail — centralized log management
+#      Uses the Grafana apt repo added in section e) above.
+#      Loki stores logs on the local filesystem; Promtail scrapes journald.
+#      Both bind to loopback only.
+# ---------------------------------------------------------------------------
+
+step "Installing Loki + Promtail..."
+sudo apt-get install -y loki promtail
+
+# Deploy Loki config
+sudo mkdir -p /etc/loki
+sudo cp "$SCRIPT_DIR/loki/loki-config.yaml" /etc/loki/loki-config.yaml
+
+# Deploy Promtail config
+sudo mkdir -p /etc/promtail
+sudo cp "$SCRIPT_DIR/loki/promtail-config.yaml" /etc/promtail/promtail-config.yaml
+
+# Data directories
+sudo mkdir -p /var/lib/loki /var/lib/promtail
+sudo chown loki:loki /var/lib/loki
+sudo chown promtail:promtail /var/lib/promtail
+
+# Promtail needs journal access
+sudo usermod -aG systemd-journal promtail
+
+# Systemd overrides to use our config files
+sudo mkdir -p /etc/systemd/system/loki.service.d
+sudo tee /etc/systemd/system/loki.service.d/config.conf > /dev/null << 'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/loki -config.file=/etc/loki/loki-config.yaml
+EOF
+
+sudo mkdir -p /etc/systemd/system/promtail.service.d
+sudo tee /etc/systemd/system/promtail.service.d/config.conf > /dev/null << 'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/promtail -config.file=/etc/promtail/promtail-config.yaml
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now loki promtail
+info "Loki (port 3100) + Promtail installed and running."
+
+# ---------------------------------------------------------------------------
 # l) Scoped NOPASSWD sudo
 #      Creates /etc/sudoers.d/j105-logger-allowed with the specific commands
 #      needed for day-to-day operations (deploy.sh, service management).
@@ -705,6 +751,22 @@ ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start influxdb.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop influxdb.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart influxdb.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status influxdb.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start loki
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop loki
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart loki
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status loki
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start loki.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop loki.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart loki.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status loki.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start promtail
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop promtail
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart promtail
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status promtail
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start promtail.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop promtail.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart promtail.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status promtail.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active j105-logger
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active j105-logger.service
 
@@ -770,7 +832,7 @@ echo "  4. Reboot:"
 echo "       sudo reboot"
 echo ""
 echo "  After reboot, check service status:"
-echo "    sudo systemctl status can-interface signalk influxd grafana-server j105-logger"
+echo "    sudo systemctl status can-interface signalk influxd grafana-server loki promtail j105-logger"
 echo ""
 echo "  View logger output:"
 echo "    sudo journalctl -fu j105-logger"

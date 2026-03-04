@@ -264,6 +264,7 @@ Document any B&G-specific proprietary PGNs in `docs/pgn-notes.md` as discovered.
 ## Dos and Don'ts
 
 **Do:**
+- **Commit and push every change** — after editing any file (code, config, scripts), always commit and push to the current branch immediately. This is especially critical for hotfixes on the Pi — uncommitted changes on the device will be lost on the next deploy. Never leave work uncommitted.
 - Write tests for all decoding and export logic
 - Use `uv add <package>` to add dependencies — never edit `pyproject.toml` manually for deps
 - Keep the SQLite schema versioned with simple integer migrations in `storage.py`
@@ -271,6 +272,7 @@ Document any B&G-specific proprietary PGNs in `docs/pgn-notes.md` as discovered.
 - Export data in standard formats first (CSV with standard column names) before custom formats
 
 **Don't:**
+- **Never push directly to `main`** — `main` is sacrosanct. Always work on a feature branch and merge via PR. If on the Pi and a hotfix is needed, create or use an existing branch, commit and push there, then merge through GitHub.
 - Don't parse NMEA 2000 PGNs manually from scratch — use `canboat` or a library; only write custom decoders when necessary
 - Don't store data in memory across long runs — flush to SQLite frequently to survive crashes/reboots
 - Don't hardcode device paths (e.g., `/dev/can0`) — use config or environment variables

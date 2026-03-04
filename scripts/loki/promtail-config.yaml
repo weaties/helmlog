@@ -1,0 +1,35 @@
+# Promtail configuration for j105-logger
+# Scrapes journald for the services we care about.
+# Deployed by setup.sh to /etc/promtail/promtail-config.yaml
+#
+# IMPORTANT: The promtail user must be in the systemd-journal group
+# for journal scraping to work (setup.sh handles this automatically).
+
+server:
+  http_listen_address: 127.0.0.1
+  http_listen_port: 9080
+
+positions:
+  filename: /var/lib/promtail/positions.yaml
+
+clients:
+  - url: http://127.0.0.1:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: journal
+    journal:
+      max_age: 12h
+      labels:
+        host: corvopi
+    relabel_configs:
+      # Keep only our services
+      - source_labels: [__journal__systemd_unit]
+        regex: "(j105-logger|signalk|grafana-server|influxdb|loki|promtail|can-interface)\\.service"
+        action: keep
+      # Extract a clean service label from the unit name
+      - source_labels: [__journal__systemd_unit]
+        regex: "(.+)\\.service"
+        target_label: service
+      # Map journal priority to a level label
+      - source_labels: [__journal_priority_keyword]
+        target_label: level

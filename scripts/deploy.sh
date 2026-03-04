@@ -142,6 +142,27 @@ find "$HOME/.local/share/uv/python" -mindepth 1 -maxdepth 2 -type d \
 echo "==> Provisioning Grafana (dashboard, datasources, plugins)..."
 "$SCRIPT_DIR/provision-grafana.sh"
 
+echo "==> Updating Loki + Promtail configs..."
+LOKI_CHANGED=false
+PROMTAIL_CHANGED=false
+if ! diff -q "$SCRIPT_DIR/loki/loki-config.yaml" /etc/loki/loki-config.yaml &>/dev/null; then
+    sudo cp "$SCRIPT_DIR/loki/loki-config.yaml" /etc/loki/loki-config.yaml
+    LOKI_CHANGED=true
+fi
+if ! diff -q "$SCRIPT_DIR/loki/promtail-config.yaml" /etc/promtail/promtail-config.yaml &>/dev/null; then
+    sudo cp "$SCRIPT_DIR/loki/promtail-config.yaml" /etc/promtail/promtail-config.yaml
+    PROMTAIL_CHANGED=true
+fi
+if $LOKI_CHANGED; then
+    sudo systemctl restart loki
+    echo "    Loki config updated and restarted."
+fi
+if $PROMTAIL_CHANGED; then
+    sudo systemctl restart promtail
+    echo "    Promtail config updated and restarted."
+fi
+$LOKI_CHANGED || $PROMTAIL_CHANGED || echo "    Loki + Promtail configs unchanged."
+
 echo "==> Restarting j105-logger service..."
 sudo systemctl restart j105-logger
 
