@@ -264,6 +264,7 @@ Document any B&G-specific proprietary PGNs in `docs/pgn-notes.md` as discovered.
 ## Dos and Don'ts
 
 **Do:**
+- **Commit and push every change** — after editing any file (code, config, scripts), always commit and push to the current branch immediately. This is especially critical for hotfixes on the Pi — uncommitted changes on the device will be lost on the next deploy. Never leave work uncommitted.
 - Write tests for all decoding and export logic
 - Use `uv add <package>` to add dependencies — never edit `pyproject.toml` manually for deps
 - Keep the SQLite schema versioned with simple integer migrations in `storage.py`
