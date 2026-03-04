@@ -382,7 +382,7 @@ if ! id j105logger &>/dev/null; then
 else
     info "j105logger already exists — skipping useradd."
 fi
-sudo usermod -aG audio,netdev j105logger
+sudo usermod -aG "audio,netdev,${CURRENT_USER}" j105logger
 
 # uv cache directory (service account has no home dir, so uv can't write ~/.cache/uv)
 sudo mkdir -p /var/cache/j105-logger
@@ -473,8 +473,8 @@ if [[ ! -f "$SK_SECURITY_FILE" ]]; then
     SK_ADMIN_PASS="$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 20)"
     export SK_ADMIN_PASS
 
-    # bcrypt-hash via the project's Python venv (bcrypt is a project dependency)
-    "$UV_BIN" run --project "$PROJECT_DIR" python -c "
+    # bcrypt-hash via uv (--with pulls bcrypt on the fly; it is NOT a project dep)
+    "$UV_BIN" run --with bcrypt --project "$PROJECT_DIR" python -c "
 import os, json, bcrypt
 pw = os.environ['SK_ADMIN_PASS'].encode()
 h = bcrypt.hashpw(pw, bcrypt.gensalt(rounds=12)).decode()
@@ -538,9 +538,11 @@ info "$PROJECT_DIR/data (SQLite DB)"
 info "$PROJECT_DIR/data/audio (WAV recordings)"
 info "$PROJECT_DIR/data/notes (photo notes)"
 
-# Transfer data directory ownership to j105logger so the service can write to it
-sudo chown -R j105logger:j105logger "$PROJECT_DIR/data"
-info "data/ ownership transferred to j105logger."
+# Shared ownership: deploy user owns, deploy user's group is shared with j105logger.
+# setgid ensures new files/dirs inherit the group so both users can always read/write.
+sudo chown -R "$CURRENT_USER:$CURRENT_USER" "$PROJECT_DIR/data"
+sudo chmod -R g+ws "$PROJECT_DIR/data"
+info "data/ owned by $CURRENT_USER, group-writable (j105logger is a member)."
 
 # ---------------------------------------------------------------------------
 # i) netdev group (allows non-root SocketCAN access)
