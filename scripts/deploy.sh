@@ -129,6 +129,16 @@ fi
 echo "==> Syncing Python dependencies..."
 "$UV_BIN" sync
 
+# Ensure j105logger can traverse the uv Python symlink chain (.venv/bin/python →
+# ~/.local/share/uv/python/cpython-*/bin/python3.12).  A Python version upgrade
+# creates a new cpython-* dir that would otherwise be 700.
+for d in "$HOME/.local" "$HOME/.local/share" "$HOME/.local/share/uv" \
+         "$HOME/.local/share/uv/python"; do
+    chmod -f 711 "$d" 2>/dev/null || true
+done
+find "$HOME/.local/share/uv/python" -mindepth 1 -maxdepth 2 -type d \
+    -exec chmod 711 {} + 2>/dev/null || true
+
 echo "==> Provisioning Grafana (dashboard, datasources, plugins)..."
 "$SCRIPT_DIR/provision-grafana.sh"
 

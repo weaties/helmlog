@@ -389,13 +389,9 @@ sudo mkdir -p /var/cache/j105-logger
 sudo chown j105logger:j105logger /var/cache/j105-logger
 info "uv cache: /var/cache/j105-logger"
 
-# Make the Pi user's home, .local, and uv's Python store traversable so
-# j105logger can follow the .venv/bin/python3 symlink chain.
+# Minimal traversal for $HOME — the full uv/Python chmod is done after
+# "uv sync" (step g) once the directories actually exist.
 chmod 711 "$HOME"
-chmod -f 711 "$HOME/.local" 2>/dev/null || true
-chmod -f 711 "$HOME/.local/bin" 2>/dev/null || true
-chmod -f 711 "$HOME/.local/share" 2>/dev/null || true
-chmod -f 711 "$HOME/.local/share/uv" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # f) Signal K → InfluxDB plugin config (with captured token)
@@ -442,6 +438,24 @@ info "uv: $UV_BIN ($("$UV_BIN" --version))"
 
 step "Syncing Python dependencies..."
 "$UV_BIN" sync --project "$PROJECT_DIR"
+
+# Now that uv has installed Python and created .venv, make the entire symlink
+# chain traversable so j105logger can reach .venv/bin/python3 →
+# ~/.local/share/uv/python/cpython-*/bin/python3.12.
+# This MUST run after "uv sync" — on a fresh install the directories don't
+# exist until uv creates them, so doing it earlier fails silently.
+info "Setting traversal permissions for j105logger..."
+chmod 711 "$HOME"
+for d in "$HOME/.local" \
+         "$HOME/.local/bin" \
+         "$HOME/.local/share" \
+         "$HOME/.local/share/uv" \
+         "$HOME/.local/share/uv/python"; do
+    chmod -f 711 "$d" 2>/dev/null || true
+done
+# uv's Python installs live in version-specific subdirs — open them all
+find "$HOME/.local/share/uv/python" -mindepth 1 -maxdepth 2 -type d \
+    -exec chmod 711 {} + 2>/dev/null || true
 
 # Install j105-logger wrapper script so the command works directly in the shell
 # (uv console scripts live in the venv, not in ~/.local/bin)
