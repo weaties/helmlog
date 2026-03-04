@@ -335,7 +335,7 @@ sudo mkdir -p /etc/systemd/system/grafana-server.service.d
 sudo tee /etc/systemd/system/grafana-server.service.d/port.conf > /dev/null << 'EOF'
 [Service]
 Environment=GF_SERVER_HTTP_PORT=3001
-Environment=GF_SERVER_HTTP_ADDR=127.0.0.1
+Environment=GF_SERVER_HTTP_ADDR=0.0.0.0
 Environment=GF_AUTH_DISABLE_LOGIN_FORM=false
 Environment=GF_AUTH_ANONYMOUS_ENABLED=false
 EOF
