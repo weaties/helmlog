@@ -473,8 +473,8 @@ if [[ ! -f "$SK_SECURITY_FILE" ]]; then
     SK_ADMIN_PASS="$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 20)"
     export SK_ADMIN_PASS
 
-    # bcrypt-hash via the project's Python venv (bcrypt is a project dependency)
-    "$UV_BIN" run --project "$PROJECT_DIR" python -c "
+    # bcrypt-hash via uv (--with pulls bcrypt on the fly; it is NOT a project dep)
+    "$UV_BIN" run --with bcrypt --project "$PROJECT_DIR" python -c "
 import os, json, bcrypt
 pw = os.environ['SK_ADMIN_PASS'].encode()
 h = bcrypt.hashpw(pw, bcrypt.gensalt(rounds=12)).decode()
