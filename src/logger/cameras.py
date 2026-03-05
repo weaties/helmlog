@@ -49,6 +49,8 @@ class Camera:
     name: str
     ip: str
     model: str = "insta360-x4"
+    wifi_ssid: str | None = None
+    wifi_password: str | None = None
 
 
 @dataclass

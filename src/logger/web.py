@@ -2596,6 +2596,8 @@ __NAV__
 <div class="form-row">
 <input id="add-name" placeholder="Name (e.g. bow)" maxlength="50"/>
 <input id="add-ip" placeholder="IP address" maxlength="45"/>
+<input id="add-ssid" placeholder="WiFi SSID" maxlength="64"/>
+<input id="add-pass" placeholder="WiFi password" maxlength="64"/>
 <button class="btn-sm btn-add" onclick="addCamera()">Save</button>
 <button class="btn-sm" onclick="hideAddForm()">Cancel</button>
 </div>
@@ -2611,6 +2613,12 @@ __NAV__
 <div class="form-row">
 <label>IP Address</label><input id="edit-ip" maxlength="45"/>
 </div>
+<div class="form-row">
+<label>WiFi SSID</label><input id="edit-ssid" maxlength="64"/>
+</div>
+<div class="form-row">
+<label>WiFi Password</label><input id="edit-pass" maxlength="64" type="password"/>
+</div>
 <div id="edit-err"></div>
 <div class="btn-row">
 <button class="btn-sm" onclick="document.getElementById('edit-dlg').close()">Cancel</button>
@@ -2625,27 +2633,33 @@ __NAV__
 <script>
 let _editOrigName='';
 function showAddForm(){document.getElementById('add-form').style.display='';document.getElementById('add-name').focus()}
-function hideAddForm(){document.getElementById('add-form').style.display='none';document.getElementById('add-err').textContent='';document.getElementById('add-name').value='';document.getElementById('add-ip').value=''}
+function hideAddForm(){document.getElementById('add-form').style.display='none';document.getElementById('add-err').textContent='';document.getElementById('add-name').value='';document.getElementById('add-ip').value='';document.getElementById('add-ssid').value='';document.getElementById('add-pass').value=''}
 async function addCamera(){
   const name=document.getElementById('add-name').value.trim();
   const ip=document.getElementById('add-ip').value.trim();
+  const wifi_ssid=document.getElementById('add-ssid').value.trim();
+  const wifi_password=document.getElementById('add-pass').value.trim();
   if(!name||!ip){document.getElementById('add-err').textContent='Name and IP are required';return}
-  const r=await fetch('/api/cameras',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,ip})});
+  const r=await fetch('/api/cameras',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,ip,wifi_ssid,wifi_password})});
   if(!r.ok){const d=await r.json();document.getElementById('add-err').textContent=d.detail||'Failed';return}
   hideAddForm();loadCameras();
 }
-function showEdit(name,ip){
+function showEdit(name,ip,ssid,pass_){
   _editOrigName=name;
   document.getElementById('edit-name').value=name;
   document.getElementById('edit-ip').value=ip;
+  document.getElementById('edit-ssid').value=ssid||'';
+  document.getElementById('edit-pass').value=pass_||'';
   document.getElementById('edit-err').textContent='';
   document.getElementById('edit-dlg').showModal();
 }
 async function saveEdit(){
   const name=document.getElementById('edit-name').value.trim();
   const ip=document.getElementById('edit-ip').value.trim();
+  const wifi_ssid=document.getElementById('edit-ssid').value.trim();
+  const wifi_password=document.getElementById('edit-pass').value.trim();
   if(!name||!ip){document.getElementById('edit-err').textContent='Name and IP are required';return}
-  const r=await fetch('/api/cameras/'+encodeURIComponent(_editOrigName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,ip})});
+  const r=await fetch('/api/cameras/'+encodeURIComponent(_editOrigName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,ip,wifi_ssid,wifi_password})});
   if(!r.ok){const d=await r.json();document.getElementById('edit-err').textContent=d.detail||'Failed';return}
   document.getElementById('edit-dlg').close();loadCameras();
 }
@@ -2661,13 +2675,16 @@ async function loadCameras(){
   if(!r.ok){document.getElementById('cam-table').textContent='Failed to load';return}
   const cams=await r.json();
   if(!cams.length){document.getElementById('cam-table').innerHTML='<p style="color:#8892a4">No cameras configured. Click <b>+ Add Camera</b> above to get started.</p>';return}
-  let h='<table><thead><tr><th>Name</th><th>IP</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+  let h='<table><thead><tr><th>Name</th><th>IP</th><th>WiFi</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
   for(const c of cams){
     const badge=c.error?`<span class="badge badge-err">error</span>`:c.recording?`<span class="badge badge-rec">recording</span>`:`<span class="badge badge-idle">idle</span>`;
     const recBtn=c.recording?`<button class="btn-sm btn-stop" onclick="camAction('${c.name}','stop')">⏹ Stop</button>`:`<button class="btn-sm btn-start" onclick="camAction('${c.name}','start')">⏺ Start</button>`;
-    const editBtn=`<button class="btn-sm btn-edit" onclick="showEdit('${c.name}','${c.ip}')">✎</button>`;
+    const ssidEsc=(c.wifi_ssid||'').replace(/'/g,"\\'");
+    const passEsc=(c.wifi_password||'').replace(/'/g,"\\'");
+    const editBtn=`<button class="btn-sm btn-edit" onclick="showEdit('${c.name}','${c.ip}','${ssidEsc}','${passEsc}')">✎</button>`;
     const delBtn=`<button class="btn-sm btn-del" onclick="delCamera('${c.name}')">✕</button>`;
-    h+=`<tr><td>${c.name}</td><td>${c.ip}</td><td>${badge}${c.error?' <small style="color:#ef4444">'+c.error.slice(0,60)+'</small>':''}</td><td style="display:flex;gap:4px">${recBtn}${editBtn}${delBtn}</td></tr>`;
+    const wifi=c.wifi_ssid?`<span style="color:#7eb8f7">${c.wifi_ssid}</span>`:'<span style="color:#586578">—</span>';
+    h+=`<tr><td>${c.name}</td><td>${c.ip}</td><td>${wifi}</td><td>${badge}${c.error?' <small style="color:#ef4444">'+c.error.slice(0,60)+'</small>':''}</td><td style="display:flex;gap:4px">${recBtn}${editBtn}${delBtn}</td></tr>`;
   }
   h+='</tbody></table>';
   document.getElementById('cam-table').innerHTML=h;
@@ -2769,7 +2786,16 @@ def create_app(
         from logger.cameras import Camera
 
         rows = await storage.list_cameras()
-        return [Camera(name=r["name"], ip=r["ip"], model=r["model"]) for r in rows]
+        return [
+            Camera(
+                name=r["name"],
+                ip=r["ip"],
+                model=r["model"],
+                wifi_ssid=r.get("wifi_ssid"),
+                wifi_password=r.get("wifi_password"),
+            )
+            for r in rows
+        ]
 
     async def _audit(
         request: Request,
@@ -3076,6 +3102,8 @@ def create_app(
                         "name": cam.name,
                         "ip": cam.ip,
                         "model": cam.model,
+                        "wifi_ssid": cam.wifi_ssid,
+                        "wifi_password": cam.wifi_password,
                         "recording": False,
                         "error": str(st),
                     }
@@ -3086,6 +3114,8 @@ def create_app(
                         "name": st.name,
                         "ip": st.ip,
                         "model": cam.model,
+                        "wifi_ssid": cam.wifi_ssid,
+                        "wifi_password": cam.wifi_password,
                         "recording": st.recording,
                         "error": st.error,
                     }
@@ -3176,14 +3206,19 @@ def create_app(
         name = str(body.get("name", "")).strip()
         ip = str(body.get("ip", "")).strip()
         model = str(body.get("model", "insta360-x4")).strip()
+        wifi_ssid = str(body.get("wifi_ssid", "")).strip() or None
+        wifi_password = str(body.get("wifi_password", "")).strip() or None
         if not name or not ip:
             raise HTTPException(400, detail="name and ip are required")
         try:
-            cam_id = await storage.add_camera(name, ip, model)
+            cam_id = await storage.add_camera(name, ip, model, wifi_ssid, wifi_password)
         except Exception:  # noqa: BLE001
             raise HTTPException(409, detail=f"Camera {name!r} already exists") from None
         await _audit(request, "camera.add", detail=name, user=_user)
-        return JSONResponse({"id": cam_id, "name": name, "ip": ip, "model": model}, status_code=201)
+        return JSONResponse(
+            {"id": cam_id, "name": name, "ip": ip, "model": model, "wifi_ssid": wifi_ssid},
+            status_code=201,
+        )
 
     @app.put("/api/cameras/{camera_name}")
     async def api_update_camera(
@@ -3191,23 +3226,31 @@ def create_app(
         camera_name: str,
         _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
     ) -> JSONResponse:
-        """Update a camera's IP, model, or name."""
+        """Update a camera's IP, model, name, or WiFi credentials."""
         body = await request.json()
         ip = str(body.get("ip", "")).strip()
         model = body.get("model")
         new_name = str(body.get("name", "")).strip()
+        wifi_ssid = str(body.get("wifi_ssid", "")).strip() or None
+        wifi_password = str(body.get("wifi_password", "")).strip() or None
         if not ip:
             raise HTTPException(400, detail="ip is required")
         if new_name and new_name != camera_name:
             ok = await storage.rename_camera(
-                camera_name, new_name, ip, model=model if model else None
+                camera_name, new_name, ip,
+                model=model if model else None,
+                wifi_ssid=wifi_ssid, wifi_password=wifi_password,
             )
         else:
-            ok = await storage.update_camera(camera_name, ip, model=model if model else None)
+            ok = await storage.update_camera(
+                camera_name, ip,
+                model=model if model else None,
+                wifi_ssid=wifi_ssid, wifi_password=wifi_password,
+            )
         if not ok:
             raise HTTPException(404, detail=f"Camera {camera_name!r} not found")
         await _audit(request, "camera.update", detail=camera_name, user=_user)
-        return JSONResponse({"name": new_name or camera_name, "ip": ip})
+        return JSONResponse({"name": new_name or camera_name, "ip": ip, "wifi_ssid": wifi_ssid})
 
     @app.delete("/api/cameras/{camera_name}", status_code=204)
     async def api_delete_camera(

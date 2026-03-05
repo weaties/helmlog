@@ -71,7 +71,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 21
+_CURRENT_VERSION: int = 22
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -432,6 +432,11 @@ _MIGRATIONS: dict[int, str] = {
             ip    TEXT NOT NULL,
             model TEXT NOT NULL DEFAULT 'insta360-x4'
         );
+    """,
+    22: """
+        -- WiFi credentials for camera AP networks (#147)
+        ALTER TABLE cameras ADD COLUMN wifi_ssid TEXT;
+        ALTER TABLE cameras ADD COLUMN wifi_password TEXT;
     """,
 }
 
@@ -1915,53 +1920,67 @@ class Storage:
     async def list_cameras(self) -> list[dict[str, Any]]:
         """Return all configured cameras, ordered by name."""
         db = self._conn()
-        cur = await db.execute("SELECT id, name, ip, model FROM cameras ORDER BY name ASC")
+        cur = await db.execute(
+            "SELECT id, name, ip, model, wifi_ssid, wifi_password"
+            " FROM cameras ORDER BY name ASC"
+        )
         rows = await cur.fetchall()
         return [dict(row) for row in rows]
 
-    async def add_camera(self, name: str, ip: str, model: str = "insta360-x4") -> int:
+    async def add_camera(
+        self,
+        name: str,
+        ip: str,
+        model: str = "insta360-x4",
+        wifi_ssid: str | None = None,
+        wifi_password: str | None = None,
+    ) -> int:
         """Add a camera. Returns the new row id."""
         db = self._conn()
         cur = await db.execute(
-            "INSERT INTO cameras (name, ip, model) VALUES (?, ?, ?)",
-            (name, ip, model),
+            "INSERT INTO cameras (name, ip, model, wifi_ssid, wifi_password)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (name, ip, model, wifi_ssid, wifi_password),
         )
         await db.commit()
         assert cur.lastrowid is not None
         logger.info("Camera added: id={} name={} ip={}", cur.lastrowid, name, ip)
         return cur.lastrowid
 
-    async def update_camera(self, name: str, ip: str, model: str | None = None) -> bool:
-        """Update a camera's IP (and optionally model) by name. Returns True if found."""
+    async def update_camera(
+        self,
+        name: str,
+        ip: str,
+        model: str | None = None,
+        wifi_ssid: str | None = None,
+        wifi_password: str | None = None,
+    ) -> bool:
+        """Update a camera's IP and optional fields by name. Returns True if found."""
         db = self._conn()
-        if model is not None:
-            cur = await db.execute(
-                "UPDATE cameras SET ip = ?, model = ? WHERE name = ?",
-                (ip, model, name),
-            )
-        else:
-            cur = await db.execute(
-                "UPDATE cameras SET ip = ? WHERE name = ?",
-                (ip, name),
-            )
+        cur = await db.execute(
+            "UPDATE cameras SET ip = ?, model = COALESCE(?, model),"
+            " wifi_ssid = ?, wifi_password = ? WHERE name = ?",
+            (ip, model, wifi_ssid, wifi_password, name),
+        )
         await db.commit()
         return (cur.rowcount or 0) > 0
 
     async def rename_camera(
-        self, old_name: str, new_name: str, ip: str, model: str | None = None
+        self,
+        old_name: str,
+        new_name: str,
+        ip: str,
+        model: str | None = None,
+        wifi_ssid: str | None = None,
+        wifi_password: str | None = None,
     ) -> bool:
         """Rename a camera and update its IP. Returns True if found."""
         db = self._conn()
-        if model is not None:
-            cur = await db.execute(
-                "UPDATE cameras SET name = ?, ip = ?, model = ? WHERE name = ?",
-                (new_name, ip, model, old_name),
-            )
-        else:
-            cur = await db.execute(
-                "UPDATE cameras SET name = ?, ip = ? WHERE name = ?",
-                (new_name, ip, old_name),
-            )
+        cur = await db.execute(
+            "UPDATE cameras SET name = ?, ip = ?, model = COALESCE(?, model),"
+            " wifi_ssid = ?, wifi_password = ? WHERE name = ?",
+            (new_name, ip, model, wifi_ssid, wifi_password, old_name),
+        )
         await db.commit()
         return (cur.rowcount or 0) > 0
 

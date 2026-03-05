@@ -369,22 +369,40 @@ async def _list_videos() -> None:
 
 async def _list_cameras() -> None:
     """Print configured cameras and ping each for status."""
-    from logger.cameras import get_status, parse_cameras_config
+    from logger.cameras import Camera, get_status
+    from logger.storage import Storage, StorageConfig
 
-    cameras_str = os.environ.get("CAMERAS", "")
-    if not cameras_str:
-        print("No cameras configured. Set CAMERAS env var (e.g. CAMERAS=main:192.168.8.50)")
+    storage = Storage(StorageConfig())
+    await storage.connect()
+    try:
+        rows = await storage.list_cameras()
+    finally:
+        await storage.close()
+
+    if not rows:
+        print("No cameras configured. Use the admin UI or CAMERAS env var.")
         return
 
-    cameras = parse_cameras_config(cameras_str)
-    print(f"{'Name':<20} {'IP':<18} {'Recording':>10}  {'Status'}")
-    print("-" * 65)
+    cameras = [
+        Camera(
+            name=r["name"],
+            ip=r["ip"],
+            model=r["model"],
+            wifi_ssid=r.get("wifi_ssid"),
+            wifi_password=r.get("wifi_password"),
+        )
+        for r in rows
+    ]
+
+    print(f"{'Name':<16} {'IP':<18} {'WiFi SSID':<22} {'Recording':>10}  {'Status'}")
+    print("-" * 85)
 
     for camera in cameras:
         status = await get_status(camera)
         rec = "YES" if status.recording else "no"
         err = status.error or "OK"
-        print(f"{camera.name:<20} {camera.ip:<18} {rec:>10}  {err}")
+        ssid = camera.wifi_ssid or "—"
+        print(f"{camera.name:<16} {camera.ip:<18} {ssid:<22} {rec:>10}  {err}")
 
 
 # ---------------------------------------------------------------------------
