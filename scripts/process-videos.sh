@@ -111,13 +111,13 @@ log "Found $REC_COUNT recording(s)"
 
 mkdir -p "$OUTPUT_DIR"
 
+# Clean up any stale pending-uploads from a previous interrupted run
+rm -f "$OUTPUT_DIR/.pending_uploads"
+
 # Check Docker
 if ! docker info &>/dev/null; then
   die "Docker is not running. Start Docker Desktop and try again."
 fi
-
-STITCHED_FILES=()
-TIMESTAMPS=()
 
 echo "$RECORDINGS" | python3 -c "
 import sys, json

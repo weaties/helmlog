@@ -92,14 +92,16 @@ case "$STITCHER" in
     # video — YouTube won't render it as 360° but the pipeline is testable.
     echo "==> Stream-copying with ffmpeg (dual-fisheye fallback)..."
     if [ ${#INPUTS[@]} -eq 1 ]; then
-      ffmpeg -y -i "${INPUTS[0]}" -c copy -movflags +faststart "$TEMP_OUTPUT"
+      ffmpeg -y -i "${INPUTS[0]}" \
+        -map 0:v -map 0:a -c copy -movflags +faststart "$TEMP_OUTPUT"
     else
       # Multiple segments: concatenate then stream-copy
       CONCAT_FILE=$(mktemp /tmp/concat_XXXXXX.txt)
       for inp in "${INPUTS[@]}"; do
         echo "file '$inp'" >> "$CONCAT_FILE"
       done
-      ffmpeg -y -f concat -safe 0 -i "$CONCAT_FILE" -c copy -movflags +faststart "$TEMP_OUTPUT"
+      ffmpeg -y -f concat -safe 0 -i "$CONCAT_FILE" \
+        -map 0:v -map 0:a -c copy -movflags +faststart "$TEMP_OUTPUT"
       rm -f "$CONCAT_FILE"
     fi
     ;;
