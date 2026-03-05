@@ -163,6 +163,23 @@ if $PROMTAIL_CHANGED; then
 fi
 $LOKI_CHANGED || $PROMTAIL_CHANGED || echo "    Loki + Promtail configs unchanged."
 
+echo "==> Updating nginx config..."
+if [[ -f /etc/nginx/sites-available/j105-logger ]]; then
+    if ! diff -q "$SCRIPT_DIR/nginx/j105-logger.conf" /etc/nginx/sites-available/j105-logger &>/dev/null; then
+        sudo cp "$SCRIPT_DIR/nginx/j105-logger.conf" /etc/nginx/sites-available/j105-logger
+        if sudo nginx -t 2>&1; then
+            sudo systemctl reload nginx
+            echo "    nginx config updated and reloaded."
+        else
+            echo "    WARNING: nginx config test failed — not reloaded."
+        fi
+    else
+        echo "    nginx config unchanged."
+    fi
+else
+    echo "    nginx not configured — run setup.sh to install."
+fi
+
 echo "==> Fixing data directory permissions..."
 chmod -R g+w "$PROJECT_DIR/data" 2>/dev/null || true
 

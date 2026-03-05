@@ -176,14 +176,25 @@ ip -details link show can0
 
 ## Web interfaces
 
-All interfaces are available over Tailscale (SSH in or use the Tailscale IP/hostname):
+An nginx reverse proxy on port 80 provides single-URL access to all services:
 
-| Interface | URL | Purpose |
+| Path | Backend | Purpose |
 |---|---|---|
-| j105-logger | `http://<pi-hostname>:3002` | Race marker, history, exports |
-| Grafana | `http://<pi-hostname>:3001` | Real-time sailing dashboards |
-| Signal K | `http://<pi-hostname>:3000` | NMEA 2000 data explorer, plugin management |
-| InfluxDB | `http://<pi-hostname>:8086` | Time-series data explorer, query UI |
+| `/` | j105-logger | Race marker, history, exports |
+| `/grafana/` | Grafana | Real-time sailing dashboards |
+| `/signalk/` | Signal K | NMEA 2000 data API + WebSocket |
+| `/sk/` | Signal K | Admin UI, plugin management |
+
+Just open `http://<pi-hostname>/` — no port numbers to remember.
+
+Direct-port access is still available for debugging:
+
+| Interface | URL |
+|---|---|
+| j105-logger | `http://<pi-hostname>:3002` |
+| Grafana | `http://<pi-hostname>:3001` |
+| Signal K | `http://<pi-hostname>:3000` |
+| InfluxDB | `http://<pi-hostname>:8086` |
 
 Grafana default credentials: `admin` / `changeme123` — **change after first login**.
 InfluxDB is bound to loopback only (127.0.0.1:8086) — access it via SSH tunnel or from the Pi directly.

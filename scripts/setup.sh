@@ -24,6 +24,7 @@
 #   j)   CAN interface systemd service
 #   k)   j105-logger systemd service (runs as j105logger)
 #   k.1) Loki + Promtail (centralized log management)
+#   k.2) nginx reverse proxy (single-port access to all services)
 #   l)   Scoped NOPASSWD sudo (replaces blanket Pi OS default)
 #   m)   Summary
 
@@ -297,7 +298,7 @@ fi
 sudo systemctl restart influxdb
 
 # ---------------------------------------------------------------------------
-# e) Grafana OSS (loopback-only; login required; no anonymous access)
+# e) Grafana OSS (loopback-only; login required)
 #    Port 3001 to avoid clash with Signal K on 3000.
 #    Auth is managed via systemd env vars so service.d/port.conf controls both
 #    network binding and auth — no need to modify /etc/grafana/grafana.ini.
@@ -338,8 +339,11 @@ sudo tee /etc/systemd/system/grafana-server.service.d/port.conf > /dev/null << '
 [Service]
 Environment=GF_SERVER_HTTP_PORT=3001
 Environment=GF_SERVER_HTTP_ADDR=0.0.0.0
+Environment=GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s/grafana/
+Environment=GF_SERVER_SERVE_FROM_SUB_PATH=true
 Environment=GF_AUTH_DISABLE_LOGIN_FORM=false
-Environment=GF_AUTH_ANONYMOUS_ENABLED=false
+Environment=GF_AUTH_ANONYMOUS_ENABLED=true
+Environment=GF_AUTH_ANONYMOUS_ORG_ROLE=None
 EOF
 
 sudo systemctl daemon-reload
@@ -705,6 +709,34 @@ sudo systemctl enable --now loki promtail
 info "Loki (port 3100) + Promtail installed and running."
 
 # ---------------------------------------------------------------------------
+# k.2) nginx reverse proxy — single-port access to all services
+#      Proxies j105-logger (/), Grafana (/grafana/), Signal K (/signalk/)
+#      through port 80 so crew only needs one URL.
+# ---------------------------------------------------------------------------
+
+step "Installing nginx reverse proxy..."
+sudo apt-get install -y nginx
+
+# Deploy our site config
+sudo cp "$SCRIPT_DIR/nginx/j105-logger.conf" /etc/nginx/sites-available/j105-logger
+sudo ln -sf /etc/nginx/sites-available/j105-logger /etc/nginx/sites-enabled/j105-logger
+
+# Remove the default site (it conflicts on port 80)
+sudo rm -f /etc/nginx/sites-enabled/default
+
+# Test config before reloading
+if sudo nginx -t 2>&1; then
+    sudo systemctl enable --now nginx
+    sudo systemctl reload nginx
+    info "nginx reverse proxy configured on port 80."
+    info "  /           → j105-logger (port 3002)"
+    info "  /grafana/   → Grafana (port 3001)"
+    info "  /signalk/   → Signal K (port 3000)"
+else
+    warn "nginx config test failed — check /etc/nginx/sites-available/j105-logger"
+fi
+
+# ---------------------------------------------------------------------------
 # l) Scoped NOPASSWD sudo
 #      Creates /etc/sudoers.d/j105-logger-allowed with the specific commands
 #      needed for day-to-day operations (deploy.sh, service management).
@@ -780,6 +812,16 @@ ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/rsync
 
 # Grafana port.conf update
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/grafana-server.service.d/port.conf
+
+# nginx reverse proxy
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl reload nginx
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl reload nginx.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status nginx
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status nginx.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/cp ${PROJECT_DIR}/scripts/nginx/j105-logger.conf /etc/nginx/sites-available/j105-logger
 EOF
 sudo chmod 440 "$SUDOERS_FILE"
 
@@ -810,6 +852,12 @@ echo -e "${GREEN}═════════════════════
 echo -e "${GREEN}  Setup complete. Reboot, then verify:${NC}"
 echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
 echo ""
+echo "  All-in-one:  http://${PI_HOSTNAME}/        (nginx reverse proxy — port 80)"
+echo "    /           → j105-logger (race marker, history, exports)"
+echo "    /grafana/   → Grafana dashboards (admin / changeme123 — change after first login)"
+echo "    /signalk/   → Signal K data explorer"
+echo ""
+echo "  Direct access (still available):"
 echo "  Signal K:    http://${PI_HOSTNAME}:3000   (admin password in ~/.signalk-admin-pass.txt)"
 echo "  Grafana:     http://${PI_HOSTNAME}:3001   (admin / changeme123 — change after first login)"
 echo "  InfluxDB:    http://${PI_HOSTNAME}:8086   (loopback-only — access via SSH tunnel or Tailscale)"

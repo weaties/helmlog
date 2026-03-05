@@ -27,6 +27,7 @@ Data can be exported as CSV, GPX, or JSON for use in Sailmon and other regatta a
 | Logging | `loguru` |
 | External data | `httpx` — Open-Meteo weather, NOAA CO-OPS tides |
 | YouTube metadata | `yt-dlp` |
+| Reverse proxy | `nginx` — single-port (80) access to all services |
 
 ---
 
