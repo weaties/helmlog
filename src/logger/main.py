@@ -127,7 +127,8 @@ async def _web_loop(
     """Background task: serve the race-marking web interface on WEB_PORT (default 3002).
 
     If *recorder* and *audio_config* are provided, audio recording is tied to
-    race start/end events via the web interface.
+    race start/end events via the web interface.  Cameras are loaded from the
+    database dynamically.
     """
     import uvicorn
 
@@ -188,6 +189,11 @@ async def _run() -> None:
 
     audio_config = AudioConfig()
     recorder = AudioRecorder()
+
+    # Seed cameras table from env var on first run, then load from DB
+    cameras_str = os.environ.get("CAMERAS", "")
+    if cameras_str:
+        await storage.seed_cameras_from_env(cameras_str)
 
     from logger.monitor import monitor_loop
 
@@ -357,6 +363,170 @@ async def _list_videos() -> None:
 
 
 # ---------------------------------------------------------------------------
+# list-cameras
+# ---------------------------------------------------------------------------
+
+
+async def _list_cameras() -> None:
+    """Print configured cameras and ping each for status."""
+    from logger.cameras import Camera, get_status
+    from logger.storage import Storage, StorageConfig
+
+    storage = Storage(StorageConfig())
+    await storage.connect()
+    try:
+        rows = await storage.list_cameras()
+    finally:
+        await storage.close()
+
+    if not rows:
+        print("No cameras configured. Use the admin UI or CAMERAS env var.")
+        return
+
+    cameras = [
+        Camera(
+            name=r["name"],
+            ip=r["ip"],
+            model=r["model"],
+            wifi_ssid=r.get("wifi_ssid"),
+            wifi_password=r.get("wifi_password"),
+        )
+        for r in rows
+    ]
+
+    print(f"{'Name':<16} {'IP':<18} {'WiFi SSID':<22} {'Recording':>10}  {'Status'}")
+    print("-" * 85)
+
+    for camera in cameras:
+        status = await get_status(camera)
+        rec = "YES" if status.recording else "no"
+        err = status.error or "OK"
+        ssid = camera.wifi_ssid or "—"
+        print(f"{camera.name:<16} {camera.ip:<18} {ssid:<22} {rec:>10}  {err}")
+
+
+# ---------------------------------------------------------------------------
+# sync-videos
+# ---------------------------------------------------------------------------
+
+
+async def _sync_videos(channel_id: str | None, tolerance: int, auto_confirm: bool) -> None:
+    """Match recent YouTube uploads to unlinked camera sessions."""
+    from logger.storage import Storage, StorageConfig
+
+    yt_channel = channel_id or os.environ.get("YOUTUBE_CHANNEL_ID", "")
+    if not yt_channel:
+        print("No YouTube channel ID. Use --channel-id or set YOUTUBE_CHANNEL_ID.")
+        return
+
+    storage = Storage(StorageConfig())
+    await storage.connect()
+    try:
+        unlinked = await storage.list_unlinked_camera_sessions()
+        if not unlinked:
+            print("No unlinked camera sessions found.")
+            return
+
+        # Fetch recent videos from channel via yt-dlp
+        import asyncio as _asyncio
+        import json as _json
+
+        def _fetch_channel_videos() -> list[dict[str, object]]:
+            import subprocess
+
+            result = subprocess.run(
+                [
+                    "yt-dlp",
+                    "--flat-playlist",
+                    "--dump-json",
+                    f"https://www.youtube.com/channel/{yt_channel}/videos",
+                    "--playlist-end",
+                    "20",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            videos = []
+            for line in result.stdout.strip().split("\n"):
+                if line.strip():
+                    videos.append(_json.loads(line))
+            return videos
+
+        print(f"Fetching recent videos from channel {yt_channel}...")
+        yt_videos = await _asyncio.to_thread(_fetch_channel_videos)
+        if not yt_videos:
+            print("No videos found on channel.")
+            return
+
+        # Match videos to unlinked camera sessions
+        matches: list[tuple[dict[str, object], dict[str, object]]] = []
+        for vid in yt_videos:
+            duration = float(str(vid.get("duration") or 0))
+            # Use upload_date as rough proxy for recording time
+            upload_date_str = str(vid.get("upload_date", ""))
+            if not upload_date_str or len(upload_date_str) != 8:
+                continue
+
+            for session in unlinked:
+                started = session.get("recording_started_utc")
+                if not started:
+                    continue
+                # Simple heuristic: check if the session's start date matches
+                # the video's upload date (within tolerance days)
+                from datetime import datetime as _dt
+
+                session_dt = _dt.fromisoformat(str(started))
+                # Parse upload_date YYYYMMDD
+                upload_dt = _dt.strptime(upload_date_str, "%Y%m%d")
+                diff_days = abs((upload_dt.date() - session_dt.date()).days)
+                if diff_days <= 1:  # same day or next day (upload lag)
+                    matches.append((vid, session))
+
+        if not matches:
+            print("No matches found within tolerance.")
+            return
+
+        print(f"\n{'YouTube Video':<45} {'Camera Session':<25} {'Race'}")
+        print("-" * 90)
+        for vid, sess in matches:
+            title = str(vid.get("title", ""))[:45]
+            cam = str(sess.get("camera_name", ""))
+            race = str(sess.get("race_name", ""))
+            print(f"{title:<45} {cam:<25} {race}")
+
+        if not auto_confirm:
+            print(f"\n{len(matches)} match(es) found. Use --yes to auto-link.")
+            return
+
+        linked = 0
+        for vid, sess in matches:
+            vid_url = f"https://www.youtube.com/watch?v={vid.get('id', '')}"
+            vid_id = str(vid.get("id", ""))
+            title = str(vid.get("title", ""))
+            duration = float(str(vid.get("duration") or 0))
+            session_id = int(str(sess["session_id"]))
+            started = str(sess["recording_started_utc"])
+            sync_utc = datetime.fromisoformat(started).replace(tzinfo=UTC)
+
+            await storage.add_race_video(
+                race_id=session_id,
+                youtube_url=vid_url,
+                video_id=vid_id,
+                title=title,
+                label=str(sess.get("camera_name", "")),
+                sync_utc=sync_utc,
+                sync_offset_s=0.0,
+                duration_s=duration,
+            )
+            linked += 1
+
+        print(f"\n{linked} video(s) linked to races.")
+    finally:
+        await storage.close()
+
+
+# ---------------------------------------------------------------------------
 # list-audio
 # ---------------------------------------------------------------------------
 
@@ -424,7 +594,9 @@ async def _add_user(email: str, name: str | None, role: str) -> None:
         # Generate an invite token so the user can log in
         token = generate_token()
         await storage.create_invite_token(token, email, role, user_id, invite_expires_at())
-        base = os.environ.get("PUBLIC_URL", f"http://localhost:{os.environ.get('WEB_PORT', '3002')}").rstrip(".")
+        base = os.environ.get(
+            "PUBLIC_URL", f"http://localhost:{os.environ.get('WEB_PORT', '3002')}"
+        ).rstrip(".")
         login_url = f"{base}/login?token={token}"
         logger.info("Login link (expires in 7 days):\n  {}", login_url)
 
@@ -593,6 +765,21 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list-videos", help="List linked YouTube videos")
 
+    sub.add_parser("list-cameras", help="Show configured cameras and their status")
+
+    sv = sub.add_parser("sync-videos", help="Auto-associate YouTube uploads with camera sessions")
+    sv.add_argument(
+        "--channel-id", metavar="ID", help="YouTube channel ID (or set YOUTUBE_CHANNEL_ID)"
+    )
+    sv.add_argument(
+        "--tolerance",
+        type=int,
+        default=30,
+        metavar="SEC",
+        help="Match tolerance in seconds (default: 30)",
+    )
+    sv.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+
     sub.add_parser("list-audio", help="List recorded audio sessions")
     sub.add_parser("list-devices", help="List available audio input devices")
 
@@ -643,6 +830,10 @@ def main() -> None:
                 asyncio.run(_link_video(args.url, sync_utc_iso, sync_offset))
             case "list-videos":
                 asyncio.run(_list_videos())
+            case "list-cameras":
+                asyncio.run(_list_cameras())
+            case "sync-videos":
+                asyncio.run(_sync_videos(args.channel_id, args.tolerance, args.yes))
             case "list-audio":
                 asyncio.run(_list_audio())
             case "list-devices":

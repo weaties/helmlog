@@ -2372,3 +2372,85 @@ async def test_polar_current_with_baseline(storage: Storage) -> None:
     assert data["sufficient_data"] is True
     assert data["baseline_bsp"] == pytest.approx(6.0, rel=1e-2)
     assert data["delta"] == pytest.approx(1.0, rel=1e-2)
+
+
+# ---------------------------------------------------------------------------
+# Camera CRUD via web API (#147)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_camera_crud_api(storage: Storage) -> None:
+    """Add, list, update, and delete cameras via the web API."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Add a camera
+        resp = await client.post(
+            "/api/cameras",
+            json={"name": "bow", "ip": "192.168.42.1"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["name"] == "bow"
+        assert data["ip"] == "192.168.42.1"
+        assert data["model"] == "insta360-x4"
+
+        # Duplicate should fail
+        resp = await client.post(
+            "/api/cameras",
+            json={"name": "bow", "ip": "10.0.0.1"},
+        )
+        assert resp.status_code == 409
+
+        # Update IP
+        resp = await client.put(
+            "/api/cameras/bow",
+            json={"ip": "10.0.0.2"},
+        )
+        assert resp.status_code == 200
+
+        # Rename
+        resp = await client.put(
+            "/api/cameras/bow",
+            json={"name": "stern", "ip": "10.0.0.3"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "stern"
+
+        # Delete
+        resp = await client.delete("/api/cameras/stern")
+        assert resp.status_code == 204
+
+        # Delete again should 404
+        resp = await client.delete("/api/cameras/stern")
+        assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_camera_add_validation(storage: Storage) -> None:
+    """Missing name or ip should return 400."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/cameras", json={"name": "", "ip": "1.2.3.4"})
+        assert resp.status_code == 400
+
+        resp = await client.post("/api/cameras", json={"name": "bow", "ip": ""})
+        assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_camera_admin_page_loads(storage: Storage) -> None:
+    """GET /admin/cameras returns the camera admin HTML page."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/admin/cameras")
+
+    assert resp.status_code == 200
+    assert "Cameras" in resp.text
+    assert "Add Camera" in resp.text

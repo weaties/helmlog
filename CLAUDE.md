@@ -16,7 +16,7 @@ Data can be exported as CSV, GPX, or JSON for use in Sailmon and other regatta a
 | Dependency management | `uv` |
 | Data source (primary) | Signal K WebSocket via `websockets` (`sk_reader.py`) |
 | NMEA 2000 / CAN (legacy) | `python-can`, `canboat` — `can_reader.py`, `DATA_SOURCE=can` |
-| Storage | SQLite via `aiosqlite` (schema v18) |
+| Storage | SQLite via `aiosqlite` (schema v20) |
 | Web interface | `fastapi` + `uvicorn` |
 | Audio recording | `sounddevice`, `soundfile` |
 | Audio transcription | `faster-whisper`; optional diarisation via `pyannote-audio` |
@@ -45,10 +45,12 @@ j105-logger/
 │       ├── __init__.py
 │       ├── main.py         # CLI entry point; wires modules together, starts async loop
 │       ├── audio.py        # USB audio recording (Gordik / any UAC device)
+│       ├── cameras.py      # Insta360 X4 camera control via OSC HTTP API
 │       ├── can_reader.py   # CAN bus interface — legacy direct-CAN path only
 │       ├── export.py       # Export to CSV / GPX / JSON for regatta tools
 │       ├── external.py     # Open-Meteo weather + NOAA CO-OPS tide fetching
 │       ├── influx.py       # InfluxDB write helpers for system health metrics
+│       ├── insta360.py     # Insta360 / local video metadata extraction + race matching
 │       ├── monitor.py      # psutil background task → InfluxDB every 60 s
 │       ├── nmea2000.py     # PGN decoding dataclasses (used by both paths)
 │       ├── races.py        # Race naming logic + RaceConfig dataclass
@@ -80,6 +82,7 @@ uv run ruff check --fix . && uv run ruff format .  # auto-fix
 
 j105-logger run             # start the logger
 j105-logger status          # show database row counts
+j105-logger list-cameras    # show configured cameras and ping status
 j105-logger --help          # full subcommand list
 ```
 
@@ -130,7 +133,7 @@ is `.env.example` — read it for the full list of available settings.
 - **Modules are small and single-purpose** — if a module is growing beyond ~200 lines, split it.
 - **Use `loguru` for all logging** — never use `print()` for operational output.
 - **Dataclasses or `typing.TypedDict`** for structured data — avoid raw dicts with unknown shapes.
-- **Keep hardware-dependent code isolated** — direct CAN bus access lives only in `can_reader.py`; Signal K WebSocket access only in `sk_reader.py`. All other modules work with decoded data structures and can be tested without hardware.
+- **Keep hardware-dependent code isolated** — direct CAN bus access lives only in `can_reader.py`; Signal K WebSocket access only in `sk_reader.py`; camera HTTP control only in `cameras.py`. All other modules work with decoded data structures and can be tested without hardware.
 
 ---
 
