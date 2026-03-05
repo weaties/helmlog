@@ -142,31 +142,18 @@ for r in json.load(sys.stdin):
       INPUT_ARGS="$INPUT_ARGS /input/$BASENAME"
     done
 
+    # stitch-360 handles stitching + 360° metadata injection inside the container
     docker run --rm \
       -v "$CAMERA_DIR:/input:ro" \
       -v "$OUTPUT_DIR:/output" \
       "$IMAGE" \
-      join-insv --output "/output/${TS}.mp4" $INPUT_ARGS \
+      --output "/output/${TS}.mp4" $INPUT_ARGS \
     || {
       warn "[$TS] Stitching failed — skipping this recording"
       continue
     }
 
     log "  [$TS] Stitched → $OUTPUT_FILE"
-  fi
-
-  # Inject 360° spatial metadata
-  if command -v exiftool &>/dev/null; then
-    exiftool -overwrite_original \
-      -ProjectionType="equirectangular" \
-      -XMP-GSpherical:Spherical="true" \
-      -XMP-GSpherical:Stitched="true" \
-      -XMP-GSpherical:ProjectionType="equirectangular" \
-      "$OUTPUT_FILE" &>/dev/null \
-    && log "  [$TS] Spatial metadata injected" \
-    || warn "[$TS] exiftool metadata injection failed"
-  else
-    warn "[$TS] exiftool not found — spatial metadata NOT injected (YouTube may not recognize as 360°)"
   fi
 
   echo "$TS $OUTPUT_FILE" >> "$OUTPUT_DIR/.pending_uploads"

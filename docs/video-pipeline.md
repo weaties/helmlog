@@ -41,10 +41,10 @@ Install on your Mac:
 # Docker Desktop (for stitching)
 # Download from https://docker.com/get-started
 
-# exiftool (for 360° metadata injection)
-brew install exiftool
-
 # uv (Python package manager — already installed if you develop j105-logger)
+
+# exiftool is optional on the host (bundled in the Docker image)
+# brew install exiftool
 ```
 
 ## YouTube API Setup
@@ -59,6 +59,38 @@ brew install exiftool
 
 First upload will open a browser for authorization. After that, the token is
 cached and refreshes automatically.
+
+## Building the Docker Image
+
+The setup script builds the Docker image automatically on first run. You can
+also build it manually:
+
+```bash
+# Default: ffmpeg fallback (stream-copy, dual-fisheye — works today)
+./docker/build.sh
+
+# With Insta360 MediaSDK (proper 360° stitching + FlowState)
+# 1. Apply for SDK at https://www.insta360.com/sdk/apply (~3 day approval)
+# 2. Download the Linux SDK and extract the .deb file
+# 3. Place libMediaSDK-dev-*.deb in docker/
+# 4. Build:
+./docker/build.sh --mediasdk
+```
+
+Both modes tag the image as `insta360-cli-utils`, so the pipeline works without
+config changes. The ffmpeg fallback produces a dual-fisheye MP4 (not properly
+stitched as equirectangular) — good for testing the pipeline end-to-end. Rebuild
+with `--mediasdk` once your SDK access is approved for proper 360° output.
+
+### Upgrading to MediaSDK
+
+When your Insta360 SDK application is approved:
+
+1. Download the Linux SDK zip from the link in the approval email
+2. Extract `libMediaSDK-dev-*.deb` from the zip
+3. Copy it into `docker/`
+4. Rebuild: `./docker/build.sh --mediasdk`
+5. Re-process any videos that were converted with the ffmpeg fallback
 
 ## Installation
 
@@ -186,8 +218,14 @@ rm ~/Library/LaunchAgents/com.j105.video.plist
 **YouTube upload fails with 403** — Your API quota may be exhausted (default:
 ~6 uploads/day). Check [Google Cloud Console](https://console.cloud.google.com/apis/dashboard).
 
-**Video not recognized as 360° on YouTube** — Ensure exiftool is installed
-(`brew install exiftool`). The pipeline injects spherical metadata automatically.
+**Video not recognized as 360° on YouTube** — The Docker image injects spatial
+metadata automatically. If using the ffmpeg fallback, the output is dual-fisheye
+(not equirectangular) so YouTube can't render it as 360°. Rebuild with
+`./docker/build.sh --mediasdk` for proper 360° output.
+
+**"Stitcher: ffmpeg (stream-copy fallback)"** — The Docker image was built
+without MediaSDK. Videos are converted but not properly stitched. Apply for
+the SDK at https://www.insta360.com/sdk/apply and rebuild.
 
 **Refresh token expired** — Set your Google Cloud project's OAuth consent screen
 to Production mode (not Testing). Testing mode tokens expire after 7 days.

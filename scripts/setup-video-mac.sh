@@ -46,9 +46,10 @@ if ! docker info &>/dev/null 2>&1; then
 fi
 log "  Docker daemon: running"
 
-if ! command -v exiftool &>/dev/null; then
-  warn "exiftool not found — 360° metadata won't be injected."
-  warn "Install with: brew install exiftool"
+if command -v exiftool &>/dev/null; then
+  log "  exiftool: $(exiftool -ver) (also bundled in Docker image)"
+else
+  log "  exiftool: not installed (OK — bundled in Docker image)"
 fi
 
 if ! command -v uv &>/dev/null; then
@@ -64,15 +65,26 @@ log "Video output dir: $OUTPUT_DIR"
 # ── 3. Check Docker image ──────────────────────────────────────────────────
 
 IMAGE="${DOCKER_IMAGE:-insta360-cli-utils}"
+BUILD_SCRIPT="$SCRIPT_DIR/../docker/build.sh"
 if docker image inspect "$IMAGE" &>/dev/null; then
   log "  Docker image '$IMAGE': available"
 else
-  log "  Docker image '$IMAGE': not found — pulling..."
-  if docker pull "$IMAGE" 2>/dev/null; then
-    log "  Docker image '$IMAGE': pulled successfully"
+  log "  Docker image '$IMAGE': not found — building (first time only)..."
+  if [ -x "$BUILD_SCRIPT" ]; then
+    # Check if MediaSDK .deb is available for enhanced stitching
+    DOCKER_DIR="$(cd "$SCRIPT_DIR/../docker" && pwd)"
+    DEB_COUNT=$(find "$DOCKER_DIR" -maxdepth 1 -name 'libMediaSDK-dev*.deb' 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$DEB_COUNT" -gt 0 ]; then
+      log "  MediaSDK .deb found — building with full stitching support"
+      "$BUILD_SCRIPT" --mediasdk
+    else
+      log "  No MediaSDK .deb — building with ffmpeg fallback"
+      log "  For proper 360° stitching, get the SDK at https://www.insta360.com/sdk/apply"
+      "$BUILD_SCRIPT"
+    fi
   else
-    warn "Could not pull '$IMAGE'. You may need to build it locally."
-    warn "See: https://github.com/syncom/insta360-cli-utils"
+    warn "Build script not found at $BUILD_SCRIPT"
+    warn "Run: cd $(dirname "$BUILD_SCRIPT") && ./build.sh"
   fi
 fi
 
