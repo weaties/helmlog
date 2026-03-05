@@ -2990,15 +2990,25 @@ def create_app(
         result: list[dict[str, Any]] = []
         for cam, st in zip(cameras, statuses, strict=True):
             if isinstance(st, BaseException):
-                result.append({
-                    "name": cam.name, "ip": cam.ip, "model": cam.model,
-                    "recording": False, "error": str(st),
-                })
+                result.append(
+                    {
+                        "name": cam.name,
+                        "ip": cam.ip,
+                        "model": cam.model,
+                        "recording": False,
+                        "error": str(st),
+                    }
+                )
             else:
-                result.append({
-                    "name": st.name, "ip": st.ip, "model": cam.model,
-                    "recording": st.recording, "error": st.error,
-                })
+                result.append(
+                    {
+                        "name": st.name,
+                        "ip": st.ip,
+                        "model": cam.model,
+                        "recording": st.recording,
+                        "error": st.error,
+                    }
+                )
         return JSONResponse(result)
 
     @app.post("/api/cameras/{camera_name}/start")
@@ -3013,10 +3023,14 @@ def create_app(
         if cam is None:
             raise HTTPException(404, detail=f"Camera {camera_name!r} not found")
         status = await cameras_mod.start_camera(cam)
-        return JSONResponse({
-            "name": status.name, "ip": status.ip,
-            "recording": status.recording, "error": status.error,
-        })
+        return JSONResponse(
+            {
+                "name": status.name,
+                "ip": status.ip,
+                "recording": status.recording,
+                "error": status.error,
+            }
+        )
 
     @app.post("/api/cameras/{camera_name}/stop")
     async def api_stop_camera(
@@ -3030,10 +3044,14 @@ def create_app(
         if cam is None:
             raise HTTPException(404, detail=f"Camera {camera_name!r} not found")
         status = await cameras_mod.stop_camera(cam)
-        return JSONResponse({
-            "name": status.name, "ip": status.ip,
-            "recording": status.recording, "error": status.error,
-        })
+        return JSONResponse(
+            {
+                "name": status.name,
+                "ip": status.ip,
+                "recording": status.recording,
+                "error": status.error,
+            }
+        )
 
     @app.get("/api/cameras/sessions")
     async def api_camera_sessions_all(
@@ -3294,9 +3312,7 @@ def create_app(
             import logger.cameras as cameras_mod
 
             try:
-                statuses = await cameras_mod.start_all(
-                    cameras, race.id, storage
-                )
+                statuses = await cameras_mod.start_all(cameras, race.id, storage)
                 for s in statuses:
                     if s.error:
                         logger.warning("Camera {} failed to start: {}", s.name, s.error)
@@ -3337,9 +3353,7 @@ def create_app(
             import logger.cameras as cameras_mod
 
             try:
-                statuses = await cameras_mod.stop_all(
-                    cameras, race_id, storage
-                )
+                statuses = await cameras_mod.stop_all(cameras, race_id, storage)
                 for s in statuses:
                     if s.error:
                         logger.warning("Camera {} failed to stop: {}", s.name, s.error)

@@ -43,77 +43,22 @@ grafana-server.service (independent, starts at boot)
 
 ## Table of Contents
 
-1. [Environments & DNS](#environments--dns)
-2. [Daily use](#daily-use)
-3. [Web interfaces](#web-interfaces)
-4. [Race marking](#race-marking)
-5. [Sail tracking](#sail-tracking)
-6. [Linking YouTube videos](#linking-youtube-videos)
-7. [External data — weather and tides](#external-data--weather-and-tides)
-8. [Recording audio commentary](#recording-audio-commentary)
-9. [Audio transcription](#audio-transcription)
-10. [Email notifications](#email-notifications)
-11. [Timezone configuration](#timezone-configuration)
-12. [System health monitoring](#system-health-monitoring)
-13. [Mac development](#mac-development)
-14. [Fresh SD card setup](#fresh-sd-card-setup)
-15. [Updating / deploying](#updating--deploying)
-16. [Configuration](#configuration)
-17. [Troubleshooting](#troubleshooting)
-
----
-
-## Environments & DNS
-
-The project uses the **`saillog.io`** domain (registered on Cloudflare) with a
-`{hostname}.{environment}.saillog.io` naming pattern. The hostname is the boat
-name, so this scales to multiple boats in the future.
-
-| Environment | URL | Host | Branch | Deploys |
-|---|---|---|---|---|
-| **Live** | `corvo.live.saillog.io` | Pi 4 8GB (`corvopi`) | `live` | Auto on promotion push |
-| **Stage** | `corvo.stage.saillog.io` | Pi 5 8GB (test Pi) | `stage` | Auto on `stage` branch push |
-| **Test** | `corvo.test.saillog.io` | Pi 5 8GB (test Pi) | `test` | Auto on merge to `test` |
-| **PR Preview** | `corvo.test-pr{N}.saillog.io` | Pi 5 8GB (test Pi) | PR branch | Auto on PR open/update |
-| **Dev** | `localhost:3002` | Developer's Mac | feature branch | Manual |
-
-### Promotion flow
-
-```
-Developer Mac (dev)
-  └─ PR opened ──────────→ corvo.test-pr{N}.saillog.io  (ephemeral, auto-deployed)
-  └─ PR merged to test ──→ corvo.test.saillog.io        (auto-deployed)
-  └─ promote stage ───────→ corvo.stage.saillog.io       (fast-forward test → stage, auto-deployed)
-  └─ promote live ────────→ corvo.live.saillog.io        (fast-forward stage → live, auto-deployed)
-```
-
-Promotions are fast-forward merges only — no merge commits, no surprises.
-Every promotion creates a timestamped git tag (`live/2026-03-02T14.30.00Z` or
-`stage/2026-03-02T14.30.00Z` or `test/2026-03-02T14.30.00Z`) forming a complete deployment audit trail.
-
-```bash
-# prepare PR for deployment to test
-j105-logger promote PR# test
-
-# Promote test → stage
-j105-logger promote stage
-
-# Promote stage → live
-j105-logger promote live
-
-# Roll back live to the previous deployment
-j105-logger promote live --rollback
-
-# View deployment history
-git tag -l 'live/*' --sort=-creatordate
-```
-
-### Ingress
-
-Public access uses **Cloudflare Tunnel** with **Cloudflare Access** (email OTP)
-protecting all environments. Tailscale is retained for private SSH access to
-both Pis. See [issue #125](https://github.com/weaties/j105-logger/issues/125)
-for the full implementation plan.
+1. [Daily use](#daily-use)
+2. [Web interfaces](#web-interfaces)
+3. [Race marking](#race-marking)
+4. [Sail tracking](#sail-tracking)
+5. [Linking YouTube videos](#linking-youtube-videos)
+6. [External data — weather and tides](#external-data--weather-and-tides)
+7. [Recording audio commentary](#recording-audio-commentary)
+8. [Audio transcription](#audio-transcription)
+9. [Email notifications](#email-notifications)
+10. [Timezone configuration](#timezone-configuration)
+11. [System health monitoring](#system-health-monitoring)
+12. [Mac development](#mac-development)
+13. [Fresh SD card setup](#fresh-sd-card-setup)
+14. [Updating / deploying](#updating--deploying)
+15. [Configuration](#configuration)
+16. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -229,19 +174,14 @@ ip -details link show can0
 
 ## Web interfaces
 
-All interfaces are available locally over Tailscale and — after `setup.sh` configures
-Tailscale Funnel — publicly via `https://corvopi.<tailnet>.ts.net`:
+All interfaces are available over Tailscale (SSH in or use the Tailscale IP/hostname):
 
-| Interface | Local URL | Public URL (Funnel) | Purpose |
-|---|---|---|---|
-| j105-logger | `http://corvopi:3002` | `https://corvopi.<tailnet>.ts.net/` | Race marker, history, exports |
-| Grafana | `http://corvopi:3001` | `https://corvopi.<tailnet>.ts.net/grafana/` | Real-time sailing dashboards |
-| Signal K | `http://corvopi:3000` | `https://corvopi.<tailnet>.ts.net/signalk/` | NMEA 2000 data explorer, plugin management |
-| InfluxDB | `http://corvopi:8086` | — (not exposed) | Time-series data explorer, query UI |
-
-`setup.sh` configures all three public routes automatically when Tailscale is connected.
-The public URL is written to `PUBLIC_URL` in `.env` so the webapp generates correct
-Grafana deep-links.
+| Interface | URL | Purpose |
+|---|---|---|
+| j105-logger | `http://corvopi:3002` | Race marker, history, exports |
+| Grafana | `http://corvopi:3001` | Real-time sailing dashboards |
+| Signal K | `http://corvopi:3000` | NMEA 2000 data explorer, plugin management |
+| InfluxDB | `http://corvopi:8086` | Time-series data explorer, query UI |
 
 Grafana default credentials: `admin` / `changeme123` — **change after first login**.
 InfluxDB is bound to loopback only (127.0.0.1:8086) — access it via SSH tunnel or from the Pi directly.
@@ -309,8 +249,7 @@ Once users exist, the admin can generate invite links from the **Admin** page
 (`/admin`) so crew can log in on their own devices without needing SSH access.
 
 To bypass auth entirely on a trusted LAN (e.g. local development), set
-`AUTH_DISABLED=true` in `.env` and restart the service. **Never set this when
-Tailscale Funnel is active** — the web app would be publicly accessible without login.
+`AUTH_DISABLED=true` in `.env` and restart the service.
 
 ---
 
@@ -1013,8 +952,8 @@ cd ~/j105-logger
 ./scripts/deploy.sh
 ```
 
-This pulls `main`, syncs Python dependencies, re-applies Tailscale Funnel routes,
-updates `PUBLIC_URL` in `.env`, and restarts the `j105-logger` service. Service
+This pulls `main`, syncs Python dependencies, provisions Grafana, and restarts
+the `j105-logger` service. Service
 status is printed at the end for a quick sanity check.
 
 All `sudo` commands in `deploy.sh` are in the scoped `/etc/sudoers.d/j105-logger-allowed`
@@ -1062,7 +1001,7 @@ WEB_HOST=0.0.0.0        # bind address
 WEB_PORT=3002           # http://corvopi:3002 on Tailscale
 # WEB_PIN=             # optional PIN (reserved, not yet implemented)
 # Grafana deep-link buttons in the web UI
-GRAFANA_URL=http://corvopi:3001
+GRAFANA_PORT=3001
 GRAFANA_DASHBOARD_UID=j105-sailing
 # Timezone — controls weekday event naming and UI timestamp display (default: UTC)
 # TIMEZONE=America/Los_Angeles
@@ -1073,11 +1012,9 @@ GRAFANA_DASHBOARD_UID=j105-sailing
 # SMTP_PASSWORD=             # SMTP password or app password
 # SMTP_FROM=j105@example.com # sender address
 # Authentication
-# AUTH_DISABLED=true          # bypass auth entirely — only for local/LAN dev; NEVER with Tailscale Funnel
+# AUTH_DISABLED=true          # bypass auth entirely — local/LAN dev only
 AUTH_SESSION_TTL_DAYS=90      # session cookie lifetime in days
 # ADMIN_EMAIL=you@example.com # if set, this user is auto-created as admin on first startup
-# Public URL — set by setup.sh/deploy.sh from Tailscale hostname; used for Grafana deep-links
-# PUBLIC_URL=https://corvopi.<tailnet>.ts.net
 # InfluxDB — required only for system health metrics; omit if not using InfluxDB
 # INFLUX_URL=http://localhost:8086
 # INFLUX_TOKEN=<token from ~/influx-token.txt>

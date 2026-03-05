@@ -7,7 +7,6 @@
 #   ./scripts/deploy.sh --pr 126     # deploy PR #126's branch
 #
 # provision-grafana.sh is called every time and is fully idempotent.
-# Tailscale Funnel routes are re-applied on every deploy (idempotent).
 #
 # All sudo commands used here are in /etc/sudoers.d/j105-logger-allowed
 # so they run without a password prompt (set up by setup.sh).
@@ -19,7 +18,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-ENV_FILE="$PROJECT_DIR/.env"
 
 # ---------------------------------------------------------------------------
 # Parse arguments
@@ -131,50 +129,39 @@ fi
 echo "==> Syncing Python dependencies..."
 "$UV_BIN" sync
 
+# Ensure j105logger can traverse the uv Python symlink chain (.venv/bin/python →
+# ~/.local/share/uv/python/cpython-*/bin/python3.12).  A Python version upgrade
+# creates a new cpython-* dir that would otherwise be 700.
+for d in "$HOME/.local" "$HOME/.local/share" "$HOME/.local/share/uv" \
+         "$HOME/.local/share/uv/python"; do
+    chmod -f 711 "$d" 2>/dev/null || true
+done
+find "$HOME/.local/share/uv/python" -mindepth 1 -maxdepth 2 -type d \
+    -exec chmod 711 {} + 2>/dev/null || true
+
 echo "==> Provisioning Grafana (dashboard, datasources, plugins)..."
 "$SCRIPT_DIR/provision-grafana.sh"
 
-# ---------------------------------------------------------------------------
-# Tailscale Funnel routes — re-applied on every deploy (idempotent, fast)
-# Also updates PUBLIC_URL in .env and Grafana ROOT_URL so deep-links stay current.
-# ---------------------------------------------------------------------------
-echo "==> Configuring Tailscale Funnel routes..."
-if command -v tailscale &>/dev/null; then
-    TS_HOSTNAME="$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\\.$//' || echo '')"
-    if [[ -n "$TS_HOSTNAME" ]]; then
-        tailscale funnel --bg 3002
-        tailscale funnel --bg --set-path /grafana/ 3001
-        tailscale funnel --bg --set-path /signalk/ 3000
-        echo "    Routes verified for https://${TS_HOSTNAME}"
-        # Update Grafana ROOT_URL with the actual public hostname
-        TMPCONF="$(mktemp)"
-        cat > "$TMPCONF" << EOF
-[Service]
-Environment=GF_SERVER_HTTP_PORT=3001
-Environment=GF_SERVER_ROOT_URL=https://${TS_HOSTNAME}/grafana/
-Environment=GF_SERVER_HTTP_ADDR=127.0.0.1
-Environment=GF_AUTH_DISABLE_LOGIN_FORM=false
-Environment=GF_AUTH_ANONYMOUS_ENABLED=false
-EOF
-        sudo rsync "$TMPCONF" /etc/systemd/system/grafana-server.service.d/port.conf
-        rm -f "$TMPCONF"
-        sudo systemctl daemon-reload
-        sudo systemctl restart grafana-server
-        # Keep PUBLIC_URL in .env current so the webapp generates correct links
-        PUBLIC_URL_VALUE="https://${TS_HOSTNAME}"
-        if [[ -f "$ENV_FILE" ]]; then
-            if grep -q '^PUBLIC_URL=' "$ENV_FILE" 2>/dev/null; then
-                sed -i "s|^PUBLIC_URL=.*|PUBLIC_URL=${PUBLIC_URL_VALUE}|" "$ENV_FILE"
-            else
-                printf '\nPUBLIC_URL=%s\n' "${PUBLIC_URL_VALUE}" >> "$ENV_FILE"
-            fi
-        fi
-    else
-        echo "    Tailscale not connected — skipping (run 'tailscale up' then re-deploy)."
-    fi
-else
-    echo "    tailscale CLI not found — skipping."
+echo "==> Updating Loki + Promtail configs..."
+LOKI_CHANGED=false
+PROMTAIL_CHANGED=false
+if ! diff -q "$SCRIPT_DIR/loki/loki-config.yaml" /etc/loki/loki-config.yaml &>/dev/null; then
+    sudo cp "$SCRIPT_DIR/loki/loki-config.yaml" /etc/loki/loki-config.yaml
+    LOKI_CHANGED=true
 fi
+if ! diff -q "$SCRIPT_DIR/loki/promtail-config.yaml" /etc/promtail/promtail-config.yaml &>/dev/null; then
+    sudo cp "$SCRIPT_DIR/loki/promtail-config.yaml" /etc/promtail/promtail-config.yaml
+    PROMTAIL_CHANGED=true
+fi
+if $LOKI_CHANGED; then
+    sudo systemctl restart loki
+    echo "    Loki config updated and restarted."
+fi
+if $PROMTAIL_CHANGED; then
+    sudo systemctl restart promtail
+    echo "    Promtail config updated and restarted."
+fi
+$LOKI_CHANGED || $PROMTAIL_CHANGED || echo "    Loki + Promtail configs unchanged."
 
 echo "==> Restarting j105-logger service..."
 sudo systemctl restart j105-logger

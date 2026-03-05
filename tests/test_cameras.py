@@ -143,9 +143,7 @@ async def test_get_status_recording() -> None:
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {
-        "results": {"options": {"captureStatus": "shooting"}}
-    }
+    mock_resp.json.return_value = {"results": {"options": {"captureStatus": "shooting"}}}
 
     mock_client = AsyncMock()
     mock_client.post.return_value = mock_resp
@@ -165,9 +163,7 @@ async def test_get_status_idle() -> None:
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {
-        "results": {"options": {"captureStatus": "idle"}}
-    }
+    mock_resp.json.return_value = {"results": {"options": {"captureStatus": "idle"}}}
 
     mock_client = AsyncMock()
     mock_client.post.return_value = mock_resp

@@ -23,8 +23,8 @@
 #   i)   netdev group membership
 #   j)   CAN interface systemd service
 #   k)   j105-logger systemd service (runs as j105logger)
-#   l)   Tailscale Funnel routing
-#   l.1) Scoped NOPASSWD sudo (replaces blanket Pi OS default)
+#   k.1) Loki + Promtail (centralized log management)
+#   l)   Scoped NOPASSWD sudo (replaces blanket Pi OS default)
 #   m)   Summary
 
 set -euo pipefail
@@ -60,7 +60,12 @@ sudo apt-get install -y \
     git can-utils curl gnupg2 apt-transport-https \
     ca-certificates lsb-release jq \
     libportaudio2 libsndfile1 \
-    unattended-upgrades apt-listchanges
+    unattended-upgrades apt-listchanges \
+    tmux locales
+
+# Ensure en_US.UTF-8 locale is generated (prevents setlocale warnings on SSH)
+sudo sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+sudo locale-gen
 
 # Apply all pending security updates now
 sudo apt-get upgrade -y
@@ -273,8 +278,14 @@ influx setup \
 # Capture token for downstream configs
 INFLUX_TOKEN="$(influx auth list --json 2>/dev/null | jq -r '.[0].token' || echo '')"
 if [[ -z "$INFLUX_TOKEN" || "$INFLUX_TOKEN" == "null" ]]; then
-    warn "Could not retrieve InfluxDB token. Plugin config will need manual token update."
-    INFLUX_TOKEN="REPLACE_WITH_INFLUX_TOKEN"
+    # Fall back to saved token file if `influx` CLI can't retrieve it
+    if [[ -f "$INFLUX_TOKEN_FILE" ]]; then
+        INFLUX_TOKEN="$(cat "$INFLUX_TOKEN_FILE")"
+        info "InfluxDB token read from: $INFLUX_TOKEN_FILE"
+    else
+        warn "Could not retrieve InfluxDB token. Plugin config will need manual token update."
+        INFLUX_TOKEN="REPLACE_WITH_INFLUX_TOKEN"
+    fi
 else
     echo "$INFLUX_TOKEN" > "$INFLUX_TOKEN_FILE"
     chmod 600 "$INFLUX_TOKEN_FILE"
@@ -321,13 +332,11 @@ else
 fi
 
 # Systemd override — port, binding, and auth settings
-# ROOT_URL placeholder is updated in section l) once the Tailscale hostname is known.
 sudo mkdir -p /etc/systemd/system/grafana-server.service.d
 sudo tee /etc/systemd/system/grafana-server.service.d/port.conf > /dev/null << 'EOF'
 [Service]
 Environment=GF_SERVER_HTTP_PORT=3001
-Environment=GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s/grafana/
-Environment=GF_SERVER_HTTP_ADDR=127.0.0.1
+Environment=GF_SERVER_HTTP_ADDR=0.0.0.0
 Environment=GF_AUTH_DISABLE_LOGIN_FORM=false
 Environment=GF_AUTH_ANONYMOUS_ENABLED=false
 EOF
@@ -374,17 +383,16 @@ if ! id j105logger &>/dev/null; then
 else
     info "j105logger already exists — skipping useradd."
 fi
-sudo usermod -aG audio,netdev j105logger
+sudo usermod -aG "audio,netdev,${CURRENT_USER}" j105logger
 
 # uv cache directory (service account has no home dir, so uv can't write ~/.cache/uv)
 sudo mkdir -p /var/cache/j105-logger
 sudo chown j105logger:j105logger /var/cache/j105-logger
 info "uv cache: /var/cache/j105-logger"
 
-# Make the Pi user's home and .local traversable so j105logger can exec the venv
+# Minimal traversal for $HOME — the full uv/Python chmod is done after
+# "uv sync" (step g) once the directories actually exist.
 chmod 711 "$HOME"
-chmod -f 711 "$HOME/.local" 2>/dev/null || true
-chmod -f 711 "$HOME/.local/bin" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # f) Signal K → InfluxDB plugin config (with captured token)
@@ -432,6 +440,24 @@ info "uv: $UV_BIN ($("$UV_BIN" --version))"
 step "Syncing Python dependencies..."
 "$UV_BIN" sync --project "$PROJECT_DIR"
 
+# Now that uv has installed Python and created .venv, make the entire symlink
+# chain traversable so j105logger can reach .venv/bin/python3 →
+# ~/.local/share/uv/python/cpython-*/bin/python3.12.
+# This MUST run after "uv sync" — on a fresh install the directories don't
+# exist until uv creates them, so doing it earlier fails silently.
+info "Setting traversal permissions for j105logger..."
+chmod 711 "$HOME"
+for d in "$HOME/.local" \
+         "$HOME/.local/bin" \
+         "$HOME/.local/share" \
+         "$HOME/.local/share/uv" \
+         "$HOME/.local/share/uv/python"; do
+    chmod -f 711 "$d" 2>/dev/null || true
+done
+# uv's Python installs live in version-specific subdirs — open them all
+find "$HOME/.local/share/uv/python" -mindepth 1 -maxdepth 2 -type d \
+    -exec chmod 711 {} + 2>/dev/null || true
+
 # Install j105-logger wrapper script so the command works directly in the shell
 # (uv console scripts live in the venv, not in ~/.local/bin)
 mkdir -p "$HOME/.local/bin"
@@ -465,8 +491,8 @@ if [[ ! -f "$SK_SECURITY_FILE" ]]; then
     SK_ADMIN_PASS="$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 20)"
     export SK_ADMIN_PASS
 
-    # bcrypt-hash via the project's Python venv (bcrypt is a project dependency)
-    "$UV_BIN" run --project "$PROJECT_DIR" python -c "
+    # bcrypt-hash via uv (--with pulls bcrypt on the fly; it is NOT a project dep)
+    "$UV_BIN" run --with bcrypt --project "$PROJECT_DIR" python -c "
 import os, json, bcrypt
 pw = os.environ['SK_ADMIN_PASS'].encode()
 h = bcrypt.hashpw(pw, bcrypt.gensalt(rounds=12)).decode()
@@ -509,6 +535,17 @@ else
     info ".env already exists — leaving untouched."
 fi
 
+# Populate InfluxDB connection if we have a token and it's still commented out
+if [[ -n "$INFLUX_TOKEN" && "$INFLUX_TOKEN" != "REPLACE_WITH_INFLUX_TOKEN" ]]; then
+    if grep -q '^# INFLUX_URL=' "$ENV_FILE" 2>/dev/null; then
+        sed -i "s|^# INFLUX_URL=.*|INFLUX_URL=http://localhost:8086|" "$ENV_FILE"
+        sed -i "s|^# INFLUX_TOKEN=.*|INFLUX_TOKEN=${INFLUX_TOKEN}|" "$ENV_FILE"
+        sed -i "s|^# INFLUX_ORG=.*|INFLUX_ORG=j105|" "$ENV_FILE"
+        sed -i "s|^# INFLUX_BUCKET=.*|INFLUX_BUCKET=signalk|" "$ENV_FILE"
+        info "InfluxDB connection configured in .env"
+    fi
+fi
+
 # Restrict .env so only weaties (and root via systemd EnvironmentFile) can read it
 chmod 600 "$ENV_FILE"
 info ".env permissions set to 600."
@@ -530,9 +567,11 @@ info "$PROJECT_DIR/data (SQLite DB)"
 info "$PROJECT_DIR/data/audio (WAV recordings)"
 info "$PROJECT_DIR/data/notes (photo notes)"
 
-# Transfer data directory ownership to j105logger so the service can write to it
-sudo chown -R j105logger:j105logger "$PROJECT_DIR/data"
-info "data/ ownership transferred to j105logger."
+# Shared ownership: deploy user owns, deploy user's group is shared with j105logger.
+# setgid ensures new files/dirs inherit the group so both users can always read/write.
+sudo chown -R "$CURRENT_USER:$CURRENT_USER" "$PROJECT_DIR/data"
+sudo chmod -R g+ws "$PROJECT_DIR/data"
+info "data/ owned by $CURRENT_USER, group-writable (j105logger is a member)."
 
 # ---------------------------------------------------------------------------
 # i) netdev group (allows non-root SocketCAN access)
@@ -619,55 +658,52 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# l) Tailscale Funnel — expose webapp, Grafana, and Signal K on port 443
+# k.1) Loki + Promtail — centralized log management
+#      Uses the Grafana apt repo added in section e) above.
+#      Loki stores logs on the local filesystem; Promtail scrapes journald.
+#      Both bind to loopback only.
 # ---------------------------------------------------------------------------
 
-step "Configuring Tailscale Funnel..."
-if command -v tailscale &>/dev/null; then
-    TS_HOSTNAME="$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//' || echo '')"
-    if [[ -n "$TS_HOSTNAME" ]]; then
-        PUBLIC_URL_VALUE="https://${TS_HOSTNAME}"
-        # Grant current user permission to configure Tailscale serve/funnel (idempotent)
-        sudo tailscale set --operator="$CURRENT_USER"
-        # Enable Tailscale SSH as a backup access path (bypasses OpenSSH authorized_keys)
-        sudo tailscale set --ssh
-        info "Tailscale SSH enabled (backup access path)."
-        # Path-based funnel rules (idempotent — safe to re-run)
-        tailscale funnel --bg 3002
-        tailscale funnel --bg --set-path /grafana/ 3001
-        tailscale funnel --bg --set-path /signalk/ 3000
-        info "Tailscale Funnel enabled: ${PUBLIC_URL_VALUE}"
-        # Update Grafana ROOT_URL now that we know the public hostname
-        sudo tee /etc/systemd/system/grafana-server.service.d/port.conf > /dev/null << EOF
+step "Installing Loki + Promtail..."
+sudo apt-get install -y loki promtail
+
+# Deploy Loki config
+sudo mkdir -p /etc/loki
+sudo cp "$SCRIPT_DIR/loki/loki-config.yaml" /etc/loki/loki-config.yaml
+
+# Deploy Promtail config
+sudo mkdir -p /etc/promtail
+sudo cp "$SCRIPT_DIR/loki/promtail-config.yaml" /etc/promtail/promtail-config.yaml
+
+# Data directories
+sudo mkdir -p /var/lib/loki /var/lib/promtail
+sudo chown loki:loki /var/lib/loki
+sudo chown promtail:promtail /var/lib/promtail
+
+# Promtail needs journal access
+sudo usermod -aG systemd-journal promtail
+
+# Systemd overrides to use our config files
+sudo mkdir -p /etc/systemd/system/loki.service.d
+sudo tee /etc/systemd/system/loki.service.d/config.conf > /dev/null << 'EOF'
 [Service]
-Environment=GF_SERVER_HTTP_PORT=3001
-Environment=GF_SERVER_ROOT_URL=https://${TS_HOSTNAME}/grafana/
-Environment=GF_SERVER_HTTP_ADDR=127.0.0.1
-Environment=GF_AUTH_DISABLE_LOGIN_FORM=false
-Environment=GF_AUTH_ANONYMOUS_ENABLED=false
+ExecStart=
+ExecStart=/usr/bin/loki -config.file=/etc/loki/loki-config.yaml
 EOF
-        sudo systemctl daemon-reload
-        sudo systemctl restart grafana-server
-        info "Grafana ROOT_URL set to https://${TS_HOSTNAME}/grafana/"
-        # Persist PUBLIC_URL in .env so the webapp generates correct links
-        if grep -q '^PUBLIC_URL=' "$ENV_FILE" 2>/dev/null; then
-            sed -i "s|^PUBLIC_URL=.*|PUBLIC_URL=${PUBLIC_URL_VALUE}|" "$ENV_FILE"
-            info "Updated PUBLIC_URL in .env"
-        else
-            printf '\nPUBLIC_URL=%s\n' "${PUBLIC_URL_VALUE}" >> "$ENV_FILE"
-            info "Added PUBLIC_URL to .env — restart j105-logger to pick it up"
-        fi
-    else
-        warn "Tailscale not connected — Funnel not configured."
-        warn "Run 'tailscale up', then re-run setup.sh to enable public access."
-    fi
-else
-    warn "tailscale CLI not found — Funnel not configured."
-    warn "Install Tailscale (https://tailscale.com/download/linux), then re-run setup.sh."
-fi
+
+sudo mkdir -p /etc/systemd/system/promtail.service.d
+sudo tee /etc/systemd/system/promtail.service.d/config.conf > /dev/null << 'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/promtail -config.file=/etc/promtail/promtail-config.yaml
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now loki promtail
+info "Loki (port 3100) + Promtail installed and running."
 
 # ---------------------------------------------------------------------------
-# l.1) Scoped NOPASSWD sudo
+# l) Scoped NOPASSWD sudo
 #      Creates /etc/sudoers.d/j105-logger-allowed with the specific commands
 #      needed for day-to-day operations (deploy.sh, service management).
 #      Then removes the blanket NOPASSWD from the Pi OS default sudoers files.
@@ -715,6 +751,22 @@ ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start influxdb.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop influxdb.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart influxdb.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status influxdb.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start loki
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop loki
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart loki
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status loki
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start loki.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop loki.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart loki.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status loki.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start promtail
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop promtail
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart promtail
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status promtail
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start promtail.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop promtail.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart promtail.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status promtail.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active j105-logger
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active j105-logger.service
 
@@ -724,11 +776,8 @@ ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/journalctl
 # Privileged file copy (update system configs without blanket sudo)
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/rsync
 
-# Grafana ROOT_URL update (deploy.sh writes port.conf when Tailscale hostname changes)
+# Grafana port.conf update
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/system/grafana-server.service.d/port.conf
-
-# Tailscale operator grant (setup.sh only — not needed on every deploy)
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/tailscale set --operator=${CURRENT_USER}
 EOF
 sudo chmod 440 "$SUDOERS_FILE"
 
@@ -763,13 +812,6 @@ echo "  Signal K:    http://corvopi:3000   (admin password in ~/.signalk-admin-p
 echo "  Grafana:     http://corvopi:3001   (admin / changeme123 — change after first login)"
 echo "  InfluxDB:    http://corvopi:8086   (loopback-only — access via SSH tunnel or Tailscale)"
 echo "  Race marker: http://corvopi:3002   (login required — see below)"
-if [[ -n "${TS_HOSTNAME:-}" ]]; then
-    echo ""
-    echo "  Public (Tailscale Funnel — authentication required):"
-    echo "    Race marker: https://${TS_HOSTNAME}/"
-    echo "    Grafana:     https://${TS_HOSTNAME}/grafana/"
-    echo "    Signal K:    https://${TS_HOSTNAME}/signalk/"
-fi
 echo ""
 if [[ -f "$INFLUX_TOKEN_FILE" ]]; then
     echo "  InfluxDB token saved to: $INFLUX_TOKEN_FILE"
@@ -790,7 +832,7 @@ echo "  4. Reboot:"
 echo "       sudo reboot"
 echo ""
 echo "  After reboot, check service status:"
-echo "    sudo systemctl status can-interface signalk influxd grafana-server j105-logger"
+echo "    sudo systemctl status can-interface signalk influxd grafana-server loki promtail j105-logger"
 echo ""
 echo "  View logger output:"
 echo "    sudo journalctl -fu j105-logger"

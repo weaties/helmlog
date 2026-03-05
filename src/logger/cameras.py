@@ -103,9 +103,7 @@ def _osc_url(camera: Camera) -> str:
     return f"http://{camera.ip}{_OSC_PATH}"
 
 
-async def start_camera(
-    camera: Camera, timeout: float = _DEFAULT_TIMEOUT
-) -> CameraStatus:
+async def start_camera(camera: Camera, timeout: float = _DEFAULT_TIMEOUT) -> CameraStatus:
     """Send ``camera.startCapture`` to a single camera.
 
     Returns a :class:`CameraStatus` with ``latency_ms`` measuring the
@@ -130,14 +128,15 @@ async def start_camera(
         latency_ms = int((time.monotonic() - t0) * 1000)
         logger.warning("Camera {} startCapture failed: {}", camera.name, exc)
         return CameraStatus(
-            name=camera.name, ip=camera.ip, recording=False,
-            error=str(exc), latency_ms=latency_ms,
+            name=camera.name,
+            ip=camera.ip,
+            recording=False,
+            error=str(exc),
+            latency_ms=latency_ms,
         )
 
 
-async def stop_camera(
-    camera: Camera, timeout: float = _DEFAULT_TIMEOUT
-) -> CameraStatus:
+async def stop_camera(camera: Camera, timeout: float = _DEFAULT_TIMEOUT) -> CameraStatus:
     """Send ``camera.stopCapture`` to a single camera."""
     try:
         async with httpx.AsyncClient() as client:
@@ -152,14 +151,10 @@ async def stop_camera(
             return CameraStatus(name=camera.name, ip=camera.ip, recording=False)
     except (httpx.HTTPError, OSError) as exc:
         logger.warning("Camera {} stopCapture failed: {}", camera.name, exc)
-        return CameraStatus(
-            name=camera.name, ip=camera.ip, recording=True, error=str(exc)
-        )
+        return CameraStatus(name=camera.name, ip=camera.ip, recording=True, error=str(exc))
 
 
-async def get_status(
-    camera: Camera, timeout: float = 5.0
-) -> CameraStatus:
+async def get_status(camera: Camera, timeout: float = 5.0) -> CameraStatus:
     """Query ``camera.getOptions`` for ``captureStatus``."""
     try:
         async with httpx.AsyncClient() as client:
@@ -177,13 +172,9 @@ async def get_status(
             results = data.get("results", {})
             options = results.get("options", {})
             recording = options.get("captureStatus") == "shooting"
-            return CameraStatus(
-                name=camera.name, ip=camera.ip, recording=recording
-            )
+            return CameraStatus(name=camera.name, ip=camera.ip, recording=recording)
     except (httpx.HTTPError, OSError) as exc:
-        return CameraStatus(
-            name=camera.name, ip=camera.ip, recording=False, error=str(exc)
-        )
+        return CameraStatus(name=camera.name, ip=camera.ip, recording=False, error=str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -209,9 +200,7 @@ async def start_all(
     now = datetime.now(UTC)
     for cam, result in zip(cameras, results, strict=True):
         if isinstance(result, BaseException):
-            status = CameraStatus(
-                name=cam.name, ip=cam.ip, recording=False, error=str(result)
-            )
+            status = CameraStatus(name=cam.name, ip=cam.ip, recording=False, error=str(result))
         else:
             status = result
 
@@ -245,9 +234,7 @@ async def stop_all(
     now = datetime.now(UTC)
     for cam, result in zip(cameras, results, strict=True):
         if isinstance(result, BaseException):
-            status = CameraStatus(
-                name=cam.name, ip=cam.ip, recording=True, error=str(result)
-            )
+            status = CameraStatus(name=cam.name, ip=cam.ip, recording=True, error=str(result))
         else:
             status = result
 

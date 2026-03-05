@@ -196,18 +196,14 @@ async def _run() -> None:
     cameras_str = os.environ.get("CAMERAS", "")
     cameras = parse_cameras_config(cameras_str) if cameras_str else []
     if cameras:
-        logger.info(
-            "Cameras configured: {}", ", ".join(f"{c.name}@{c.ip}" for c in cameras)
-        )
+        logger.info("Cameras configured: {}", ", ".join(f"{c.name}@{c.ip}" for c in cameras))
 
     from logger.monitor import monitor_loop
 
     async with ExternalFetcher() as fetcher:
         weather_task = asyncio.create_task(_weather_loop(storage, fetcher))
         tide_task = asyncio.create_task(_tide_loop(storage, fetcher))
-        web_task = asyncio.create_task(
-            _web_loop(storage, recorder, audio_config, cameras or None)
-        )
+        web_task = asyncio.create_task(_web_loop(storage, recorder, audio_config, cameras or None))
         monitor_task = asyncio.create_task(monitor_loop())
         try:
             if data_source == "signalk":
@@ -399,9 +395,7 @@ async def _list_cameras() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _sync_videos(
-    channel_id: str | None, tolerance: int, auto_confirm: bool
-) -> None:
+async def _sync_videos(channel_id: str | None, tolerance: int, auto_confirm: bool) -> None:
     """Match recent YouTube uploads to unlinked camera sessions."""
     from logger.storage import Storage, StorageConfig
 
@@ -431,7 +425,8 @@ async def _sync_videos(
                     "--flat-playlist",
                     "--dump-json",
                     f"https://www.youtube.com/channel/{yt_channel}/videos",
-                    "--playlist-end", "20",
+                    "--playlist-end",
+                    "20",
                 ],
                 capture_output=True,
                 text=True,
@@ -757,14 +752,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list-cameras", help="Show configured cameras and their status")
 
-    sv = sub.add_parser(
-        "sync-videos", help="Auto-associate YouTube uploads with camera sessions"
-    )
+    sv = sub.add_parser("sync-videos", help="Auto-associate YouTube uploads with camera sessions")
     sv.add_argument(
         "--channel-id", metavar="ID", help="YouTube channel ID (or set YOUTUBE_CHANNEL_ID)"
     )
     sv.add_argument(
-        "--tolerance", type=int, default=30, metavar="SEC",
+        "--tolerance",
+        type=int,
+        default=30,
+        metavar="SEC",
         help="Match tolerance in seconds (default: 30)",
     )
     sv.add_argument("--yes", action="store_true", help="Skip confirmation prompt")

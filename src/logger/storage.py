@@ -1832,7 +1832,9 @@ class Storage:
         assert cur.lastrowid is not None
         logger.info(
             "Camera session added: id={} session={} camera={}",
-            cur.lastrowid, session_id, camera_name,
+            cur.lastrowid,
+            session_id,
+            camera_name,
         )
         return cur.lastrowid
 
@@ -2146,16 +2148,18 @@ class Storage:
         return cur.lastrowid
 
     async def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
+        cols = "id, email, name, role, created_at, last_seen, avatar_path"
         cur = await self._conn().execute(
-            "SELECT id, email, name, role, created_at, last_seen, avatar_path FROM users WHERE id = ?",
+            f"SELECT {cols} FROM users WHERE id = ?",
             (user_id,),
         )
         row = await cur.fetchone()
         return dict(row) if row else None
 
     async def get_user_by_email(self, email: str) -> dict[str, Any] | None:
+        cols = "id, email, name, role, created_at, last_seen, avatar_path"
         cur = await self._conn().execute(
-            "SELECT id, email, name, role, created_at, last_seen, avatar_path FROM users WHERE email = ?",
+            f"SELECT {cols} FROM users WHERE email = ?",
             (email.lower().strip(),),
         )
         row = await cur.fetchone()
