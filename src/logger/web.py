@@ -28,7 +28,6 @@ from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from logger.audio import AudioConfig, AudioRecorder
-    from logger.cameras import Camera
     from logger.storage import Storage
 
 # ---------------------------------------------------------------------------
@@ -2568,32 +2567,107 @@ td{padding:7px 8px;border-bottom:1px solid #0d1a2e}
 .btn-start{color:#4ade80;border-color:#16a34a}
 .btn-stop{color:#ef4444;border-color:#7f1d1d}
 .btn-refresh{color:#7eb8f7;border-color:#2563eb}
+.btn-add{color:#4ade80;border-color:#16a34a}
+.btn-edit{color:#f59e0b;border-color:#92400e}
+.btn-del{color:#ef4444;border-color:#7f1d1d}
+.form-row{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.form-row input{padding:6px 10px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.85rem}
+.form-row input::placeholder{color:#586578}
+#add-err,#edit-err{color:#ef4444;font-size:.8rem;margin-top:4px}
+dialog{background:#131f35;color:#e8eaf0;border:1px solid #374151;border-radius:12px;padding:20px;max-width:400px;width:90%}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+dialog .form-row{flex-direction:column;align-items:stretch}
+dialog .form-row input{width:100%}
+dialog .form-row label{font-size:.75rem;color:#8892a4;margin-bottom:2px}
+dialog .btn-row{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
 </style></head><body>
 __NAV__
 <h1>Cameras</h1>
 <div class="card">
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
 <div class="label">Configured Cameras</div>
+<div style="display:flex;gap:6px">
 <button class="btn-sm btn-refresh" onclick="loadCameras()">↻ Refresh</button>
+<button class="btn-sm btn-add" onclick="showAddForm()">+ Add Camera</button>
+</div>
 </div>
 <div id="cam-table">Loading…</div>
+<div id="add-form" style="display:none">
+<div class="form-row">
+<input id="add-name" placeholder="Name (e.g. bow)" maxlength="50"/>
+<input id="add-ip" placeholder="IP address" maxlength="45"/>
+<button class="btn-sm btn-add" onclick="addCamera()">Save</button>
+<button class="btn-sm" onclick="hideAddForm()">Cancel</button>
 </div>
+<div id="add-err"></div>
+</div>
+</div>
+
+<dialog id="edit-dlg">
+<h3 style="margin:0 0 12px">Edit Camera</h3>
+<div class="form-row">
+<label>Name</label><input id="edit-name" maxlength="50"/>
+</div>
+<div class="form-row">
+<label>IP Address</label><input id="edit-ip" maxlength="45"/>
+</div>
+<div id="edit-err"></div>
+<div class="btn-row">
+<button class="btn-sm" onclick="document.getElementById('edit-dlg').close()">Cancel</button>
+<button class="btn-sm btn-edit" onclick="saveEdit()">Save</button>
+</div>
+</dialog>
+
 <div class="card">
 <div class="label">Recent Camera Sessions</div>
 <div id="cam-sessions">Loading…</div>
 </div>
 <script>
+let _editOrigName='';
+function showAddForm(){document.getElementById('add-form').style.display='';document.getElementById('add-name').focus()}
+function hideAddForm(){document.getElementById('add-form').style.display='none';document.getElementById('add-err').textContent='';document.getElementById('add-name').value='';document.getElementById('add-ip').value=''}
+async function addCamera(){
+  const name=document.getElementById('add-name').value.trim();
+  const ip=document.getElementById('add-ip').value.trim();
+  if(!name||!ip){document.getElementById('add-err').textContent='Name and IP are required';return}
+  const r=await fetch('/api/cameras',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,ip})});
+  if(!r.ok){const d=await r.json();document.getElementById('add-err').textContent=d.detail||'Failed';return}
+  hideAddForm();loadCameras();
+}
+function showEdit(name,ip){
+  _editOrigName=name;
+  document.getElementById('edit-name').value=name;
+  document.getElementById('edit-ip').value=ip;
+  document.getElementById('edit-err').textContent='';
+  document.getElementById('edit-dlg').showModal();
+}
+async function saveEdit(){
+  const name=document.getElementById('edit-name').value.trim();
+  const ip=document.getElementById('edit-ip').value.trim();
+  if(!name||!ip){document.getElementById('edit-err').textContent='Name and IP are required';return}
+  const r=await fetch('/api/cameras/'+encodeURIComponent(_editOrigName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,ip})});
+  if(!r.ok){const d=await r.json();document.getElementById('edit-err').textContent=d.detail||'Failed';return}
+  document.getElementById('edit-dlg').close();loadCameras();
+}
+async function delCamera(name){
+  if(!confirm('Delete camera "'+name+'"?'))return;
+  const r=await fetch('/api/cameras/'+encodeURIComponent(name),{method:'DELETE'});
+  if(!r.ok){const d=await r.json();alert(d.detail||'Failed');return}
+  loadCameras();
+}
 async function loadCameras(){
   document.getElementById('cam-table').textContent='Loading…';
   const r=await fetch('/api/cameras');
   if(!r.ok){document.getElementById('cam-table').textContent='Failed to load';return}
   const cams=await r.json();
-  if(!cams.length){document.getElementById('cam-table').innerHTML='<p style="color:#8892a4">No cameras configured. Set CAMERAS env var.</p>';return}
+  if(!cams.length){document.getElementById('cam-table').innerHTML='<p style="color:#8892a4">No cameras configured. Click <b>+ Add Camera</b> above to get started.</p>';return}
   let h='<table><thead><tr><th>Name</th><th>IP</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
   for(const c of cams){
     const badge=c.error?`<span class="badge badge-err">error</span>`:c.recording?`<span class="badge badge-rec">recording</span>`:`<span class="badge badge-idle">idle</span>`;
-    const btn=c.recording?`<button class="btn-sm btn-stop" onclick="camAction('${c.name}','stop')">⏹ Stop</button>`:`<button class="btn-sm btn-start" onclick="camAction('${c.name}','start')">⏺ Start</button>`;
-    h+=`<tr><td>${c.name}</td><td>${c.ip}</td><td>${badge}${c.error?' <small style="color:#ef4444">'+c.error.slice(0,60)+'</small>':''}</td><td>${btn}</td></tr>`;
+    const recBtn=c.recording?`<button class="btn-sm btn-stop" onclick="camAction('${c.name}','stop')">⏹ Stop</button>`:`<button class="btn-sm btn-start" onclick="camAction('${c.name}','start')">⏺ Start</button>`;
+    const editBtn=`<button class="btn-sm btn-edit" onclick="showEdit('${c.name}','${c.ip}')">✎</button>`;
+    const delBtn=`<button class="btn-sm btn-del" onclick="delCamera('${c.name}')">✕</button>`;
+    h+=`<tr><td>${c.name}</td><td>${c.ip}</td><td>${badge}${c.error?' <small style="color:#ef4444">'+c.error.slice(0,60)+'</small>':''}</td><td style="display:flex;gap:4px">${recBtn}${editBtn}${delBtn}</td></tr>`;
   }
   h+='</tbody></table>';
   document.getElementById('cam-table').innerHTML=h;
@@ -2630,13 +2704,12 @@ def create_app(
     storage: Storage,
     recorder: AudioRecorder | None = None,
     audio_config: AudioConfig | None = None,
-    cameras: list[Camera] | None = None,
 ) -> FastAPI:
     """Create and return the FastAPI application bound to the given Storage.
 
     If *recorder* and *audio_config* are provided, recording starts when a race
-    starts and stops when the race ends.  If *cameras* is provided, cameras
-    start/stop recording in sync with races.
+    starts and stops when the race ends.  Cameras are managed in the database
+    and loaded dynamically for each operation.
     """
     from slowapi import Limiter, _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
@@ -2690,6 +2763,13 @@ def create_app(
     )
 
     _PUBLIC_PATHS = {"/login", "/logout", "/healthz", "/avatars"}
+
+    async def _load_cameras() -> list[Any]:
+        """Load cameras from the database and return Camera objects."""
+        from logger.cameras import Camera
+
+        rows = await storage.list_cameras()
+        return [Camera(name=r["name"], ip=r["ip"], model=r["model"]) for r in rows]
 
     async def _audit(
         request: Request,
@@ -2978,17 +3058,18 @@ def create_app(
         _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
     ) -> JSONResponse:
         """List configured cameras with live status."""
-        if not cameras:
+        cams = await _load_cameras()
+        if not cams:
             return JSONResponse([])
 
         import logger.cameras as cameras_mod
 
         statuses = await asyncio.gather(
-            *(cameras_mod.get_status(cam) for cam in cameras),
+            *(cameras_mod.get_status(cam) for cam in cams),
             return_exceptions=True,
         )
         result: list[dict[str, Any]] = []
-        for cam, st in zip(cameras, statuses, strict=True):
+        for cam, st in zip(cams, statuses, strict=True):
             if isinstance(st, BaseException):
                 result.append(
                     {
@@ -3019,7 +3100,8 @@ def create_app(
         """Manually start recording on a single camera."""
         import logger.cameras as cameras_mod
 
-        cam = next((c for c in (cameras or []) if c.name == camera_name), None)
+        cams = await _load_cameras()
+        cam = next((c for c in cams if c.name == camera_name), None)
         if cam is None:
             raise HTTPException(404, detail=f"Camera {camera_name!r} not found")
         status = await cameras_mod.start_camera(cam)
@@ -3040,7 +3122,8 @@ def create_app(
         """Manually stop recording on a single camera."""
         import logger.cameras as cameras_mod
 
-        cam = next((c for c in (cameras or []) if c.name == camera_name), None)
+        cams = await _load_cameras()
+        cam = next((c for c in cams if c.name == camera_name), None)
         if cam is None:
             raise HTTPException(404, detail=f"Camera {camera_name!r} not found")
         status = await cameras_mod.stop_camera(cam)
@@ -3078,6 +3161,65 @@ def create_app(
         """List camera sessions for a specific race."""
         rows = await storage.list_camera_sessions(session_id)
         return JSONResponse(rows)
+
+    # ------------------------------------------------------------------
+    # Camera CRUD (#147)
+    # ------------------------------------------------------------------
+
+    @app.post("/api/cameras", status_code=201)
+    async def api_add_camera(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Add a new camera configuration."""
+        body = await request.json()
+        name = str(body.get("name", "")).strip()
+        ip = str(body.get("ip", "")).strip()
+        model = str(body.get("model", "insta360-x4")).strip()
+        if not name or not ip:
+            raise HTTPException(400, detail="name and ip are required")
+        try:
+            cam_id = await storage.add_camera(name, ip, model)
+        except Exception:  # noqa: BLE001
+            raise HTTPException(409, detail=f"Camera {name!r} already exists") from None
+        await _audit(request, "camera.add", detail=name, user=_user)
+        return JSONResponse({"id": cam_id, "name": name, "ip": ip, "model": model}, status_code=201)
+
+    @app.put("/api/cameras/{camera_name}")
+    async def api_update_camera(
+        request: Request,
+        camera_name: str,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Update a camera's IP, model, or name."""
+        body = await request.json()
+        ip = str(body.get("ip", "")).strip()
+        model = body.get("model")
+        new_name = str(body.get("name", "")).strip()
+        if not ip:
+            raise HTTPException(400, detail="ip is required")
+        if new_name and new_name != camera_name:
+            ok = await storage.rename_camera(
+                camera_name, new_name, ip, model=model if model else None
+            )
+        else:
+            ok = await storage.update_camera(camera_name, ip, model=model if model else None)
+        if not ok:
+            raise HTTPException(404, detail=f"Camera {camera_name!r} not found")
+        await _audit(request, "camera.update", detail=camera_name, user=_user)
+        return JSONResponse({"name": new_name or camera_name, "ip": ip})
+
+    @app.delete("/api/cameras/{camera_name}", status_code=204)
+    async def api_delete_camera(
+        request: Request,
+        camera_name: str,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> None:
+        """Delete a camera configuration."""
+        ok = await storage.delete_camera(camera_name)
+        if not ok:
+            raise HTTPException(404, detail=f"Camera {camera_name!r} not found")
+        await _audit(request, "camera.delete", detail=camera_name, user=_user)
 
     # ------------------------------------------------------------------
     # /api/state
@@ -3308,11 +3450,12 @@ def create_app(
             except AudioDeviceNotFoundError as exc:
                 logger.warning("Audio unavailable for race {}: {}", race.name, exc)
 
-        if cameras:
+        race_cameras = await _load_cameras()
+        if race_cameras:
             import logger.cameras as cameras_mod
 
             try:
-                statuses = await cameras_mod.start_all(cameras, race.id, storage)
+                statuses = await cameras_mod.start_all(race_cameras, race.id, storage)
                 for s in statuses:
                     if s.error:
                         logger.warning("Camera {} failed to start: {}", s.name, s.error)
@@ -3349,11 +3492,12 @@ def create_app(
         await storage.end_race(race_id, now)
         await _audit(request, "race.end", detail=str(race_id), user=_user)
 
-        if cameras:
+        stop_cameras = await _load_cameras()
+        if stop_cameras:
             import logger.cameras as cameras_mod
 
             try:
-                statuses = await cameras_mod.stop_all(cameras, race_id, storage)
+                statuses = await cameras_mod.stop_all(stop_cameras, race_id, storage)
                 for s in statuses:
                     if s.error:
                         logger.warning("Camera {} failed to stop: {}", s.name, s.error)

@@ -403,3 +403,77 @@ async def test_list_unlinked_camera_sessions(storage: object) -> None:
     unlinked = await storage.list_unlinked_camera_sessions()
     assert len(unlinked) >= 1
     assert any(r["camera_name"] == "bow" for r in unlinked)
+
+
+# ---------------------------------------------------------------------------
+# Camera config CRUD (storage)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_camera_crud(storage: object) -> None:
+    """Add, list, update, rename, and delete cameras in the DB."""
+    from logger.storage import Storage
+
+    assert isinstance(storage, Storage)
+
+    # Initially empty
+    cams = await storage.list_cameras()
+    assert cams == []
+
+    # Add
+    cam_id = await storage.add_camera("bow", "192.168.42.1")
+    assert cam_id > 0
+    cams = await storage.list_cameras()
+    assert len(cams) == 1
+    assert cams[0]["name"] == "bow"
+    assert cams[0]["ip"] == "192.168.42.1"
+    assert cams[0]["model"] == "insta360-x4"
+
+    # Update IP
+    ok = await storage.update_camera("bow", "10.0.0.1")
+    assert ok is True
+    cams = await storage.list_cameras()
+    assert cams[0]["ip"] == "10.0.0.1"
+
+    # Update IP + model
+    ok = await storage.update_camera("bow", "10.0.0.2", model="gopro")
+    assert ok is True
+    cams = await storage.list_cameras()
+    assert cams[0]["ip"] == "10.0.0.2"
+    assert cams[0]["model"] == "gopro"
+
+    # Rename
+    ok = await storage.rename_camera("bow", "stern", "10.0.0.3")
+    assert ok is True
+    cams = await storage.list_cameras()
+    assert cams[0]["name"] == "stern"
+
+    # Delete
+    ok = await storage.delete_camera("stern")
+    assert ok is True
+    cams = await storage.list_cameras()
+    assert cams == []
+
+    # Delete non-existent
+    ok = await storage.delete_camera("nope")
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_seed_cameras_from_env(storage: object) -> None:
+    """Seed from CAMERAS env var string, but only when table is empty."""
+    from logger.storage import Storage
+
+    assert isinstance(storage, Storage)
+
+    count = await storage.seed_cameras_from_env("bow:192.168.42.1,stern:192.168.42.2")
+    assert count == 2
+    cams = await storage.list_cameras()
+    assert len(cams) == 2
+
+    # Seeding again should be a no-op (table not empty)
+    count = await storage.seed_cameras_from_env("extra:10.0.0.1")
+    assert count == 0
+    cams = await storage.list_cameras()
+    assert len(cams) == 2

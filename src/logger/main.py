@@ -123,13 +123,12 @@ async def _web_loop(
     storage: object,
     recorder: object | None = None,
     audio_config: object | None = None,
-    cameras: object | None = None,
 ) -> None:
     """Background task: serve the race-marking web interface on WEB_PORT (default 3002).
 
     If *recorder* and *audio_config* are provided, audio recording is tied to
-    race start/end events via the web interface.  If *cameras* is provided,
-    cameras start/stop recording with races.
+    race start/end events via the web interface.  Cameras are loaded from the
+    database dynamically.
     """
     import uvicorn
 
@@ -141,12 +140,11 @@ async def _web_loop(
     assert isinstance(storage, Storage)
     _recorder = recorder if isinstance(recorder, AudioRecorder) else None
     _audio_config = audio_config if isinstance(audio_config, AudioConfig) else None
-    _cameras = cameras if isinstance(cameras, list) else None
     try:
         cfg = RaceConfig()
         server = uvicorn.Server(
             uvicorn.Config(
-                create_app(storage, _recorder, _audio_config, _cameras),
+                create_app(storage, _recorder, _audio_config),
                 host=cfg.web_host,
                 port=cfg.web_port,
                 log_level="warning",
@@ -188,22 +186,21 @@ async def _run() -> None:
     await storage.connect()
 
     from logger.audio import AudioConfig, AudioRecorder
-    from logger.cameras import parse_cameras_config
 
     audio_config = AudioConfig()
     recorder = AudioRecorder()
 
+    # Seed cameras table from env var on first run, then load from DB
     cameras_str = os.environ.get("CAMERAS", "")
-    cameras = parse_cameras_config(cameras_str) if cameras_str else []
-    if cameras:
-        logger.info("Cameras configured: {}", ", ".join(f"{c.name}@{c.ip}" for c in cameras))
+    if cameras_str:
+        await storage.seed_cameras_from_env(cameras_str)
 
     from logger.monitor import monitor_loop
 
     async with ExternalFetcher() as fetcher:
         weather_task = asyncio.create_task(_weather_loop(storage, fetcher))
         tide_task = asyncio.create_task(_tide_loop(storage, fetcher))
-        web_task = asyncio.create_task(_web_loop(storage, recorder, audio_config, cameras or None))
+        web_task = asyncio.create_task(_web_loop(storage, recorder, audio_config))
         monitor_task = asyncio.create_task(monitor_loop())
         try:
             if data_source == "signalk":

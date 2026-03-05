@@ -71,7 +71,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 20
+_CURRENT_VERSION: int = 21
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -423,6 +423,15 @@ _MIGRATIONS: dict[int, str] = {
         );
         CREATE INDEX IF NOT EXISTS idx_camera_sessions_session
             ON camera_sessions(session_id);
+    """,
+    21: """
+        -- Persistent camera configuration (#147)
+        CREATE TABLE IF NOT EXISTS cameras (
+            id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            name  TEXT NOT NULL UNIQUE,
+            ip    TEXT NOT NULL,
+            model TEXT NOT NULL DEFAULT 'insta360-x4'
+        );
     """,
 }
 
@@ -1898,6 +1907,100 @@ class Storage:
         )
         rows = await cur.fetchall()
         return [dict(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Camera configuration (#147)
+    # ------------------------------------------------------------------
+
+    async def list_cameras(self) -> list[dict[str, Any]]:
+        """Return all configured cameras, ordered by name."""
+        db = self._conn()
+        cur = await db.execute("SELECT id, name, ip, model FROM cameras ORDER BY name ASC")
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def add_camera(self, name: str, ip: str, model: str = "insta360-x4") -> int:
+        """Add a camera. Returns the new row id."""
+        db = self._conn()
+        cur = await db.execute(
+            "INSERT INTO cameras (name, ip, model) VALUES (?, ?, ?)",
+            (name, ip, model),
+        )
+        await db.commit()
+        assert cur.lastrowid is not None
+        logger.info("Camera added: id={} name={} ip={}", cur.lastrowid, name, ip)
+        return cur.lastrowid
+
+    async def update_camera(self, name: str, ip: str, model: str | None = None) -> bool:
+        """Update a camera's IP (and optionally model) by name. Returns True if found."""
+        db = self._conn()
+        if model is not None:
+            cur = await db.execute(
+                "UPDATE cameras SET ip = ?, model = ? WHERE name = ?",
+                (ip, model, name),
+            )
+        else:
+            cur = await db.execute(
+                "UPDATE cameras SET ip = ? WHERE name = ?",
+                (ip, name),
+            )
+        await db.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def rename_camera(
+        self, old_name: str, new_name: str, ip: str, model: str | None = None
+    ) -> bool:
+        """Rename a camera and update its IP. Returns True if found."""
+        db = self._conn()
+        if model is not None:
+            cur = await db.execute(
+                "UPDATE cameras SET name = ?, ip = ?, model = ? WHERE name = ?",
+                (new_name, ip, model, old_name),
+            )
+        else:
+            cur = await db.execute(
+                "UPDATE cameras SET name = ?, ip = ? WHERE name = ?",
+                (new_name, ip, old_name),
+            )
+        await db.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def delete_camera(self, name: str) -> bool:
+        """Delete a camera by name. Returns True if found."""
+        db = self._conn()
+        cur = await db.execute("DELETE FROM cameras WHERE name = ?", (name,))
+        await db.commit()
+        deleted = (cur.rowcount or 0) > 0
+        if deleted:
+            logger.info("Camera deleted: name={}", name)
+        return deleted
+
+    async def seed_cameras_from_env(self, cameras_str: str) -> int:
+        """Seed the cameras table from the CAMERAS env var if table is empty.
+
+        Returns the number of cameras seeded.
+        """
+        db = self._conn()
+        cur = await db.execute("SELECT COUNT(*) FROM cameras")
+        row = await cur.fetchone()
+        assert row is not None
+        if row[0] > 0:
+            return 0
+
+        from logger.cameras import parse_cameras_config
+
+        cameras = parse_cameras_config(cameras_str)
+        count = 0
+        for cam in cameras:
+            await db.execute(
+                "INSERT OR IGNORE INTO cameras (name, ip, model) VALUES (?, ?, ?)",
+                (cam.name, cam.ip, cam.model),
+            )
+            count += 1
+        await db.commit()
+        if count:
+            logger.info("Seeded {} camera(s) from CAMERAS env var", count)
+        return count
 
     # ------------------------------------------------------------------
     # Sail inventory
