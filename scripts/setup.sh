@@ -497,7 +497,7 @@ import os, json, bcrypt
 pw = os.environ['SK_ADMIN_PASS'].encode()
 h = bcrypt.hashpw(pw, bcrypt.gensalt(rounds=12)).decode()
 data = {
-    'allowedCorsOrigins': [],
+    'allowedCorsOrigins': '',
     'immutableConfig': False,
     'acls': [],
     'users': [
