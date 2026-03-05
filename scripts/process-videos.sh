@@ -21,6 +21,7 @@
 #   TIMEZONE                  camera local timezone    (default: America/Los_Angeles)
 #   YOUTUBE_CLIENT_SECRETS    OAuth2 client secrets    (default: ~/.j105-youtube-client-secrets.json)
 #   YOUTUBE_TOKEN_FILE        OAuth2 token cache       (default: ~/.j105-youtube-token.json)
+#   PI_SESSION_COOKIE         session cookie for Pi API (enables auto-linking videos to sessions)
 
 set -euo pipefail
 
@@ -180,22 +181,42 @@ fi
 
 log "Uploading to YouTube and linking to sessions..."
 
+PI_COOKIE="${PI_SESSION_COOKIE:-}"
+
 cd "$PROJECT_DIR"
 uv run python -c "
 import asyncio
 import json
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 
-from logger.youtube import upload_video, build_title, build_description
-from logger.insta360 import InstaRecording, recording_start_utc
+import httpx
+
+from logger.insta360 import InstaRecording, match_sessions, recording_start_utc
+from logger.youtube import build_description, build_title, upload_video
 
 async def main():
     tz = os.environ.get('TIMEZONE', 'America/Los_Angeles')
     pi_api = os.environ.get('PI_API_URL', 'http://corvopi:3002')
     privacy = os.environ.get('VIDEO_PRIVACY', 'unlisted')
+    pi_cookie = '$PI_COOKIE'
     results = []
+
+    # Fetch sessions from the Pi for matching
+    all_sessions: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(f'{pi_api}/api/sessions', params={'limit': 200})
+            if resp.status_code == 200:
+                data = resp.json()
+                all_sessions = data if isinstance(data, list) else data.get('sessions', [])
+                print(f'  Fetched {len(all_sessions)} sessions from Pi')
+            else:
+                print(f'  Warning: could not fetch sessions (HTTP {resp.status_code})', file=sys.stderr)
+    except Exception as e:
+        print(f'  Warning: could not reach Pi API at {pi_api}: {e}', file=sys.stderr)
 
     with open('$OUTPUT_DIR/.pending_uploads') as f:
         for line in f:
@@ -208,19 +229,43 @@ async def main():
             # Convert timestamp to UTC
             rec = InstaRecording(timestamp_str=ts, segments=[], total_size_bytes=0)
             start_utc = recording_start_utc(rec, tz)
+            # Estimate end time (2h window for session matching)
+            end_utc = start_utc + timedelta(hours=2)
 
-            # Build metadata (generic — session matching refines later)
-            title = build_title(
-                event=None,
-                session_type='sailing',
-                race_num=None,
-                date=start_utc.strftime('%Y-%m-%d'),
-            )
-            desc = build_description(
-                session_url=f'{pi_api}/history',
-                start_utc=start_utc.isoformat(),
-                end_utc='',
-            )
+            # Match to a session
+            session = match_sessions(start_utc, end_utc, all_sessions)
+
+            # Build metadata — use session info if matched
+            if session:
+                title = build_title(
+                    event=session.get('event'),
+                    session_type=session.get('session_type', 'sailing'),
+                    race_num=session.get('race_num'),
+                    date=start_utc.strftime('%Y-%m-%d'),
+                )
+                session_id = session.get('id')
+                session_url = f'{pi_api}/history#{session_id}' if session_id else f'{pi_api}/history'
+                s_end = session.get('end_utc', '')
+                desc = build_description(
+                    session_url=session_url,
+                    start_utc=start_utc.isoformat(),
+                    end_utc=s_end or end_utc.isoformat(),
+                )
+                print(f'  [{ts}] Matched to session: {session.get(\"name\", session_id)}')
+            else:
+                title = build_title(
+                    event=None,
+                    session_type='sailing',
+                    race_num=None,
+                    date=start_utc.strftime('%Y-%m-%d'),
+                )
+                session_id = None
+                desc = build_description(
+                    session_url=f'{pi_api}/history',
+                    start_utc=start_utc.isoformat(),
+                    end_utc=end_utc.isoformat(),
+                )
+                print(f'  [{ts}] No matching session found')
 
             try:
                 result = await upload_video(
@@ -230,21 +275,51 @@ async def main():
                     privacy=privacy,
                 )
                 print(f'  [{ts}] Uploaded → {result.youtube_url}')
-                results.append({
+
+                entry = {
                     'timestamp': ts,
                     'video_id': result.video_id,
                     'youtube_url': result.youtube_url,
                     'title': result.title,
                     'start_utc': start_utc.isoformat(),
-                })
+                    'session_id': session_id,
+                    'linked': False,
+                }
+
+                # Link video to the session on the Pi
+                if session_id and pi_cookie:
+                    try:
+                        async with httpx.AsyncClient(timeout=15) as client:
+                            link_resp = await client.post(
+                                f'{pi_api}/api/sessions/{session_id}/videos',
+                                json={
+                                    'youtube_url': result.youtube_url,
+                                    'label': '360 cam',
+                                    'sync_utc': start_utc.isoformat(),
+                                    'sync_offset_s': 0.0,
+                                },
+                                cookies={'session': pi_cookie},
+                            )
+                            if link_resp.status_code == 201:
+                                entry['linked'] = True
+                                print(f'  [{ts}] Linked to session {session_id} on Pi')
+                            else:
+                                print(f'  [{ts}] Warning: link failed (HTTP {link_resp.status_code})', file=sys.stderr)
+                    except Exception as e:
+                        print(f'  [{ts}] Warning: could not link video: {e}', file=sys.stderr)
+                elif session_id and not pi_cookie:
+                    print(f'  [{ts}] Skipping link — set PI_SESSION_COOKIE to enable', file=sys.stderr)
+
+                results.append(entry)
             except Exception as e:
                 print(f'  [{ts}] Upload failed: {e}', file=sys.stderr)
 
-    # Write results for session matching
+    # Write results
     if results:
         with open('$OUTPUT_DIR/.upload_results.json', 'w') as f:
             json.dump(results, f, indent=2)
-        print(f'  {len(results)} video(s) uploaded successfully')
+        linked = sum(1 for r in results if r.get('linked'))
+        print(f'  {len(results)} video(s) uploaded, {linked} linked to sessions')
 
 asyncio.run(main())
 "

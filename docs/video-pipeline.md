@@ -104,6 +104,42 @@ All via environment variables (or set in `~/.zshrc`):
 | `TIMEZONE` | `America/Los_Angeles` | Camera's local timezone |
 | `YOUTUBE_CLIENT_SECRETS` | `~/.j105-youtube-client-secrets.json` | OAuth2 client secrets |
 | `YOUTUBE_TOKEN_FILE` | `~/.j105-youtube-token.json` | Cached OAuth2 token |
+| `PI_SESSION_COOKIE` | *(none)* | Session cookie for auto-linking videos (see below) |
+
+## How Videos Get Linked to Sessions
+
+After uploading to YouTube, the pipeline connects back to the J105 Logger on
+the Pi to automatically link each video to the matching race or practice session:
+
+1. **Fetch sessions** — `GET /api/sessions` retrieves recent sessions from the Pi
+   (no auth required for reading).
+2. **Match by timestamp** — Each recording's start time (from the Insta360
+   filename) is compared against session start/end times. The session with the
+   most time overlap is selected.
+3. **Build rich metadata** — If matched, the YouTube title includes the event
+   name, session type, and race number (e.g. "Ballard Cup Race 2 — 2026-08-10").
+4. **Link on the Pi** — `POST /api/sessions/{id}/videos` creates the link so
+   the video appears in the session's history page with sync-point data.
+
+### Setting up the session cookie
+
+The video linking endpoint requires `crew`-level authentication. To enable
+auto-linking, you need to provide a session cookie:
+
+1. Log into J105 Logger in your browser at `http://corvopi:3002`
+2. Open developer tools → Application → Cookies
+3. Copy the value of the `session` cookie
+4. Set the environment variable:
+   ```bash
+   export PI_SESSION_COOKIE="<paste cookie value>"
+   ```
+
+The session cookie is valid for 90 days (configurable via `AUTH_SESSION_TTL_DAYS`).
+If the cookie expires, the pipeline still uploads to YouTube — it just skips
+the auto-linking step and prints a warning.
+
+Without `PI_SESSION_COOKIE`, videos are uploaded to YouTube but not linked.
+You can still link them manually from the session history page.
 
 ## SD Card File Structure
 
@@ -155,3 +191,13 @@ rm ~/Library/LaunchAgents/com.j105.video.plist
 
 **Refresh token expired** — Set your Google Cloud project's OAuth consent screen
 to Production mode (not Testing). Testing mode tokens expire after 7 days.
+
+**"Skipping link — set PI_SESSION_COOKIE to enable"** — The pipeline uploaded
+to YouTube but couldn't link the video to a session. Set `PI_SESSION_COOKIE`
+(see "Setting up the session cookie" above).
+
+**"Warning: link failed (HTTP 401)"** — Your session cookie has expired. Log
+into J105 Logger again and copy a fresh cookie.
+
+**"No matching session found"** — The recording timestamps didn't overlap with
+any session. The video is still uploaded; link it manually from the history page.
