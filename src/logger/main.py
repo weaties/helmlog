@@ -123,11 +123,13 @@ async def _web_loop(
     storage: object,
     recorder: object | None = None,
     audio_config: object | None = None,
+    cameras: object | None = None,
 ) -> None:
     """Background task: serve the race-marking web interface on WEB_PORT (default 3002).
 
     If *recorder* and *audio_config* are provided, audio recording is tied to
-    race start/end events via the web interface.
+    race start/end events via the web interface.  If *cameras* is provided,
+    cameras start/stop recording with races.
     """
     import uvicorn
 
@@ -139,11 +141,12 @@ async def _web_loop(
     assert isinstance(storage, Storage)
     _recorder = recorder if isinstance(recorder, AudioRecorder) else None
     _audio_config = audio_config if isinstance(audio_config, AudioConfig) else None
+    _cameras = cameras if isinstance(cameras, list) else None
     try:
         cfg = RaceConfig()
         server = uvicorn.Server(
             uvicorn.Config(
-                create_app(storage, _recorder, _audio_config),
+                create_app(storage, _recorder, _audio_config, _cameras),
                 host=cfg.web_host,
                 port=cfg.web_port,
                 log_level="warning",
@@ -185,16 +188,26 @@ async def _run() -> None:
     await storage.connect()
 
     from logger.audio import AudioConfig, AudioRecorder
+    from logger.cameras import parse_cameras_config
 
     audio_config = AudioConfig()
     recorder = AudioRecorder()
+
+    cameras_str = os.environ.get("CAMERAS", "")
+    cameras = parse_cameras_config(cameras_str) if cameras_str else []
+    if cameras:
+        logger.info(
+            "Cameras configured: {}", ", ".join(f"{c.name}@{c.ip}" for c in cameras)
+        )
 
     from logger.monitor import monitor_loop
 
     async with ExternalFetcher() as fetcher:
         weather_task = asyncio.create_task(_weather_loop(storage, fetcher))
         tide_task = asyncio.create_task(_tide_loop(storage, fetcher))
-        web_task = asyncio.create_task(_web_loop(storage, recorder, audio_config))
+        web_task = asyncio.create_task(
+            _web_loop(storage, recorder, audio_config, cameras or None)
+        )
         monitor_task = asyncio.create_task(monitor_loop())
         try:
             if data_source == "signalk":
@@ -357,86 +370,150 @@ async def _list_videos() -> None:
 
 
 # ---------------------------------------------------------------------------
-# scan-videos
+# list-cameras
 # ---------------------------------------------------------------------------
 
 
-async def _scan_videos(directory: str, dry_run: bool, label: str) -> None:
-    """Scan a directory for video files and auto-link them to races."""
-    from logger.insta360 import (
-        compute_sync_point,
-        find_matching_races,
-        scan_video_directory,
-    )
-    from logger.storage import Storage, StorageConfig
+async def _list_cameras() -> None:
+    """Print configured cameras and ping each for status."""
+    from logger.cameras import get_status, parse_cameras_config
 
-    videos = await scan_video_directory(directory)
-    if not videos:
-        print("No video files found.")
+    cameras_str = os.environ.get("CAMERAS", "")
+    if not cameras_str:
+        print("No cameras configured. Set CAMERAS env var (e.g. CAMERAS=main:192.168.8.50)")
         return
 
-    # Determine the overall time range of all video files
-    earliest = min(v.creation_utc for v in videos)
-    latest = max(v.end_utc for v in videos)
+    cameras = parse_cameras_config(cameras_str)
+    print(f"{'Name':<20} {'IP':<18} {'Recording':>10}  {'Status'}")
+    print("-" * 65)
+
+    for camera in cameras:
+        status = await get_status(camera)
+        rec = "YES" if status.recording else "no"
+        err = status.error or "OK"
+        print(f"{camera.name:<20} {camera.ip:<18} {rec:>10}  {err}")
+
+
+# ---------------------------------------------------------------------------
+# sync-videos
+# ---------------------------------------------------------------------------
+
+
+async def _sync_videos(
+    channel_id: str | None, tolerance: int, auto_confirm: bool
+) -> None:
+    """Match recent YouTube uploads to unlinked camera sessions."""
+    from logger.storage import Storage, StorageConfig
+
+    yt_channel = channel_id or os.environ.get("YOUTUBE_CHANNEL_ID", "")
+    if not yt_channel:
+        print("No YouTube channel ID. Use --channel-id or set YOUTUBE_CHANNEL_ID.")
+        return
 
     storage = Storage(StorageConfig())
     await storage.connect()
     try:
-        races = await storage.list_races_in_range(earliest, latest)
-    except Exception:
-        await storage.close()
-        raise
+        unlinked = await storage.list_unlinked_camera_sessions()
+        if not unlinked:
+            print("No unlinked camera sessions found.")
+            return
 
-    if not races:
-        print(f"No races found in range {earliest.isoformat()} — {latest.isoformat()}")
-        await storage.close()
-        return
+        # Fetch recent videos from channel via yt-dlp
+        import asyncio as _asyncio
+        import json as _json
 
-    # Build match table
-    linked = 0
-    print(f"\n{'Video':<35} {'Created (UTC)':<22} {'Race':<30} {'Action'}")
-    print("-" * 110)
+        def _fetch_channel_videos() -> list[dict[str, object]]:
+            import subprocess
 
-    try:
-        for video in videos:
-            matched = find_matching_races(video, races)
-            if not matched:
-                print(f"{video.filename:<35} {video.creation_utc.isoformat():<22} (no match)")
+            result = subprocess.run(
+                [
+                    "yt-dlp",
+                    "--flat-playlist",
+                    "--dump-json",
+                    f"https://www.youtube.com/channel/{yt_channel}/videos",
+                    "--playlist-end", "20",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            videos = []
+            for line in result.stdout.strip().split("\n"):
+                if line.strip():
+                    videos.append(_json.loads(line))
+            return videos
+
+        print(f"Fetching recent videos from channel {yt_channel}...")
+        yt_videos = await _asyncio.to_thread(_fetch_channel_videos)
+        if not yt_videos:
+            print("No videos found on channel.")
+            return
+
+        # Match videos to unlinked camera sessions
+        matches: list[tuple[dict[str, object], dict[str, object]]] = []
+        for vid in yt_videos:
+            duration = float(str(vid.get("duration") or 0))
+            # Use upload_date as rough proxy for recording time
+            upload_date_str = str(vid.get("upload_date", ""))
+            if not upload_date_str or len(upload_date_str) != 8:
                 continue
-            for race in matched:
-                sync_utc, sync_offset = compute_sync_point(video)
-                action = "would link" if dry_run else "linked"
 
-                if not dry_run:
-                    await storage.add_race_video(
-                        race_id=race.id,
-                        youtube_url="",
-                        video_id=f"local-{video.filename}",
-                        title=video.filename,
-                        label=label,
-                        sync_utc=sync_utc,
-                        sync_offset_s=sync_offset,
-                        duration_s=video.duration_s,
-                        source="local",
-                        local_path=video.file_path,
-                    )
-                    linked += 1
+            for session in unlinked:
+                started = session.get("recording_started_utc")
+                if not started:
+                    continue
+                # Simple heuristic: check if the session's start date matches
+                # the video's upload date (within tolerance days)
+                from datetime import datetime as _dt
 
-                race_name = race.name[:30]
-                print(
-                    f"{video.filename:<35} {video.creation_utc.isoformat():<22}"
-                    f" {race_name:<30} {action}"
-                )
+                session_dt = _dt.fromisoformat(str(started))
+                # Parse upload_date YYYYMMDD
+                upload_dt = _dt.strptime(upload_date_str, "%Y%m%d")
+                diff_days = abs((upload_dt.date() - session_dt.date()).days)
+                if diff_days <= 1:  # same day or next day (upload lag)
+                    matches.append((vid, session))
+
+        if not matches:
+            print("No matches found within tolerance.")
+            return
+
+        print(f"\n{'YouTube Video':<45} {'Camera Session':<25} {'Race'}")
+        print("-" * 90)
+        for vid, sess in matches:
+            title = str(vid.get("title", ""))[:45]
+            cam = str(sess.get("camera_name", ""))
+            race = str(sess.get("race_name", ""))
+            print(f"{title:<45} {cam:<25} {race}")
+
+        if not auto_confirm:
+            print(f"\n{len(matches)} match(es) found. Use --yes to auto-link.")
+            return
+
+        linked = 0
+        for vid, sess in matches:
+            vid_url = f"https://www.youtube.com/watch?v={vid.get('id', '')}"
+            vid_id = str(vid.get("id", ""))
+            title = str(vid.get("title", ""))
+            duration = float(str(vid.get("duration") or 0))
+            session_id = int(str(sess["session_id"]))
+            started = str(sess["recording_started_utc"])
+            sync_utc = datetime.fromisoformat(started).replace(tzinfo=UTC)
+
+            await storage.add_race_video(
+                race_id=session_id,
+                youtube_url=vid_url,
+                video_id=vid_id,
+                title=title,
+                label=str(sess.get("camera_name", "")),
+                sync_utc=sync_utc,
+                sync_offset_s=0.0,
+                duration_s=duration,
+            )
+            linked += 1
+
+        print(f"\n{linked} video(s) linked to races.")
     finally:
         await storage.close()
-
-    if dry_run:
-        print(
-            f"\nDry run — {sum(1 for v in videos for _ in find_matching_races(v, races))} "
-            "match(es) found. Re-run without --dry-run to write to DB."
-        )
-    else:
-        print(f"\n{linked} video(s) linked to races.")
 
 
 # ---------------------------------------------------------------------------
@@ -678,13 +755,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list-videos", help="List linked YouTube videos")
 
+    sub.add_parser("list-cameras", help="Show configured cameras and their status")
+
     sv = sub.add_parser(
-        "scan-videos",
-        help="Scan a directory for video files and auto-link them to races",
+        "sync-videos", help="Auto-associate YouTube uploads with camera sessions"
     )
-    sv.add_argument("--dir", required=True, metavar="PATH", help="Directory to scan")
-    sv.add_argument("--dry-run", action="store_true", help="Show matches without writing to DB")
-    sv.add_argument("--label", default="", metavar="LABEL", help="Label for linked videos")
+    sv.add_argument(
+        "--channel-id", metavar="ID", help="YouTube channel ID (or set YOUTUBE_CHANNEL_ID)"
+    )
+    sv.add_argument(
+        "--tolerance", type=int, default=30, metavar="SEC",
+        help="Match tolerance in seconds (default: 30)",
+    )
+    sv.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
 
     sub.add_parser("list-audio", help="List recorded audio sessions")
     sub.add_parser("list-devices", help="List available audio input devices")
@@ -736,8 +819,10 @@ def main() -> None:
                 asyncio.run(_link_video(args.url, sync_utc_iso, sync_offset))
             case "list-videos":
                 asyncio.run(_list_videos())
-            case "scan-videos":
-                asyncio.run(_scan_videos(args.dir, args.dry_run, args.label))
+            case "list-cameras":
+                asyncio.run(_list_cameras())
+            case "sync-videos":
+                asyncio.run(_sync_videos(args.channel_id, args.tolerance, args.yes))
             case "list-audio":
                 asyncio.run(_list_audio())
             case "list-devices":

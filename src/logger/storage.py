@@ -410,9 +410,19 @@ _MIGRATIONS: dict[int, str] = {
         ALTER TABLE users ADD COLUMN avatar_path TEXT;
     """,
     20: """
-        -- Local video support (#98)
-        ALTER TABLE race_videos ADD COLUMN source TEXT NOT NULL DEFAULT 'youtube';
-        ALTER TABLE race_videos ADD COLUMN local_path TEXT;
+        -- Camera session tracking (#98)
+        CREATE TABLE IF NOT EXISTS camera_sessions (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id            INTEGER NOT NULL REFERENCES races(id),
+            camera_name           TEXT NOT NULL,
+            camera_ip             TEXT NOT NULL,
+            recording_started_utc TEXT,
+            recording_stopped_utc TEXT,
+            sync_offset_ms        INTEGER,
+            error                 TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_camera_sessions_session
+            ON camera_sessions(session_id);
     """,
 }
 
@@ -1707,10 +1717,8 @@ class Storage:
         sync_offset_s: float,
         duration_s: float | None = None,
         user_id: int | None = None,
-        source: str = "youtube",
-        local_path: str | None = None,
     ) -> int:
-        """Add a video linked to a race.  Returns the new row id."""
+        """Add a YouTube video linked to a race.  Returns the new row id."""
         from datetime import UTC
         from datetime import datetime as _datetime
 
@@ -1719,9 +1727,8 @@ class Storage:
         cur = await db.execute(
             "INSERT INTO race_videos"
             " (race_id, youtube_url, video_id, title, label,"
-            " sync_utc, sync_offset_s, duration_s, created_at, user_id,"
-            " source, local_path)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " sync_utc, sync_offset_s, duration_s, created_at, user_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 race_id,
                 youtube_url,
@@ -1733,19 +1740,13 @@ class Storage:
                 duration_s,
                 now_str,
                 user_id,
-                source,
-                local_path,
             ),
         )
         await db.commit()
         assert cur.lastrowid is not None
         logger.info(
-            "Race video added: id={} race_id={} source={} video_id={}",
-            cur.lastrowid,
-            race_id,
-            source,
-            video_id,
-        )
+            "Race video added: id={} race_id={} video_id={}", cur.lastrowid, race_id, video_id
+        )  # noqa: E501
         return cur.lastrowid
 
     async def list_race_videos(self, race_id: int) -> list[dict[str, Any]]:
@@ -1753,7 +1754,7 @@ class Storage:
         db = self._conn()
         cur = await db.execute(
             "SELECT id, race_id, youtube_url, video_id, title, label,"
-            " sync_utc, sync_offset_s, duration_s, created_at, source, local_path"
+            " sync_utc, sync_offset_s, duration_s, created_at"
             " FROM race_videos WHERE race_id = ? ORDER BY created_at ASC",
             (race_id,),
         )
@@ -1797,6 +1798,104 @@ class Storage:
         cur = await db.execute("DELETE FROM race_videos WHERE id = ?", (video_row_id,))
         await db.commit()
         return (cur.rowcount or 0) > 0
+
+    # ------------------------------------------------------------------
+    # Camera sessions (#98)
+    # ------------------------------------------------------------------
+
+    async def add_camera_session(
+        self,
+        session_id: int,
+        camera_name: str,
+        camera_ip: str,
+        started_utc: datetime | None,
+        sync_offset_ms: int | None,
+        error: str | None,
+    ) -> int:
+        """Record a camera session start. Returns the new row id."""
+        db = self._conn()
+        cur = await db.execute(
+            "INSERT INTO camera_sessions"
+            " (session_id, camera_name, camera_ip,"
+            "  recording_started_utc, sync_offset_ms, error)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                session_id,
+                camera_name,
+                camera_ip,
+                started_utc.isoformat() if started_utc else None,
+                sync_offset_ms,
+                error,
+            ),
+        )
+        await db.commit()
+        assert cur.lastrowid is not None
+        logger.info(
+            "Camera session added: id={} session={} camera={}",
+            cur.lastrowid, session_id, camera_name,
+        )
+        return cur.lastrowid
+
+    async def update_camera_session_stop(
+        self,
+        session_id: int,
+        camera_name: str,
+        stopped_utc: datetime | None,
+        error: str | None,
+    ) -> bool:
+        """Update a camera session with stop time. Returns True if row was found."""
+        db = self._conn()
+        cur = await db.execute(
+            "UPDATE camera_sessions"
+            " SET recording_stopped_utc = ?, error = COALESCE(?, error)"
+            " WHERE session_id = ? AND camera_name = ?"
+            " AND recording_stopped_utc IS NULL",
+            (
+                stopped_utc.isoformat() if stopped_utc else None,
+                error,
+                session_id,
+                camera_name,
+            ),
+        )
+        await db.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def list_camera_sessions(self, session_id: int) -> list[dict[str, Any]]:
+        """Return all camera sessions for a race, ordered by camera_name."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT id, session_id, camera_name, camera_ip,"
+            " recording_started_utc, recording_stopped_utc,"
+            " sync_offset_ms, error"
+            " FROM camera_sessions WHERE session_id = ?"
+            " ORDER BY camera_name ASC",
+            (session_id,),
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def list_unlinked_camera_sessions(self) -> list[dict[str, Any]]:
+        """Return camera sessions that have no matching race_video entry.
+
+        Used by ``sync-videos`` CLI to find recordings not yet linked to
+        a YouTube video.
+        """
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT cs.id, cs.session_id, cs.camera_name, cs.camera_ip,"
+            " cs.recording_started_utc, cs.recording_stopped_utc,"
+            " cs.sync_offset_ms, cs.error,"
+            " r.name AS race_name"
+            " FROM camera_sessions cs"
+            " JOIN races r ON r.id = cs.session_id"
+            " LEFT JOIN race_videos rv"
+            "   ON rv.race_id = cs.session_id"
+            " WHERE rv.id IS NULL"
+            "   AND cs.recording_started_utc IS NOT NULL"
+            " ORDER BY cs.recording_started_utc DESC",
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Sail inventory

@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from logger.audio import AudioConfig, AudioRecorder
+    from logger.cameras import Camera
     from logger.storage import Storage
 
 # ---------------------------------------------------------------------------
@@ -103,6 +104,7 @@ def _nav_html(current: str = "/") -> str:
   <a href="/admin/boats"{_cls("/admin/boats")}>Boats</a>
   <a href="/admin/users" class="admin-link{" active" if current == "/admin/users" else ""}">Users</a>
   <a href="/admin/audit" class="admin-link{" active" if current == "/admin/audit" else ""}">Audit</a>
+  <a href="/admin/cameras" class="admin-link{" active" if current == "/admin/cameras" else ""}">Cameras</a>
   <span class="spacer"></span>
   <a href="/profile" class="profile-link" id="nav-profile"{_cls("/profile")}>\
 <img id="nav-avatar" src="" alt="" \
@@ -2545,15 +2547,96 @@ a{{color:#7eb8f7;text-decoration:none}}
 </body></html>"""
 
 
+_ADMIN_CAMERAS_HTML = """\
+<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Cameras — J105 Logger</title>
+<style>
+*{box-sizing:border-box}
+__NAV_CSS__
+body{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;margin:0;padding:16px}
+.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:12px}
+.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#8892a4;margin-bottom:8px}
+table{width:100%;border-collapse:collapse;font-size:.87rem}
+th{text-align:left;color:#8892a4;font-size:.75rem;text-transform:uppercase;padding:6px 8px}
+td{padding:7px 8px;border-bottom:1px solid #0d1a2e}
+.badge{padding:2px 8px;border-radius:4px;font-size:.78rem;font-weight:600}
+.badge-rec{background:#16a34a22;color:#4ade80}
+.badge-idle{background:#374151;color:#8892a4}
+.badge-err{background:#7f1d1d22;color:#ef4444}
+.btn-sm{padding:6px 12px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.78rem;cursor:pointer}
+.btn-start{color:#4ade80;border-color:#16a34a}
+.btn-stop{color:#ef4444;border-color:#7f1d1d}
+.btn-refresh{color:#7eb8f7;border-color:#2563eb}
+</style></head><body>
+__NAV__
+<h1>Cameras</h1>
+<div class="card">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+<div class="label">Configured Cameras</div>
+<button class="btn-sm btn-refresh" onclick="loadCameras()">↻ Refresh</button>
+</div>
+<div id="cam-table">Loading…</div>
+</div>
+<div class="card">
+<div class="label">Recent Camera Sessions</div>
+<div id="cam-sessions">Loading…</div>
+</div>
+<script>
+async function loadCameras(){
+  document.getElementById('cam-table').textContent='Loading…';
+  const r=await fetch('/api/cameras');
+  if(!r.ok){document.getElementById('cam-table').textContent='Failed to load';return}
+  const cams=await r.json();
+  if(!cams.length){document.getElementById('cam-table').innerHTML='<p style="color:#8892a4">No cameras configured. Set CAMERAS env var.</p>';return}
+  let h='<table><thead><tr><th>Name</th><th>IP</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+  for(const c of cams){
+    const badge=c.error?`<span class="badge badge-err">error</span>`:c.recording?`<span class="badge badge-rec">recording</span>`:`<span class="badge badge-idle">idle</span>`;
+    const btn=c.recording?`<button class="btn-sm btn-stop" onclick="camAction('${c.name}','stop')">⏹ Stop</button>`:`<button class="btn-sm btn-start" onclick="camAction('${c.name}','start')">⏺ Start</button>`;
+    h+=`<tr><td>${c.name}</td><td>${c.ip}</td><td>${badge}${c.error?' <small style="color:#ef4444">'+c.error.slice(0,60)+'</small>':''}</td><td>${btn}</td></tr>`;
+  }
+  h+='</tbody></table>';
+  document.getElementById('cam-table').innerHTML=h;
+}
+async function camAction(name,action){
+  const r=await fetch('/api/cameras/'+encodeURIComponent(name)+'/'+action,{method:'POST'});
+  const d=await r.json();
+  if(d.error)alert('Camera '+name+': '+d.error);
+  loadCameras();
+}
+async function loadSessions(){
+  const r=await fetch('/api/cameras/sessions');
+  if(!r.ok)return;
+  const rows=await r.json();
+  if(!rows.length){document.getElementById('cam-sessions').innerHTML='<p style="color:#8892a4">No camera sessions recorded yet.</p>';return}
+  let h='<table><thead><tr><th>Camera</th><th>Race</th><th>Started</th><th>Stopped</th><th>Latency</th><th>Error</th></tr></thead><tbody>';
+  for(const s of rows){
+    const started=s.recording_started_utc?new Date(s.recording_started_utc+'Z').toLocaleString():'—';
+    const stopped=s.recording_stopped_utc?new Date(s.recording_stopped_utc+'Z').toLocaleString():'—';
+    const lat=s.sync_offset_ms!=null?s.sync_offset_ms+'ms':'—';
+    const err=s.error?`<small style="color:#ef4444">${s.error.slice(0,40)}</small>`:'—';
+    h+=`<tr><td>${s.camera_name}</td><td>${s.race_name||s.session_id}</td><td>${started}</td><td>${stopped}</td><td>${lat}</td><td>${err}</td></tr>`;
+  }
+  h+='</tbody></table>';
+  document.getElementById('cam-sessions').innerHTML=h;
+}
+loadCameras();loadSessions();
+</script>
+__FOOTER__
+</body></html>"""
+
+
 def create_app(
     storage: Storage,
     recorder: AudioRecorder | None = None,
     audio_config: AudioConfig | None = None,
+    cameras: list[Camera] | None = None,
 ) -> FastAPI:
     """Create and return the FastAPI application bound to the given Storage.
 
     If *recorder* and *audio_config* are provided, recording starts when a race
-    starts and stops when the race ends.
+    starts and stops when the race ends.  If *cameras* is provided, cameras
+    start/stop recording in sync with races.
     """
     from slowapi import Limiter, _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
@@ -2595,6 +2678,7 @@ def create_app(
         "/history",
     )
     _admin_page = _inject_shared(_ADMIN_BOATS_HTML, "/admin/boats")
+    _admin_cameras_page = _inject_shared(_ADMIN_CAMERAS_HTML, "/admin/cameras")
 
     from logger.auth import (
         _is_auth_disabled,
@@ -2880,6 +2964,104 @@ def create_app(
         return JSONResponse(entries)
 
     # ------------------------------------------------------------------
+    # /admin/cameras (#98)
+    # ------------------------------------------------------------------
+
+    @app.get("/admin/cameras", response_class=HTMLResponse, include_in_schema=False)
+    async def admin_cameras_page(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> HTMLResponse:
+        return HTMLResponse(_admin_cameras_page)
+
+    @app.get("/api/cameras")
+    async def api_list_cameras(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """List configured cameras with live status."""
+        if not cameras:
+            return JSONResponse([])
+
+        import logger.cameras as cameras_mod
+
+        statuses = await asyncio.gather(
+            *(cameras_mod.get_status(cam) for cam in cameras),
+            return_exceptions=True,
+        )
+        result: list[dict[str, Any]] = []
+        for cam, st in zip(cameras, statuses, strict=True):
+            if isinstance(st, BaseException):
+                result.append({
+                    "name": cam.name, "ip": cam.ip, "model": cam.model,
+                    "recording": False, "error": str(st),
+                })
+            else:
+                result.append({
+                    "name": st.name, "ip": st.ip, "model": cam.model,
+                    "recording": st.recording, "error": st.error,
+                })
+        return JSONResponse(result)
+
+    @app.post("/api/cameras/{camera_name}/start")
+    async def api_start_camera(
+        camera_name: str,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Manually start recording on a single camera."""
+        import logger.cameras as cameras_mod
+
+        cam = next((c for c in (cameras or []) if c.name == camera_name), None)
+        if cam is None:
+            raise HTTPException(404, detail=f"Camera {camera_name!r} not found")
+        status = await cameras_mod.start_camera(cam)
+        return JSONResponse({
+            "name": status.name, "ip": status.ip,
+            "recording": status.recording, "error": status.error,
+        })
+
+    @app.post("/api/cameras/{camera_name}/stop")
+    async def api_stop_camera(
+        camera_name: str,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Manually stop recording on a single camera."""
+        import logger.cameras as cameras_mod
+
+        cam = next((c for c in (cameras or []) if c.name == camera_name), None)
+        if cam is None:
+            raise HTTPException(404, detail=f"Camera {camera_name!r} not found")
+        status = await cameras_mod.stop_camera(cam)
+        return JSONResponse({
+            "name": status.name, "ip": status.ip,
+            "recording": status.recording, "error": status.error,
+        })
+
+    @app.get("/api/cameras/sessions")
+    async def api_camera_sessions_all(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """List recent camera sessions across all cameras."""
+        db = storage._conn()
+        cur = await db.execute(
+            "SELECT cs.id, cs.session_id, cs.camera_name, cs.camera_ip,"
+            " cs.recording_started_utc, cs.recording_stopped_utc,"
+            " cs.sync_offset_ms, cs.error, r.name AS race_name"
+            " FROM camera_sessions cs"
+            " JOIN races r ON r.id = cs.session_id"
+            " ORDER BY cs.id DESC LIMIT 50",
+        )
+        rows = await cur.fetchall()
+        return JSONResponse([dict(r) for r in rows])
+
+    @app.get("/api/sessions/{session_id}/cameras")
+    async def api_session_cameras(
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """List camera sessions for a specific race."""
+        rows = await storage.list_camera_sessions(session_id)
+        return JSONResponse(rows)
+
+    # ------------------------------------------------------------------
     # /api/state
     # ------------------------------------------------------------------
 
@@ -3108,6 +3290,21 @@ def create_app(
             except AudioDeviceNotFoundError as exc:
                 logger.warning("Audio unavailable for race {}: {}", race.name, exc)
 
+        if cameras:
+            import logger.cameras as cameras_mod
+
+            try:
+                statuses = await cameras_mod.start_all(
+                    cameras, race.id, storage
+                )
+                for s in statuses:
+                    if s.error:
+                        logger.warning("Camera {} failed to start: {}", s.name, s.error)
+                    else:
+                        logger.info("Camera {} recording started", s.name)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Camera start_all failed: {}", exc)
+
         await _audit(request, "race.start", detail=race.name, user=_user)
         return JSONResponse(
             {
@@ -3135,6 +3332,21 @@ def create_app(
         now = datetime.now(UTC)
         await storage.end_race(race_id, now)
         await _audit(request, "race.end", detail=str(race_id), user=_user)
+
+        if cameras:
+            import logger.cameras as cameras_mod
+
+            try:
+                statuses = await cameras_mod.stop_all(
+                    cameras, race_id, storage
+                )
+                for s in statuses:
+                    if s.error:
+                        logger.warning("Camera {} failed to stop: {}", s.name, s.error)
+                    else:
+                        logger.info("Camera {} recording stopped", s.name)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Camera stop_all failed: {}", exc)
 
         if recorder is not None and _audio_session_id is not None:
             completed = await recorder.stop()
@@ -3695,26 +3907,17 @@ def create_app(
     # ------------------------------------------------------------------
 
     def _video_deep_link(row: dict[str, Any], at_utc: datetime | None = None) -> dict[str, Any]:
-        """Augment a race_videos row with a computed deep-link.
+        """Augment a race_videos row with a computed YouTube deep-link.
 
         If *at_utc* is supplied the link jumps to that moment in the video.
         Otherwise the link just opens the video from the beginning.
-        Local videos (``source='local'``) have no deep-link but include
-        ``local_path`` for the UI.
         """
-        out = dict(row)
-        source = row.get("source", "youtube")
-
-        if source == "local":
-            # Local files have no web deep-link; UI can handle local_path
-            out["deep_link"] = None
-            return out
-
         from logger.video import VideoSession  # local import to avoid circular deps
 
         sync_utc = datetime.fromisoformat(row["sync_utc"])
         duration_s = row["duration_s"]
 
+        out = dict(row)
         if at_utc is not None and duration_s is not None:
             vs = VideoSession(
                 url=row["youtube_url"],

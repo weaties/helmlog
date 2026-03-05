@@ -45,6 +45,7 @@ j105-logger/
 │       ├── __init__.py
 │       ├── main.py         # CLI entry point; wires modules together, starts async loop
 │       ├── audio.py        # USB audio recording (Gordik / any UAC device)
+│       ├── cameras.py      # Insta360 X4 camera control via OSC HTTP API
 │       ├── can_reader.py   # CAN bus interface — legacy direct-CAN path only
 │       ├── export.py       # Export to CSV / GPX / JSON for regatta tools
 │       ├── external.py     # Open-Meteo weather + NOAA CO-OPS tide fetching
@@ -64,6 +65,7 @@ j105-logger/
 ├── tests/
 │   ├── conftest.py
 │   ├── test_audio.py
+│   ├── test_cameras.py
 │   ├── test_export.py
 │   ├── test_external.py
 │   ├── test_insta360.py
@@ -102,6 +104,8 @@ j105-logger status            # show database row counts and last timestamps
 j105-logger export --start "2025-08-10T13:00:00" --end "2025-08-10T15:30:00" --out data/race1.csv
 j105-logger list-audio        # list recorded WAV sessions
 j105-logger list-devices      # list available audio input devices
+j105-logger list-cameras      # show configured cameras and ping status
+j105-logger sync-videos       # match YouTube uploads to camera sessions
 j105-logger list-videos       # list linked YouTube videos
 j105-logger link-video --url <url> --sync-utc <utc> --sync-offset <seconds>
 j105-logger add-user --email <email> --name <name> --role admin|crew|viewer  # create user (no email required)
@@ -216,7 +220,7 @@ the service status at the end so you can confirm everything came up cleanly.
 - **Modules are small and single-purpose** — if a module is growing beyond ~200 lines, split it.
 - **Use `loguru` for all logging** — never use `print()` for operational output.
 - **Dataclasses or `typing.TypedDict`** for structured data (e.g., decoded PGN records) — avoid raw dicts with unknown shapes.
-- **Keep hardware-dependent code isolated** — direct CAN bus access lives only in `can_reader.py`; Signal K WebSocket access only in `sk_reader.py`. All other modules work with decoded data structures and can be tested without hardware.
+- **Keep hardware-dependent code isolated** — direct CAN bus access lives only in `can_reader.py`; Signal K WebSocket access only in `sk_reader.py`; camera HTTP control only in `cameras.py`. All other modules work with decoded data structures and can be tested without hardware.
 
 ---
 
@@ -313,6 +317,11 @@ AUDIO_CHANNELS=1            # 1=mono, 2=stereo
 # Audio transcription
 WHISPER_MODEL=base          # faster-whisper model: tiny, base, small, medium, large
 # HF_TOKEN=hf_...           # Hugging Face token — enables speaker diarisation (optional)
+
+# Camera control (Insta360 X4 via WiFi, Open Spherical Camera API)
+# CAMERAS=main:192.168.8.50,starboard:192.168.8.51
+CAMERA_START_TIMEOUT=10       # seconds to wait for camera start response
+# YOUTUBE_CHANNEL_ID=UCxxx    # YouTube channel for sync-videos auto-association
 
 # Photo notes
 NOTES_DIR=data/notes        # where uploaded photo notes are saved
