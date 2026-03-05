@@ -5,7 +5,7 @@
 #   ./scripts/setup-backup-mac.sh
 #
 # What it does:
-#   1. Verifies SSH connectivity to corvopi
+#   1. Verifies SSH connectivity to the Pi (set PI=user@host to override)
 #   2. Creates ~/backups/j105-logger/
 #   3. Copies com.j105.backup.plist → ~/Library/LaunchAgents/ (with real paths)
 #   4. Loads (enables) the agent — runs daily at 03:00

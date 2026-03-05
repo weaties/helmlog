@@ -96,8 +96,8 @@ race's notes appear.
 # All notes for the current week
 FROM=$(date -d "last monday" +%s)000
 TO=$(date +%s)000
-curl "http://corvopi:3002/api/grafana/annotations?from=$FROM&to=$TO"
+curl "http://<pi-hostname>:3002/api/grafana/annotations?from=$FROM&to=$TO"
 
 # Notes for session 42 only
-curl "http://corvopi:3002/api/grafana/annotations?from=$FROM&to=$TO&sessionId=42"
+curl "http://<pi-hostname>:3002/api/grafana/annotations?from=$FROM&to=$TO&sessionId=42"
 ```

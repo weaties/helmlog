@@ -69,7 +69,7 @@ The dashboard JSON is provisioned automatically by `scripts/provision-grafana.sh
 After a deploy, re-run the provision script on the Pi:
 
 ```bash
-ssh weaties@corvopi
+ssh <pi-user>@<pi-host>
 cd ~/j105-logger
 ./scripts/provision-grafana.sh
 ```

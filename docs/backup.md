@@ -4,6 +4,11 @@ The logger stores all data on a microSD card inside the Raspberry Pi.
 This guide covers how to pull a complete backup to your Mac automatically,
 and how to restore from it if the card fails.
 
+> **Multiple Pis?** All scripts accept a `PI` environment variable for the SSH
+> target (e.g. `PI=weaties@testpi ./scripts/backup.sh`). The default is
+> `weaties@corvopi`. Examples below use the placeholder `<pi-user>@<pi-host>` —
+> substitute your actual SSH target.
+
 ---
 
 ## What gets backed up
@@ -26,7 +31,7 @@ The 10 most recent are kept; older ones are deleted automatically.
 ```bash
 # SSH key-based auth to the Pi (skip if already done)
 ssh-keygen -t ed25519 -C "mac-to-pi-backup"
-ssh-copy-id weaties@corvopi
+ssh-copy-id <pi-user>@<pi-host>
 
 # InfluxDB CLI (for restore; backup is handled on the Pi)
 brew install influxdb-cli
@@ -37,8 +42,8 @@ brew install influxdb-cli
 SSH into the Pi and add a sudoers rule:
 
 ```bash
-ssh weaties@corvopi
-echo 'weaties ALL=(ALL) NOPASSWD: /usr/bin/rsync' | sudo tee /etc/sudoers.d/rsync-backup
+ssh <pi-user>@<pi-host>
+echo '<pi-user> ALL=(ALL) NOPASSWD: /usr/bin/rsync' | sudo tee /etc/sudoers.d/rsync-backup
 sudo chmod 440 /etc/sudoers.d/rsync-backup
 ```
 
@@ -51,7 +56,7 @@ From the project root:
 ```
 
 This:
-- Checks SSH connectivity to `corvopi`
+- Checks SSH connectivity to the Pi
 - Creates `~/backups/j105-logger/`
 - Installs `~/Library/LaunchAgents/com.j105.backup.plist`
 - Schedules the backup to run every day at **03:00 local time**
@@ -113,13 +118,13 @@ SNAP=~/backups/j105-logger/20260228T030000Z
 
 ```bash
 # Stop the logger service on the Pi first
-ssh weaties@corvopi "sudo systemctl stop j105-logger"
+ssh $PI "sudo systemctl stop j105-logger"
 
 # Copy the DB back
-rsync -az "$SNAP/data/" weaties@corvopi:~/j105-logger/data/
+rsync -az "$SNAP/data/" $PI:~/j105-logger/data/
 
 # Restart
-ssh weaties@corvopi "sudo systemctl start j105-logger"
+ssh $PI "sudo systemctl start j105-logger"
 ```
 
 ### InfluxDB
@@ -127,7 +132,7 @@ ssh weaties@corvopi "sudo systemctl start j105-logger"
 ```bash
 # Restore to the running InfluxDB instance (overwrites existing data)
 influx restore "$SNAP/influxdb/" \
-  --host http://corvopi:8086 \
+  --host http://<pi-host>:8086 \
   --token "$(cat ~/influx-token.txt)"
 ```
 
@@ -137,15 +142,15 @@ If restoring to a fresh InfluxDB install, add `--full` to wipe and replace all b
 
 ```bash
 # Stop Grafana on the Pi
-ssh weaties@corvopi "sudo systemctl stop grafana-server"
+ssh $PI "sudo systemctl stop grafana-server"
 
 # Restore the data directory
 rsync -az --rsync-path='sudo rsync' \
   "$SNAP/grafana/" \
-  weaties@corvopi:/var/lib/grafana/
+  $PI:/var/lib/grafana/
 
 # Fix ownership and restart
-ssh weaties@corvopi "sudo chown -R grafana:grafana /var/lib/grafana && sudo systemctl start grafana-server"
+ssh $PI "sudo chown -R grafana:grafana /var/lib/grafana && sudo systemctl start grafana-server"
 ```
 
 ---

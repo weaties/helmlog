@@ -40,7 +40,7 @@ B&G instrument system (via NMEA 2000) and gives the crew tools to:
 
 1. Make sure your phone or tablet is on the boat's **Tailscale** network.
    _(One-time setup — ask the navigator if you haven't joined yet.)_
-2. Open your browser and go to: **`http://corvopi:3002`**
+2. Open your browser and go to: **`http://<pi-hostname>:3002`**
 3. Bookmark this address — you'll open it at the start line.
 
 The page refreshes itself. You do not need to reload it manually.

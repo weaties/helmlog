@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# backup.sh — Pull all persistent data from corvopi to this Mac.
+# backup.sh — Pull all persistent data from a Pi to this Mac.
 #
 # Run manually:  ./scripts/backup.sh
 # Or let setup-backup-mac.sh schedule it daily via launchd.
@@ -8,7 +8,7 @@
 # Keeps the most recent $KEEP_SNAPSHOTS snapshots; older ones are deleted.
 #
 # Prerequisites on the Mac:
-#   - SSH access to corvopi (via Tailscale; key-based auth recommended)
+#   - SSH access to the Pi (via Tailscale; key-based auth recommended)
 #   - influx CLI for InfluxDB restore: brew install influxdb-cli
 #   - sudo rsync allowed on the Pi for the SSH user (for Grafana dir)
 #

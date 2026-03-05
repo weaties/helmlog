@@ -130,7 +130,7 @@ tailscale funnel --bg --set-path /grafana/ 3001
 tailscale funnel --bg --set-path /signalk/ 3000
 ```
 
-Your logger is then accessible at `https://corvopi.<tailnet>.ts.net`. Run
+Your logger is then accessible at `https://<pi-hostname>.<tailnet>.ts.net`. Run
 `tailscale funnel status` to see the exact public URL.
 
 > **Note**: Tailscale Funnel strips the path prefix when proxying — Grafana

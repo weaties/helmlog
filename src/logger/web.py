@@ -1,6 +1,6 @@
 """FastAPI web interface for race marking.
 
-Provides a mobile-optimised single-page app at http://corvopi:3002 that lets
+Provides a mobile-optimised single-page app at http://<pi-hostname>:3002 that lets
 crew tap a button to start/end races. The app factory pattern (create_app)
 keeps this testable without running a live server.
 
