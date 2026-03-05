@@ -5,8 +5,10 @@ data/*.csv
 data/audio/
 data/notes/
 
-# Claude Code project directory
+# Claude Code project directory (except shared skills)
 .claude/
+!.claude/skills/
+!.claude/skills/**
 
 # Credentials reference (contains real secrets — never commit)
 docs/credentials.md
