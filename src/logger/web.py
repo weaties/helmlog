@@ -396,7 +396,7 @@ const GRAFANA_BASE = _isDefaultPort
   ? location.origin + '/grafana'
   : location.protocol + '//' + location.hostname + ':' + _GRAFANA_PORT;
 const SK_BASE = _isDefaultPort
-  ? location.origin + '/signalk'
+  ? location.origin + '/sk'
   : location.protocol + '//' + location.hostname + ':' + _SK_PORT;
 (function initNavLinks() {
   const g = document.getElementById('grafana-nav');
