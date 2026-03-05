@@ -2693,6 +2693,7 @@ async function camAction(name,action){
   const r=await fetch('/api/cameras/'+encodeURIComponent(name)+'/'+action,{method:'POST'});
   const d=await r.json();
   if(d.error)alert('Camera '+name+': '+d.error);
+  if(action==='stop') await new Promise(r=>setTimeout(r,1500));
   loadCameras();
 }
 async function loadSessions(){
