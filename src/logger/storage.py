@@ -2045,7 +2045,7 @@ class Storage:
         token: str,
         email: str,
         role: str,
-        created_by: int,
+        created_by: int | None,
         expires_at: str,
     ) -> None:
         db = self._conn()
@@ -2074,6 +2074,28 @@ class Storage:
         db = self._conn()
         await db.execute("UPDATE invite_tokens SET used_at = ? WHERE token = ?", (now, token))
         await db.commit()
+
+    async def count_recent_tokens_for_email(
+        self, email: str, window_hours: int = 1
+    ) -> int:
+        """Count invite tokens created for *email* in the last *window_hours* hours.
+
+        Since ``invite_tokens`` has no ``created_at`` column, we derive creation
+        time from ``expires_at`` (tokens expire 7 days after creation).  A token
+        created within the window has ``expires_at > now + 7d - window``.
+        """
+        from datetime import UTC, timedelta
+        from datetime import datetime as _dt
+
+        threshold = (
+            _dt.now(UTC) + timedelta(days=7) - timedelta(hours=window_hours)
+        ).isoformat()
+        cur = await self._conn().execute(
+            "SELECT COUNT(*) FROM invite_tokens WHERE email = ? AND expires_at > ?",
+            (email.lower().strip(), threshold),
+        )
+        row = await cur.fetchone()
+        return row[0] if row else 0
 
     async def create_session(
         self,

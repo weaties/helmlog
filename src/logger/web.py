@@ -2307,8 +2307,19 @@ font-size:1rem;font-weight:700;cursor:pointer;background:#2563eb;color:#fff}
 </form>
 <!--ERROR-->
 </div>
+__EMAIL_FORM__
 </body>
 </html>
+"""
+
+_EMAIL_FORM_HTML = """\
+<div class="card" style="margin-top:16px">
+<form method="post" action="/auth/request-link">
+<label>Don't have a token?</label>
+<input type="email" name="email" placeholder="Enter your email address" required/>
+<button class="btn" type="submit" style="background:#475569">Send me a login link</button>
+</form>
+</div>
 """
 
 
@@ -2604,7 +2615,7 @@ def create_app(
         session_expires_at,
     )
 
-    _PUBLIC_PATHS = {"/login", "/logout", "/healthz", "/avatars"}
+    _PUBLIC_PATHS = {"/login", "/logout", "/healthz", "/avatars", "/auth/request-link"}
 
     async def _audit(
         request: Request,
@@ -2676,7 +2687,14 @@ def create_app(
 
     @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
     async def login_page(next: str = "/", token: str = "") -> HTMLResponse:
-        html = _LOGIN_HTML.replace("__NEXT__", next).replace("__TOKEN__", token)
+        from logger.email import smtp_configured
+
+        email_form = _EMAIL_FORM_HTML if smtp_configured() else ""
+        html = (
+            _LOGIN_HTML.replace("__NEXT__", next)
+            .replace("__TOKEN__", token)
+            .replace("__EMAIL_FORM__", email_form)
+        )
         return HTMLResponse(html)
 
     @app.post("/login", include_in_schema=False)
@@ -2698,7 +2716,8 @@ def create_app(
                 .replace(
                     "<!--ERROR-->",
                     '<p style="color:#f87171;margin-top:12px">Invalid or expired token.</p>',
-                ),
+                )
+                .replace("__EMAIL_FORM__", ""),
                 status_code=400,
             )
         if row["used_at"] is not None:
@@ -2708,7 +2727,8 @@ def create_app(
                 .replace(
                     "<!--ERROR-->",
                     '<p style="color:#f87171;margin-top:12px">Token already used.</p>',
-                ),
+                )
+                .replace("__EMAIL_FORM__", ""),
                 status_code=400,
             )
         expires_dt = _dt.fromisoformat(row["expires_at"])
@@ -2719,7 +2739,8 @@ def create_app(
                 .replace(
                     "<!--ERROR-->",
                     '<p style="color:#f87171;margin-top:12px">Token expired.</p>',
-                ),
+                )
+                .replace("__EMAIL_FORM__", ""),
                 status_code=400,
             )
 
@@ -2762,6 +2783,51 @@ def create_app(
             )
 
         return response
+
+    _REQUEST_LINK_RESPONSE = (
+        '<p style="color:#34d399;margin-top:12px">'
+        "If an account exists for that email, a login link has been sent.</p>"
+    )
+
+    @app.post("/auth/request-link", include_in_schema=False)
+    @limiter.limit("5/minute")
+    async def request_login_link(
+        request: Request,
+        email: str = Form(default=""),
+    ) -> HTMLResponse:
+        from logger.email import send_login_link_email, smtp_configured
+
+        html = (
+            _LOGIN_HTML.replace("__NEXT__", "/")
+            .replace("__TOKEN__", "")
+            .replace("<!--ERROR-->", _REQUEST_LINK_RESPONSE)
+            .replace("__EMAIL_FORM__", "")
+        )
+        email = email.strip().lower()
+        if not email or not smtp_configured():
+            return HTMLResponse(html)
+
+        user = await storage.get_user_by_email(email)
+        if user is None:
+            return HTMLResponse(html)
+
+        # Per-email rate limit: max 3 tokens/hour
+        recent = await storage.count_recent_tokens_for_email(email)
+        if recent >= 3:
+            return HTMLResponse(html)
+
+        # Create token and send email
+        token = generate_token()
+        await storage.create_invite_token(
+            token, email, user["role"], user["id"], invite_expires_at()
+        )
+        public_url = os.getenv("PUBLIC_URL", "").rstrip("/")
+        login_url = f"{public_url}/login?token={token}"
+        asyncio.ensure_future(
+            send_login_link_email(user.get("name"), email, login_url)
+        )
+        await _audit(request, "auth.request_link", detail=email)
+        return HTMLResponse(html)
 
     @app.post("/logout", include_in_schema=False)
     async def logout(request: Request) -> Response:

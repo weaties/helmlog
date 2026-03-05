@@ -69,6 +69,21 @@ async def send_welcome_email(name: str | None, email: str, role: str, login_url:
     return await send_email(email, subject, body)
 
 
+async def send_login_link_email(name: str | None, email: str, login_url: str) -> bool:
+    """Send a self-service login link email."""
+    greeting = f"Hi {name}" if name else "Hi"
+    subject = "Your login link — J105 Logger"
+    body = (
+        f"{greeting},\n\n"
+        f"You requested a login link for J105 Logger.\n\n"
+        f"Click the link below to sign in (expires in 7 days):\n"
+        f"  {login_url}\n\n"
+        f"If you didn't request this, you can safely ignore this email.\n\n"
+        f"Fair winds!"
+    )
+    return await send_email(email, subject, body)
+
+
 async def send_device_alert(user_email: str, ip: str | None, user_agent: str | None) -> bool:
     """Notify a user about a new device login."""
     subject = "New device login — J105 Logger"
