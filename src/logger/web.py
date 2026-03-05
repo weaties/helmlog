@@ -709,6 +709,10 @@ async function startSession(type) {
       await loadRecentSailors();
     }
     pendingCrew = null;
+  } else {
+    const err = await resp.json().catch(()=>null);
+    const msg = err && err.detail ? err.detail : 'Failed to start session';
+    alert(msg);
   }
   await loadState();
   clearInterval(tickInterval);
