@@ -109,12 +109,18 @@ uv run ruff format --check .  # format clean
 uv run mypy src/            # types clean
 ```
 
-### PR workflow
+### Issue → PR workflow
 
-1. Branch off `main`: `git checkout -b feature/my-feature main`
-2. Develop with TDD until tests + lint + types pass
-3. Push and create PR: `git push -u origin feature/my-feature && gh pr create`
-4. Merge to `main` and delete the branch
+When starting work on a GitHub issue:
+
+1. **Mark the issue in-progress**: add a comment with the branch name and who/what is working on it:
+   ```bash
+   gh issue comment <number> --body "In progress on \`<branch-name>\` (Claude Code on <hostname>)"
+   ```
+2. Branch off `main`: `git checkout -b feature/my-feature main`
+3. Develop with TDD until tests + lint + types pass
+4. Push and create PR: `git push -u origin feature/my-feature && gh pr create`
+5. Merge to `main` and delete the branch
 
 **All changes to `main` must come through merged PRs.** Never push directly to `main`.
 

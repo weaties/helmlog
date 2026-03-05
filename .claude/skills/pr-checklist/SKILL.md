@@ -7,6 +7,14 @@ description: Run pre-PR verification checks before creating a pull request
 
 Run these checks before creating or pushing to a pull request.
 
+## 0. Mark the issue in-progress
+
+If working on a GitHub issue, comment on it with the branch name and agent identity:
+
+```bash
+gh issue comment <number> --body "In progress on \`<branch-name>\` (Claude Code on $(hostname))"
+```
+
 ## 1. Confirm feature branch
 
 You must be on a feature branch, **not `main`**. All changes to `main` come
