@@ -163,6 +163,9 @@ if $PROMTAIL_CHANGED; then
 fi
 $LOKI_CHANGED || $PROMTAIL_CHANGED || echo "    Loki + Promtail configs unchanged."
 
+echo "==> Fixing data directory permissions..."
+chmod -R g+w "$PROJECT_DIR/data" 2>/dev/null || true
+
 echo "==> Restarting j105-logger service..."
 sudo systemctl restart j105-logger
 

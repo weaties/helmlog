@@ -643,6 +643,7 @@ ExecStart=${UV_BIN} run --no-sync --project ${PROJECT_DIR} j105-logger run
 Restart=on-failure
 RestartSec=5
 SupplementaryGroups=netdev audio
+UMask=0002
 
 [Install]
 WantedBy=multi-user.target
