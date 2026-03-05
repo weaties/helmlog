@@ -36,14 +36,11 @@ The service runs as a dedicated `j105logger` system account (not the login user)
 
 ## Networking
 
-- **Signal K**: `*:3000` — exposed via Tailscale Funnel at `/signalk/`
+- **Signal K**: `127.0.0.1:3000` — exposed publicly via Tailscale Funnel at `/signalk/`
 - **InfluxDB**: `127.0.0.1:8086` only
 - **Grafana**: `127.0.0.1:3001` only
 - **j105-logger web**: `0.0.0.0:3002`
-- **Two public ingress paths**:
-  - Tailscale Funnel (path stripping built-in)
-  - Cloudflare Tunnel via nginx on `127.0.0.1:8080` (strips `/grafana/` and `/signalk/` prefixes)
-- **nginx config**: `/etc/nginx/conf.d/cloudflare-tunnel.conf` (managed by `deploy.sh`)
+- **Public ingress**: Tailscale Funnel (path stripping built-in)
 
 ## Auth
 
