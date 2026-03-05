@@ -2703,8 +2703,8 @@ async function loadSessions(){
   if(!rows.length){document.getElementById('cam-sessions').innerHTML='<p style="color:#8892a4">No camera sessions recorded yet.</p>';return}
   let h='<table><thead><tr><th>Camera</th><th>Race</th><th>Started</th><th>Stopped</th><th>Latency</th><th>Error</th></tr></thead><tbody>';
   for(const s of rows){
-    const started=s.recording_started_utc?new Date(s.recording_started_utc+'Z').toLocaleString():'—';
-    const stopped=s.recording_stopped_utc?new Date(s.recording_stopped_utc+'Z').toLocaleString():'—';
+    const started=s.recording_started_utc?new Date(s.recording_started_utc).toLocaleString():'—';
+    const stopped=s.recording_stopped_utc?new Date(s.recording_stopped_utc).toLocaleString():'—';
     const lat=s.sync_offset_ms!=null?s.sync_offset_ms+'ms':'—';
     const err=s.error?`<small style="color:#ef4444">${s.error.slice(0,40)}</small>`:'—';
     h+=`<tr><td>${s.camera_name}</td><td>${s.race_name||s.session_id}</td><td>${started}</td><td>${stopped}</td><td>${lat}</td><td>${err}</td></tr>`;
