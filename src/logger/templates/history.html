@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Session History — J105 Logger{% endblock %}
+
+{% block extra_css %}
+<style>
+.field{background:#0a1628;border:1px solid #2563eb;border-radius:6px;color:#e8eaf0}
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="app-config" data-grafana-port="{{ grafana_port }}" data-grafana-uid="{{ grafana_uid }}" style="display:none"></div>
+
+<h1 style="margin-bottom:12px">Session History</h1>
+
+<div class="card">
+  <input id="q" class="event-input" placeholder="Search by name or event..."
+    oninput="scheduleLoad()" style="margin-bottom:10px"/>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+    <button class="filter-btn active" onclick="setType(this,'')">All</button>
+    <button class="filter-btn" onclick="setType(this,'race')">Race</button>
+    <button class="filter-btn" onclick="setType(this,'practice')">Practice</button>
+    <button class="filter-btn" onclick="setType(this,'debrief')">Debrief</button>
+  </div>
+  <div style="display:flex;gap:8px">
+    <div style="flex:1">
+      <div class="label">From</div>
+      <input id="from-date" type="date" class="event-input" onchange="load()"/>
+    </div>
+    <div style="flex:1">
+      <div class="label">To</div>
+      <input id="to-date" type="date" class="event-input" onchange="load()"/>
+    </div>
+  </div>
+</div>
+
+<div id="results"></div>
+<div id="pager" class="pager"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/history.js"></script>
+{% endblock %}

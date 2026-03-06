@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Cameras — J105 Logger{% endblock %}
+{% block extra_css %}
+<style>
+.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:12px}
+.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#8892a4;margin-bottom:8px}
+table{width:100%;border-collapse:collapse;font-size:.87rem}
+th{text-align:left;color:#8892a4;font-size:.75rem;text-transform:uppercase;padding:6px 8px}
+td{padding:7px 8px;border-bottom:1px solid #0d1a2e}
+.badge{padding:2px 8px;border-radius:4px;font-size:.78rem;font-weight:600}
+.badge-rec{background:#16a34a22;color:#4ade80}
+.badge-idle{background:#374151;color:#8892a4}
+.badge-err{background:#7f1d1d22;color:#ef4444}
+.btn-sm{padding:6px 12px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.78rem;cursor:pointer}
+.btn-start{color:#4ade80;border-color:#16a34a}
+.btn-stop{color:#ef4444;border-color:#7f1d1d}
+.btn-refresh{color:#7eb8f7;border-color:#2563eb}
+.btn-add{color:#4ade80;border-color:#16a34a}
+.btn-edit{color:#f59e0b;border-color:#92400e}
+.btn-del{color:#ef4444;border-color:#7f1d1d}
+.form-row{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.form-row input{padding:6px 10px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.85rem}
+.form-row input::placeholder{color:#586578}
+#add-err,#edit-err{color:#ef4444;font-size:.8rem;margin-top:4px}
+dialog{background:#131f35;color:#e8eaf0;border:1px solid #374151;border-radius:12px;padding:20px;max-width:400px;width:90%}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+dialog .form-row{flex-direction:column;align-items:stretch}
+dialog .form-row input{width:100%}
+dialog .form-row label{font-size:.75rem;color:#8892a4;margin-bottom:2px}
+dialog .btn-row{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
+</style>
+{% endblock %}
+{% block content %}
+<h1>Cameras</h1>
+<div class="card">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+<div class="label">Configured Cameras</div>
+<div style="display:flex;gap:6px">
+<button class="btn-sm btn-refresh" onclick="loadCameras()">&#x21bb; Refresh</button>
+<button class="btn-sm btn-add" onclick="showAddForm()">+ Add Camera</button>
+</div>
+</div>
+<div id="cam-table">Loading...</div>
+<div id="add-form" style="display:none">
+<div class="form-row">
+<input id="add-name" placeholder="Name (e.g. bow)" maxlength="50"/>
+<input id="add-ip" placeholder="IP address" maxlength="45"/>
+<input id="add-ssid" placeholder="WiFi SSID" maxlength="64"/>
+<input id="add-pass" placeholder="WiFi password" maxlength="64"/>
+<button class="btn-sm btn-add" onclick="addCamera()">Save</button>
+<button class="btn-sm" onclick="hideAddForm()">Cancel</button>
+</div>
+<div id="add-err"></div>
+</div>
+</div>
+
+<dialog id="edit-dlg">
+<h3 style="margin:0 0 12px">Edit Camera</h3>
+<div class="form-row">
+<label>Name</label><input id="edit-name" maxlength="50"/>
+</div>
+<div class="form-row">
+<label>IP Address</label><input id="edit-ip" maxlength="45"/>
+</div>
+<div class="form-row">
+<label>WiFi SSID</label><input id="edit-ssid" maxlength="64"/>
+</div>
+<div class="form-row">
+<label>WiFi Password</label><input id="edit-pass" maxlength="64" type="password"/>
+</div>
+<div id="edit-err"></div>
+<div class="btn-row">
+<button class="btn-sm" onclick="document.getElementById('edit-dlg').close()">Cancel</button>
+<button class="btn-sm btn-edit" onclick="saveEdit()">Save</button>
+</div>
+</dialog>
+
+<div class="card">
+<div class="label">Recent Camera Sessions</div>
+<div id="cam-sessions">Loading...</div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let _editOrigName='';
+function showAddForm(){document.getElementById('add-form').style.display='';document.getElementById('add-name').focus()}
+function hideAddForm(){document.getElementById('add-form').style.display='none';document.getElementById('add-err').textContent='';document.getElementById('add-name').value='';document.getElementById('add-ip').value='';document.getElementById('add-ssid').value='';document.getElementById('add-pass').value=''}
+async function addCamera(){
+  const name=document.getElementById('add-name').value.trim();
+  const ip=document.getElementById('add-ip').value.trim();
+  const wifi_ssid=document.getElementById('add-ssid').value.trim();
+  const wifi_password=document.getElementById('add-pass').value.trim();
+  if(!name||!ip){document.getElementById('add-err').textContent='Name and IP are required';return}
+  const r=await fetch('/api/cameras',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,ip,wifi_ssid,wifi_password})});
+  if(!r.ok){const d=await r.json();document.getElementById('add-err').textContent=d.detail||'Failed';return}
+  hideAddForm();loadCameras();
+}
+function showEdit(name,ip,ssid,pass_){
+  _editOrigName=name;
+  document.getElementById('edit-name').value=name;
+  document.getElementById('edit-ip').value=ip;
+  document.getElementById('edit-ssid').value=ssid||'';
+  document.getElementById('edit-pass').value=pass_||'';
+  document.getElementById('edit-err').textContent='';
+  document.getElementById('edit-dlg').showModal();
+}
+async function saveEdit(){
+  const name=document.getElementById('edit-name').value.trim();
+  const ip=document.getElementById('edit-ip').value.trim();
+  const wifi_ssid=document.getElementById('edit-ssid').value.trim();
+  const wifi_password=document.getElementById('edit-pass').value.trim();
+  if(!name||!ip){document.getElementById('edit-err').textContent='Name and IP are required';return}
+  const r=await fetch('/api/cameras/'+encodeURIComponent(_editOrigName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,ip,wifi_ssid,wifi_password})});
+  if(!r.ok){const d=await r.json();document.getElementById('edit-err').textContent=d.detail||'Failed';return}
+  document.getElementById('edit-dlg').close();loadCameras();
+}
+async function delCamera(name){
+  if(!confirm('Delete camera "'+name+'"?'))return;
+  const r=await fetch('/api/cameras/'+encodeURIComponent(name),{method:'DELETE'});
+  if(!r.ok){const d=await r.json();alert(d.detail||'Failed');return}
+  loadCameras();
+}
+async function loadCameras(){
+  document.getElementById('cam-table').textContent='Loading\u2026';
+  const r=await fetch('/api/cameras');
+  if(!r.ok){document.getElementById('cam-table').textContent='Failed to load';return}
+  const cams=await r.json();
+  if(!cams.length){document.getElementById('cam-table').innerHTML='<p style="color:#8892a4">No cameras configured. Click <b>+ Add Camera</b> above to get started.</p>';return}
+  let h='<table><thead><tr><th>Name</th><th>IP</th><th>WiFi</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+  for(const c of cams){
+    const badge=c.error?`<span class="badge badge-err">error</span>`:c.recording?`<span class="badge badge-rec">recording</span>`:`<span class="badge badge-idle">idle</span>`;
+    const recBtn=c.recording?`<button class="btn-sm btn-stop" onclick="camAction('${c.name}','stop')">\u23f9 Stop</button>`:`<button class="btn-sm btn-start" onclick="camAction('${c.name}','start')">\u23fa Start</button>`;
+    const ssidEsc=(c.wifi_ssid||'').replace(/'/g,"\\'");
+    const passEsc=(c.wifi_password||'').replace(/'/g,"\\'");
+    const editBtn=`<button class="btn-sm btn-edit" onclick="showEdit('${c.name}','${c.ip}','${ssidEsc}','${passEsc}')">\u270e</button>`;
+    const delBtn=`<button class="btn-sm btn-del" onclick="delCamera('${c.name}')">\u2715</button>`;
+    const wifi=c.wifi_ssid?`<span style="color:#7eb8f7">${c.wifi_ssid}</span>`:'<span style="color:#586578">\u2014</span>';
+    h+=`<tr><td>${c.name}</td><td>${c.ip}</td><td>${wifi}</td><td>${badge}${c.error?' <small style="color:#ef4444">'+c.error.slice(0,60)+'</small>':''}</td><td style="display:flex;gap:4px">${recBtn}${editBtn}${delBtn}</td></tr>`;
+  }
+  h+='</tbody></table>';
+  document.getElementById('cam-table').innerHTML=h;
+}
+async function camAction(name,action){
+  const r=await fetch('/api/cameras/'+encodeURIComponent(name)+'/'+action,{method:'POST'});
+  const d=await r.json();
+  if(d.error)alert('Camera '+name+': '+d.error);
+  if(action==='stop') await new Promise(r=>setTimeout(r,1500));
+  loadCameras();
+}
+async function loadSessions(){
+  const r=await fetch('/api/cameras/sessions');
+  if(!r.ok)return;
+  const rows=await r.json();
+  if(!rows.length){document.getElementById('cam-sessions').innerHTML='<p style="color:#8892a4">No camera sessions recorded yet.</p>';return}
+  let h='<table><thead><tr><th>Camera</th><th>Race</th><th>Started</th><th>Stopped</th><th>Latency</th><th>Error</th></tr></thead><tbody>';
+  for(const s of rows){
+    const started=s.recording_started_utc?new Date(s.recording_started_utc).toLocaleString():'\u2014';
+    const stopped=s.recording_stopped_utc?new Date(s.recording_stopped_utc).toLocaleString():'\u2014';
+    const lat=s.sync_offset_ms!=null?s.sync_offset_ms+'ms':'\u2014';
+    const err=s.error?`<small style="color:#ef4444">${s.error.slice(0,40)}</small>`:'\u2014';
+    h+=`<tr><td>${s.camera_name}</td><td>${s.race_name||s.session_id}</td><td>${started}</td><td>${stopped}</td><td>${lat}</td><td>${err}</td></tr>`;
+  }
+  h+='</tbody></table>';
+  document.getElementById('cam-sessions').innerHTML=h;
+}
+loadCameras();loadSessions();
+</script>
+{% endblock %}
