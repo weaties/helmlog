@@ -7,10 +7,10 @@ speaker diarisation), and returns JSON results.  The Pi POSTs audio here when
 Usage::
 
     # From the project root on the Mac:
-    uv run uvicorn scripts.transcribe_worker:app --host 0.0.0.0 --port 8321
+    uv run python scripts/transcribe_worker.py
 
-    # Or bind to Tailscale interface only:
-    uv run uvicorn scripts.transcribe_worker:app --host 100.x.x.x --port 8321
+    # Or with custom host/port:
+    uv run python scripts/transcribe_worker.py --host 100.x.x.x --port 8321
 """
 
 from __future__ import annotations
@@ -83,4 +83,10 @@ async def healthz() -> dict[str, str]:
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8321)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="J105 Transcription Worker")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8321, help="Port (default: 8321)")
+    args = parser.parse_args()
+    uvicorn.run(app, host=args.host, port=args.port)

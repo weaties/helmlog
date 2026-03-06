@@ -51,13 +51,13 @@ transcription automatically.
 From the project root:
 
 ```bash
-uv run uvicorn scripts.transcribe_worker:app --host 0.0.0.0 --port 8321
+uv run python scripts/transcribe_worker.py
 ```
 
 Or bind to the Tailscale interface only (more secure):
 
 ```bash
-uv run uvicorn scripts.transcribe_worker:app --host 100.x.x.x --port 8321
+uv run python scripts/transcribe_worker.py --host 100.x.x.x --port 8321
 ```
 
 Replace `100.x.x.x` with the Mac's Tailscale IP (`tailscale ip -4`).
