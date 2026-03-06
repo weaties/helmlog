@@ -399,8 +399,8 @@ function showBoatDropdown(raceId, searchText) {
   const exactMatch = filtered.some(b => b.sail_number.toLowerCase() === searchText.trim().toLowerCase());
   if (searchText.trim() && !exactMatch) {
     const esc = searchText.trim().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    const js = searchText.trim().replace(/\\\\/g,'\\\\\\\\').replace(/'/g,"\\\\'");
-    html += '<div class="boat-option boat-option-new" onmousedown="event.preventDefault()" onclick="selectNewBoat(' + raceId + ',\\'' + js + '\\')">+ Add &ldquo;' + esc + '&rdquo;</div>';
+    const js = searchText.trim().replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    html += '<div class="boat-option boat-option-new" onmousedown="event.preventDefault()" onclick="selectNewBoat(' + raceId + ',\'' + js + '\')">+ Add &ldquo;' + esc + '&rdquo;</div>';
   }
   if (!html) html = '<div class="boat-option" style="color:#8892a4;cursor:default">No boats found</div>';
   const dd = document.getElementById('picker-dropdown-' + raceId);
@@ -752,9 +752,9 @@ function _videoAddForm(sessionId) {
     + '<input id="video-sync-utc-' + sessionId + '" class="field" type="datetime-local" step="1" placeholder="UTC time at sync point" value="' + defaultSyncUtc + '" style="margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
     + '<input id="video-sync-pos-' + sessionId + '" class="field" placeholder="Video position at that moment (mm:ss, optional)" style="margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
     + '<button class="btn btn-primary" style="font-size:.82rem;padding:7px 14px" onclick="submitAddVideo(' + sessionId + ')">Add Video</button>'
-    + ' <button onclick="document.getElementById(\\'video-add-form-' + sessionId + '\\').style.display=\\'none\\'" style="background:none;border:none;color:#8892a4;cursor:pointer;font-size:.82rem">Cancel</button>'
+    + ' <button onclick="document.getElementById(\'video-add-form-' + sessionId + '\').style.display=\'none\'" style="background:none;border:none;color:#8892a4;cursor:pointer;font-size:.82rem">Cancel</button>'
     + '</div>'
-    + '<button onclick="document.getElementById(\\'video-add-form-' + sessionId + '\\').style.display=\\'\\'" style="font-size:.78rem;color:#7eb8f7;background:none;border:none;cursor:pointer;padding:2px 0">+ Add Video</button>';
+    + '<button onclick="document.getElementById(\'video-add-form-' + sessionId + '\').style.display=\'\'" style="font-size:.78rem;color:#7eb8f7;background:none;border:none;cursor:pointer;padding:2px 0">+ Add Video</button>';
 }
 
 async function submitAddVideo(sessionId) {
