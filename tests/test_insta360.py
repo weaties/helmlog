@@ -30,6 +30,7 @@ class TestParseInsvFilename:
         assert info.timestamp_str == "20260810_140530"
         assert info.lens == "00"
         assert info.segment == 0
+        assert info.extension == "insv"
 
     def test_front_lens(self) -> None:
         info = parse_insv_filename("VID_20260810_140530_10_000.insv")
@@ -40,6 +41,15 @@ class TestParseInsvFilename:
         info = parse_insv_filename("VID_20260810_140530_00_002.insv")
         assert info is not None
         assert info.segment == 2
+
+    def test_mp4_single_lens(self) -> None:
+        """Single-lens .mp4 recordings should be parsed."""
+        info = parse_insv_filename("VID_20260810_140530_00_001.mp4")
+        assert info is not None
+        assert info.timestamp_str == "20260810_140530"
+        assert info.lens == "00"
+        assert info.segment == 1
+        assert info.extension == "mp4"
 
     def test_lrv_file_returns_none(self) -> None:
         """Low-res preview files should be skipped."""
@@ -139,6 +149,41 @@ class TestDiscoverRecordings:
         assert len(recs) == 1
         assert len(recs[0].segments) == 1
         assert "_00_" in recs[0].segments[0].name
+
+    def test_insv_needs_stitching(self, tmp_path: Path) -> None:
+        """.insv recordings should have needs_stitching=True."""
+        cam = tmp_path / "DCIM" / "Camera01"
+        cam.mkdir(parents=True)
+        (cam / "VID_20260810_140530_00_000.insv").write_bytes(b"\x00" * 100)
+
+        recs = discover_recordings(tmp_path)
+        assert len(recs) == 1
+        assert recs[0].needs_stitching is True
+
+    def test_mp4_no_stitching(self, tmp_path: Path) -> None:
+        """.mp4 recordings should have needs_stitching=False."""
+        cam = tmp_path / "DCIM" / "Camera01"
+        cam.mkdir(parents=True)
+        (cam / "VID_20260810_140530_00_001.mp4").write_bytes(b"\x00" * 200)
+
+        recs = discover_recordings(tmp_path)
+        assert len(recs) == 1
+        assert recs[0].needs_stitching is False
+        assert recs[0].segments[0].name == "VID_20260810_140530_00_001.mp4"
+
+    def test_mixed_insv_and_mp4(self, tmp_path: Path) -> None:
+        """SD card with both 360° and single-lens recordings."""
+        cam = tmp_path / "DCIM" / "Camera01"
+        cam.mkdir(parents=True)
+        (cam / "VID_20260810_140530_00_000.insv").write_bytes(b"\x00" * 100)
+        (cam / "VID_20260810_153000_00_001.mp4").write_bytes(b"\x00" * 200)
+
+        recs = discover_recordings(tmp_path)
+        assert len(recs) == 2
+        assert recs[0].timestamp_str == "20260810_140530"
+        assert recs[0].needs_stitching is True
+        assert recs[1].timestamp_str == "20260810_153000"
+        assert recs[1].needs_stitching is False
 
 
 # ---------------------------------------------------------------------------

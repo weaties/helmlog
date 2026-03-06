@@ -1,16 +1,20 @@
 """Insta360 X4 file discovery and recording grouping.
 
-Scans an SD card mount point for .insv video files, parses their
-timestamp-based filenames, and groups them into logical recordings
-that can be stitched into equirectangular 360° video.
+Scans an SD card mount point for video files, parses their
+timestamp-based filenames, and groups them into logical recordings.
+
+The Insta360 X4 saves in two formats depending on recording mode:
+  - **360° mode** → ``.insv`` (dual-fisheye, needs stitching)
+  - **Single-lens / wide-angle** → ``.mp4`` (ready to upload)
 
 File naming convention (Insta360 X4):
-    VID_YYYYMMDD_HHMMSS_XX_NNN.insv
-      XX  = lens: 00 (back), 10 (front), 01/11 (LRV preview)
+    VID_YYYYMMDD_HHMMSS_XX_NNN.insv   (360° mode)
+    VID_YYYYMMDD_HHMMSS_XX_NNN.mp4    (single-lens mode)
+      XX  = lens: 00 (back / main), 10 (front), 01/11 (LRV preview)
       NNN = segment number (000, 001, ...)
 
-Only back-lens (_00_) .insv files are included in recording segments;
-the stitcher (insta360-cli-utils) automatically pairs front+back.
+Only ``_00_`` files are included in recording segments; for .insv the
+stitcher automatically pairs front+back.
 """
 
 from __future__ import annotations
@@ -30,31 +34,34 @@ if TYPE_CHECKING:
 # Filename parsing
 # ---------------------------------------------------------------------------
 
-# Matches: VID_YYYYMMDD_HHMMSS_XX_NNN.insv  (also PRO_VID_ prefix)
-_INSV_RE = re.compile(r"^(?:PRO_)?VID_(\d{8}_\d{6})_(\d{2})_(\d{3})\.insv$")
+# Matches: VID_YYYYMMDD_HHMMSS_XX_NNN.insv or .mp4  (also PRO_VID_ prefix)
+_VID_RE = re.compile(r"^(?:PRO_)?VID_(\d{8}_\d{6})_(\d{2})_(\d{3})\.(insv|mp4)$")
 
 
 @dataclass(frozen=True)
 class InsvFileInfo:
-    """Parsed metadata from an .insv filename."""
+    """Parsed metadata from an Insta360 video filename."""
 
     timestamp_str: str  # YYYYMMDD_HHMMSS
-    lens: str  # 00 = back, 10 = front
+    lens: str  # 00 = back/main, 10 = front
     segment: int  # 0-based segment number
+    extension: str  # "insv" or "mp4"
 
 
 def parse_insv_filename(name: str) -> InsvFileInfo | None:
-    """Parse an Insta360 .insv filename into structured metadata.
+    """Parse an Insta360 video filename into structured metadata.
 
+    Supports both ``.insv`` (360° mode) and ``.mp4`` (single-lens mode).
     Returns None for non-VID files (LRV previews, photos, etc.).
     """
-    m = _INSV_RE.match(name)
+    m = _VID_RE.match(name)
     if m is None:
         return None
     return InsvFileInfo(
         timestamp_str=m.group(1),
         lens=m.group(2),
         segment=int(m.group(3)),
+        extension=m.group(4),
     )
 
 
@@ -69,13 +76,15 @@ class InstaRecording:
 
     Attributes:
         timestamp_str: Recording start time from filename (YYYYMMDD_HHMMSS).
-        segments: Ordered list of back-lens .insv file paths.
+        segments: Ordered list of video file paths.
         total_size_bytes: Combined size of all segment files.
+        needs_stitching: True for .insv (360°), False for .mp4 (single-lens).
     """
 
     timestamp_str: str
     segments: list[Path] = field(default_factory=list)
     total_size_bytes: int = 0
+    needs_stitching: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -84,12 +93,11 @@ class InstaRecording:
 
 
 def discover_recordings(mount_path: Path) -> list[InstaRecording]:
-    """Scan an Insta360 SD card for .insv files and group into recordings.
+    """Scan an Insta360 SD card for video files and group into recordings.
 
-    Looks in ``<mount_path>/DCIM/Camera01/`` for VID_*.insv files,
+    Looks in ``<mount_path>/DCIM/Camera01/`` for VID_*.insv and VID_*.mp4,
     groups by recording timestamp, and returns them sorted chronologically.
-    Only back-lens (``_00_``) segments are included; the stitcher pairs
-    front+back automatically.
+    Only ``_00_`` (back/main lens) segments are included.
 
     Args:
         mount_path: Root of the mounted SD card (e.g. ``/Volumes/Insta360 X4``).
@@ -102,25 +110,38 @@ def discover_recordings(mount_path: Path) -> list[InstaRecording]:
         logger.debug("No DCIM/Camera01 found at {}", mount_path)
         return []
 
-    # Collect back-lens segments grouped by timestamp
+    # Collect main-lens segments grouped by timestamp + extension
     groups: dict[str, list[tuple[int, Path]]] = {}
+    extensions: dict[str, str] = {}  # timestamp → extension
     for f in camera_dir.iterdir():
         info = parse_insv_filename(f.name)
         if info is None or info.lens != "00":
             continue
         groups.setdefault(info.timestamp_str, []).append((info.segment, f))
+        extensions[info.timestamp_str] = info.extension
 
     recordings: list[InstaRecording] = []
     for ts, segs in sorted(groups.items()):
         segs.sort(key=lambda t: t[0])  # sort by segment number
         paths = [p for _, p in segs]
         total = sum(p.stat().st_size for p in paths)
-        recordings.append(InstaRecording(timestamp_str=ts, segments=paths, total_size_bytes=total))
+        ext = extensions[ts]
+        needs_stitch = ext == "insv"
+        recordings.append(
+            InstaRecording(
+                timestamp_str=ts,
+                segments=paths,
+                total_size_bytes=total,
+                needs_stitching=needs_stitch,
+            )
+        )
+        mode = "360°" if needs_stitch else "single-lens"
         logger.info(
-            "Found recording {} — {} segment(s), {:.1f} MB",
+            "Found recording {} — {} segment(s), {:.1f} MB ({})",
             ts,
             len(paths),
             total / 1_048_576,
+            mode,
         )
 
     logger.info("Discovered {} recording(s) on {}", len(recordings), mount_path)

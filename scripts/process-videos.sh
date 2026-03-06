@@ -52,8 +52,8 @@ find_insta360_mount() {
   # Auto-detect: look for Insta360 volume in /Volumes
   for vol in /Volumes/*; do
     if [ -d "$vol/DCIM/Camera01" ]; then
-      # Verify it has .insv files (not just any camera)
-      if ls "$vol"/DCIM/Camera01/VID_*.insv &>/dev/null; then
+      # Verify it has Insta360 video files (.insv or .mp4 with VID_ prefix)
+      if ls "$vol"/DCIM/Camera01/VID_*.insv &>/dev/null || ls "$vol"/DCIM/Camera01/VID_*.mp4 &>/dev/null; then
         echo "$vol"
         return 0
       fi
@@ -93,7 +93,12 @@ from pathlib import Path
 from logger.insta360 import discover_recordings
 recs = discover_recordings(Path('$SD_MOUNT'))
 print(json.dumps([
-    {'timestamp': r.timestamp_str, 'segments': [str(s) for s in r.segments], 'size': r.total_size_bytes}
+    {
+        'timestamp': r.timestamp_str,
+        'segments': [str(s) for s in r.segments],
+        'size': r.total_size_bytes,
+        'needs_stitching': r.needs_stitching,
+    }
     for r in recs
 ]))
 ")
@@ -107,42 +112,46 @@ fi
 
 log "Found $REC_COUNT recording(s)"
 
-# ── 4. Stitch each recording ────────────────────────────────────────────────
+# ── 4. Stitch / copy each recording ───────────────────────────────────────
 
 mkdir -p "$OUTPUT_DIR"
 
 # Clean up any stale pending-uploads from a previous interrupted run
 rm -f "$OUTPUT_DIR/.pending_uploads"
 
-# Check Docker
-if ! docker info &>/dev/null; then
-  die "Docker is not running. Start Docker Desktop and try again."
+# Check if any recording needs stitching (Docker required only for .insv)
+NEEDS_DOCKER=$(echo "$RECORDINGS" | python3 -c "
+import sys, json
+recs = json.load(sys.stdin)
+print('yes' if any(r.get('needs_stitching') for r in recs) else 'no')
+")
+
+if [ "$NEEDS_DOCKER" = "yes" ] && ! docker info &>/dev/null; then
+  die "Docker is required for 360° stitching but is not running. Start Docker Desktop and try again."
 fi
 
 echo "$RECORDINGS" | python3 -c "
 import sys, json
 for r in json.load(sys.stdin):
     segs = ' '.join(r['segments'])
-    print(f\"{r['timestamp']}|{segs}\")
-" | while IFS='|' read -r TS SEGS; do
+    stitch = '1' if r.get('needs_stitching') else '0'
+    print(f\"{r['timestamp']}|{stitch}|{segs}\")
+" | while IFS='|' read -r TS NEEDS_STITCH SEGS; do
   OUTPUT_FILE="$OUTPUT_DIR/${TS}.mp4"
 
   if [ -f "$OUTPUT_FILE" ]; then
-    log "  [$TS] Already stitched → $OUTPUT_FILE (skipping)"
-  else
-    log "  [$TS] Stitching..."
-
-    # Build Docker volume mounts for all segment directories
+    log "  [$TS] Already processed → $OUTPUT_FILE (skipping)"
+  elif [ "$NEEDS_STITCH" = "1" ]; then
+    # 360° .insv — stitch via Docker
+    log "  [$TS] Stitching (360°)..."
     CAMERA_DIR="$SD_MOUNT/DCIM/Camera01"
 
-    # Map the segment filenames to container paths
     INPUT_ARGS=""
     for seg in $SEGS; do
       BASENAME=$(basename "$seg")
       INPUT_ARGS="$INPUT_ARGS /input/$BASENAME"
     done
 
-    # stitch-360 handles stitching + 360° metadata injection inside the container
     docker run --rm \
       -v "$CAMERA_DIR:/input:ro" \
       -v "$OUTPUT_DIR:/output" \
@@ -154,6 +163,30 @@ for r in json.load(sys.stdin):
     }
 
     log "  [$TS] Stitched → $OUTPUT_FILE"
+  else
+    # Single-lens .mp4 — copy directly (no stitching needed)
+    log "  [$TS] Copying (single-lens)..."
+    FIRST_SEG=$(echo "$SEGS" | awk '{print $1}')
+
+    if [ "$(echo "$SEGS" | wc -w)" -eq 1 ]; then
+      cp "$FIRST_SEG" "$OUTPUT_FILE"
+    else
+      # Multiple segments — concatenate with ffmpeg
+      CONCAT_FILE=$(mktemp "$OUTPUT_DIR/.concat_XXXXXX.txt")
+      for seg in $SEGS; do
+        echo "file '$seg'" >> "$CONCAT_FILE"
+      done
+      ffmpeg -y -f concat -safe 0 -i "$CONCAT_FILE" \
+        -c copy -movflags +faststart "$OUTPUT_FILE" 2>/dev/null \
+      || {
+        warn "[$TS] Concatenation failed — skipping"
+        rm -f "$CONCAT_FILE"
+        continue
+      }
+      rm -f "$CONCAT_FILE"
+    fi
+
+    log "  [$TS] Copied → $OUTPUT_FILE"
   fi
 
   echo "$TS $OUTPUT_FILE" >> "$OUTPUT_DIR/.pending_uploads"
