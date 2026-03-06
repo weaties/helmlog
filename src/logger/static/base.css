@@ -1,0 +1,776 @@
+/* ==========================================================================
+   J105 Logger — Shared Base Styles
+   Extracted from inline styles across web.py templates.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Reset & Body Defaults
+   -------------------------------------------------------------------------- */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  background: #0a1628;
+  color: #e8eaf0;
+  font-size: clamp(0.85rem, 2vw, 1rem);
+}
+
+/* --------------------------------------------------------------------------
+   Page Layout
+   -------------------------------------------------------------------------- */
+
+.page {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 16px 12px;
+}
+
+@media (min-width: 768px) {
+  .page {
+    max-width: 720px;
+  }
+}
+
+@media (min-width: 1200px) {
+  .page {
+    max-width: 900px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Typography
+   -------------------------------------------------------------------------- */
+
+h1 {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #7eb8f7;
+  margin-bottom: 2px;
+}
+
+.sub {
+  font-size: 0.9rem;
+  color: #8892a4;
+  margin-bottom: 20px;
+}
+
+/* --------------------------------------------------------------------------
+   Cards
+   -------------------------------------------------------------------------- */
+
+.card {
+  background: #131f35;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+/* --------------------------------------------------------------------------
+   Labels
+   -------------------------------------------------------------------------- */
+
+.label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8892a4;
+  margin-bottom: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   Utility
+   -------------------------------------------------------------------------- */
+
+.hidden {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons — Base
+   -------------------------------------------------------------------------- */
+
+.btn {
+  display: block;
+  width: 100%;
+  padding: 18px;
+  border: none;
+  border-radius: 10px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+  margin-bottom: 10px;
+  letter-spacing: 0.02em;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons — Variants
+   -------------------------------------------------------------------------- */
+
+.btn-primary {
+  background: #2563eb;
+  color: #fff;
+}
+.btn-primary:active {
+  background: #1d4ed8;
+}
+
+.btn-secondary {
+  background: #1e3a5f;
+  color: #7eb8f7;
+  border: 1px solid #2563eb;
+}
+.btn-secondary:active {
+  background: #163252;
+}
+
+.btn-danger {
+  background: #7f1d1d;
+  color: #fca5a5;
+  border: 1px solid #dc2626;
+}
+
+.btn-practice {
+  background: #1a3a2a;
+  color: #4ade80;
+  border: 1px solid #16a34a;
+}
+.btn-practice:active {
+  background: #14532d;
+}
+
+.btn-debrief {
+  background: #2d1b4e;
+  color: #c084fc;
+  border: 1px solid #7c3aed;
+}
+.btn-debrief:active {
+  background: #1e1236;
+}
+
+.btn-note {
+  background: #1a3a4e;
+  color: #7eb8f7;
+  border: 1px solid #2563eb;
+}
+.btn-note:active {
+  background: #163252;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons — Export & Grafana
+   -------------------------------------------------------------------------- */
+
+.btn-export {
+  padding: 8px 12px;
+  border: 1px solid #2563eb;
+  border-radius: 6px;
+  background: #131f35;
+  color: #7eb8f7;
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.btn-grafana {
+  border-color: #b45309;
+  color: #fbbf24;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons — Small / Admin
+   -------------------------------------------------------------------------- */
+
+.btn-sm {
+  padding: 8px 12px;
+  border: 1px solid #374151;
+  border-radius: 4px;
+  background: #0a1628;
+  font-size: 0.78rem;
+  cursor: pointer;
+  min-height: 36px;
+  color: #e8eaf0;
+}
+
+.btn-edit {
+  color: #7eb8f7;
+  border-color: #2563eb;
+}
+
+.btn-del {
+  color: #ef4444;
+  border-color: #7f1d1d;
+}
+
+.btn-save {
+  padding: 12px 18px;
+  border: none;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.btn-cancel {
+  /* inherits .btn-sm base; add overrides here if needed */
+}
+
+/* --------------------------------------------------------------------------
+   Badges
+   -------------------------------------------------------------------------- */
+
+.badge {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.badge-race {
+  background: #1e3a5f;
+  color: #7eb8f7;
+}
+
+.badge-practice {
+  background: #14532d;
+  color: #4ade80;
+}
+
+.badge-debrief {
+  background: #2d1b4e;
+  color: #c084fc;
+}
+
+/* --------------------------------------------------------------------------
+   Form Fields
+   -------------------------------------------------------------------------- */
+
+.field {
+  background: #0a1628;
+  border: 1px solid #2563eb;
+  border-radius: 6px;
+  color: #e8eaf0;
+}
+
+.event-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.event-input {
+  flex: 1;
+  background: #0a1628;
+  border: 1px solid #2563eb;
+  border-radius: 8px;
+  padding: 12px;
+  color: #e8eaf0;
+  font-size: 1rem;
+}
+
+/* --------------------------------------------------------------------------
+   Tables
+   -------------------------------------------------------------------------- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.87rem;
+}
+
+th {
+  text-align: left;
+  color: #8892a4;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 8px;
+  border-bottom: 1px solid #1e3a5f;
+}
+
+td {
+  padding: 7px 8px;
+  border-bottom: 1px solid #0d1a2e;
+  vertical-align: middle;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+.empty {
+  color: #8892a4;
+  text-align: center;
+  padding: 20px 0;
+}
+
+/* --------------------------------------------------------------------------
+   Navigation Bar
+   -------------------------------------------------------------------------- */
+
+nav.site-nav {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 8px 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #1e3a5f;
+}
+
+nav.site-nav a {
+  color: #8892a4;
+  text-decoration: none;
+  font-size: 0.82rem;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+nav.site-nav a:hover {
+  color: #e8eaf0;
+  background: #1e3a5f;
+}
+
+nav.site-nav a.active {
+  color: #7eb8f7;
+  font-weight: 600;
+}
+
+nav.site-nav .spacer {
+  flex: 1;
+}
+
+nav.site-nav .admin-link {
+  display: none;
+}
+
+nav.site-nav .profile-link {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Race / Session Items (Home & History)
+   -------------------------------------------------------------------------- */
+
+.race-name {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e8eaf0;
+  margin-bottom: 4px;
+}
+
+.race-meta {
+  font-size: 0.8rem;
+  color: #8892a4;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #22c55e;
+  margin-right: 6px;
+  animation: pulse 1.4s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.duration {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #22c55e;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------------------
+   Instruments Grid
+   -------------------------------------------------------------------------- */
+
+.instruments-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 4px 8px;
+  margin-top: 6px;
+}
+
+.inst-stale .inst-value {
+  color: #4a5568;
+}
+
+.inst-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.inst-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #8892a4;
+}
+
+.inst-value {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #7eb8f7;
+  font-variant-numeric: tabular-nums;
+}
+
+.inst-unit {
+  font-size: 0.75rem;
+  color: #8892a4;
+  margin-left: 2px;
+}
+
+.inst-time {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e8eaf0;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 8px;
+}
+
+.polar-delta-pos {
+  color: #22c55e;
+}
+
+.polar-delta-neg {
+  color: #f87171;
+}
+
+/* --------------------------------------------------------------------------
+   Crew
+   -------------------------------------------------------------------------- */
+
+.crew-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.crew-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.crew-pos {
+  min-width: 48px;
+  font-size: 0.8rem;
+  color: #8892a4;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.crew-input {
+  flex: 1;
+  background: #0a1628;
+  border: 1px solid #2563eb;
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #e8eaf0;
+  font-size: 0.9rem;
+}
+
+.sailor-chip {
+  padding: 6px 12px;
+  border: 1px solid #2563eb;
+  border-radius: 16px;
+  background: #0a1628;
+  color: #7eb8f7;
+  font-size: 0.82rem;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sailor-chip:active {
+  background: #1e3a5f;
+}
+
+.race-item-crew {
+  font-size: 0.75rem;
+  color: #8892a4;
+  margin-top: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Results
+   -------------------------------------------------------------------------- */
+
+.results-section {
+  margin-top: 8px;
+  border-top: 1px solid #1e3a5f;
+  padding-top: 6px;
+}
+
+.results-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  font-size: 0.8rem;
+  color: #8892a4;
+}
+
+.results-header:active {
+  opacity: 0.7;
+}
+
+.results-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid #0d1a2e;
+}
+
+.results-row:last-child {
+  border-bottom: none;
+}
+
+.results-place {
+  min-width: 22px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #7eb8f7;
+}
+
+.results-boat {
+  flex: 1;
+  font-size: 0.82rem;
+}
+
+.flag-btn {
+  padding: 2px 7px;
+  border: 1px solid #374151;
+  border-radius: 4px;
+  background: #0a1628;
+  color: #8892a4;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.flag-btn.active-dnf {
+  background: #7f1d1d;
+  color: #fca5a5;
+  border-color: #dc2626;
+}
+
+.flag-btn.active-dns {
+  background: #1c1f2e;
+  color: #818cf8;
+  border-color: #4338ca;
+}
+
+.btn-del-result {
+  padding: 2px 7px;
+  border: 1px solid #374151;
+  border-radius: 4px;
+  background: #0a1628;
+  color: #ef4444;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+/* --------------------------------------------------------------------------
+   Boat Picker Dropdown
+   -------------------------------------------------------------------------- */
+
+.boat-picker-input {
+  width: 100%;
+  background: #0a1628;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  padding: 6px 9px;
+  color: #e8eaf0;
+  font-size: 0.82rem;
+}
+
+.boat-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  background: #131f35;
+  border: 1px solid #2563eb;
+  border-radius: 6px;
+  max-height: 190px;
+  overflow-y: auto;
+  z-index: 200;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+}
+
+.boat-option {
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  border-bottom: 1px solid #1e3a5f;
+}
+
+.boat-option:last-child {
+  border-bottom: none;
+}
+
+.boat-option:active {
+  background: #1e3a5f;
+}
+
+.boat-option-new {
+  color: #4ade80;
+}
+
+/* --------------------------------------------------------------------------
+   Note Tabs
+   -------------------------------------------------------------------------- */
+
+.note-tab {
+  padding: 5px 12px;
+  border: 1px solid #2563eb;
+  border-radius: 6px;
+  background: #131f35;
+  color: #8892a4;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.note-tab.active {
+  background: #2563eb;
+  color: #fff;
+}
+
+/* --------------------------------------------------------------------------
+   History — Sessions & Race List
+   -------------------------------------------------------------------------- */
+
+.session-name {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e8eaf0;
+  margin-bottom: 2px;
+}
+
+.session-meta {
+  font-size: 0.8rem;
+  color: #8892a4;
+}
+
+.session-crew {
+  font-size: 0.78rem;
+  color: #8892a4;
+  margin-top: 2px;
+}
+
+.session-exports {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.session-results {
+  margin-top: 8px;
+  border-top: 1px solid #1e3a5f;
+  padding-top: 8px;
+}
+
+.race-list {
+  margin-top: 8px;
+}
+
+.race-item {
+  padding: 10px 0;
+  border-bottom: 1px solid #1e3a5f;
+}
+
+.race-item:last-child {
+  border-bottom: none;
+}
+
+.race-item-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 4px;
+}
+
+.race-item-time {
+  font-size: 0.8rem;
+  color: #8892a4;
+}
+
+.race-exports {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   History — Filter Bar & Pager
+   -------------------------------------------------------------------------- */
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+  align-items: center;
+}
+
+.filter-btn {
+  padding: 5px 14px;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  background: #0a1628;
+  color: #8892a4;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.filter-btn.active {
+  border-color: #2563eb;
+  color: #7eb8f7;
+  background: #1e3a5f;
+}
+
+.pager {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.pager-info {
+  color: #8892a4;
+  font-size: 0.85rem;
+}
+
+/* --------------------------------------------------------------------------
+   Footer
+   -------------------------------------------------------------------------- */
+
+footer {
+  text-align: center;
+  padding: 12px 0 8px;
+  font-size: 0.7rem;
+  color: #4a5568;
+}

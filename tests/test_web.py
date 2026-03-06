@@ -330,10 +330,10 @@ async def test_index_substitutes_grafana_port(storage: Storage) -> None:
     assert "__GRAFANA_PORT__" not in html
     assert "__GRAFANA_UID__" not in html
     assert "__SK_PORT__" not in html
-    # Default ports and UID are injected as JS constants
-    assert "'3001'" in html  # GRAFANA_PORT
+    # Default ports and UID are injected as data- attributes
+    assert 'data-grafana-port="3001"' in html
     assert "j105-sailing" in html
-    assert "'3000'" in html  # SK_PORT
+    assert 'data-sk-port="3000"' in html
 
 
 @pytest.mark.asyncio
@@ -350,7 +350,7 @@ async def test_index_uses_env_grafana_port(
         resp = await client.get("/")
 
     html = resp.text
-    assert "'4001'" in html
+    assert 'data-grafana-port="4001"' in html
     assert "custom-uid" in html
     assert "__GRAFANA_PORT__" not in html
 
@@ -550,7 +550,7 @@ async def test_history_page_served(storage: Storage) -> None:
         resp = await client.get("/history")
     assert resp.status_code == 200
     assert "Session History" in resp.text
-    assert "/api/sessions" in resp.text
+    assert "history.js" in resp.text
 
 
 @pytest.mark.asyncio

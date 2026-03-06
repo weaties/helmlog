@@ -17,7 +17,7 @@ Data can be exported as CSV, GPX, or JSON for use in Sailmon and other regatta a
 | Data source (primary) | Signal K WebSocket via `websockets` (`sk_reader.py`) |
 | NMEA 2000 / CAN (legacy) | `python-can`, `canboat` — `can_reader.py`, `DATA_SOURCE=can` |
 | Storage | SQLite via `aiosqlite` (schema v20) |
-| Web interface | `fastapi` + `uvicorn` |
+| Web interface | `fastapi` + `uvicorn` + `jinja2` templates |
 | Audio recording | `sounddevice`, `soundfile` |
 | Audio transcription | `faster-whisper`; optional diarisation via `pyannote-audio` |
 | System monitoring | `psutil` + InfluxDB via `influxdb-client` |
@@ -61,7 +61,21 @@ j105-logger/
 │       ├── storage.py      # SQLite read/write; schema migrations
 │       ├── transcribe.py   # faster-whisper transcription + pyannote diarisation
 │       ├── video.py        # YouTube video metadata / sync-point logic
-│       └── web.py          # FastAPI app — race marker, history, boats, admin UI
+│       ├── web.py          # FastAPI app — route handlers and API endpoints
+│       │
+│       ├── templates/      # Jinja2 HTML templates (extends base.html)
+│       │   ├── base.html   # Base layout — nav, footer, CSS/JS includes
+│       │   ├── home.html   # Home / race control page
+│       │   ├── history.html
+│       │   ├── login.html  # Standalone (no base.html)
+│       │   ├── profile.html
+│       │   └── admin/      # Admin pages (boats, users, audit, cameras, events, settings)
+│       │
+│       └── static/         # CSS and JS served by FastAPI StaticFiles
+│           ├── base.css    # Shared styles for all pages
+│           ├── shared.js   # Shared JS utilities (fmtTime, initNav, etc.)
+│           ├── home.js     # Home page logic
+│           └── history.js  # History page logic
 │
 ├── tests/                  # pytest suite — runs on any machine, no hardware required
 ├── data/                   # SQLite DB, WAV files, exports (gitignored)

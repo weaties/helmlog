@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from loguru import logger
 from pydantic import BaseModel
 
@@ -73,2717 +75,12 @@ def _get_git_info() -> str:
 _GIT_INFO: str = _get_git_info()
 
 # ---------------------------------------------------------------------------
-# Shared nav bar + footer
+# Jinja2 templates + static files
 # ---------------------------------------------------------------------------
 
-_NAV_CSS = """\
-nav.site-nav{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:8px 0;margin-bottom:8px;border-bottom:1px solid #1e3a5f}
-nav.site-nav a{color:#8892a4;text-decoration:none;font-size:.82rem;padding:4px 8px;border-radius:6px}
-nav.site-nav a:hover{color:#e8eaf0;background:#1e3a5f}
-nav.site-nav a.active{color:#7eb8f7;font-weight:600}
-nav.site-nav .spacer{flex:1}
-nav.site-nav .admin-link{display:none}
-nav.site-nav .profile-link{display:none}
-"""
-
-
-def _nav_html(current: str = "/") -> str:
-    """Return the shared navigation bar HTML.
-
-    *current* is the path of the active page (e.g. "/", "/history").
-    Admin-only links are hidden by default and revealed via JS /api/me check.
-    """
-
-    def _cls(path: str) -> str:
-        return ' class="active"' if path == current else ""
-
-    return f"""\
-<nav class="site-nav" id="site-nav">
-  <a href="/"{_cls("/")}>Home</a>
-  <a href="/history"{_cls("/history")}>History</a>
-  <a href="/admin/boats"{_cls("/admin/boats")}>Boats</a>
-  <a href="/admin/users" class="admin-link{" active" if current == "/admin/users" else ""}">Users</a>
-  <a href="/admin/audit" class="admin-link{" active" if current == "/admin/audit" else ""}">Audit</a>
-  <a href="/admin/cameras" class="admin-link{" active" if current == "/admin/cameras" else ""}">Cameras</a>
-  <a href="/admin/events" class="admin-link{" active" if current == "/admin/events" else ""}">Events</a>
-  <a href="/admin/settings" class="admin-link{" active" if current == "/admin/settings" else ""}">Settings</a>
-  <span class="spacer"></span>
-  <a href="/profile" class="profile-link" id="nav-profile"{_cls("/profile")}>\
-<img id="nav-avatar" src="" alt="" \
-style="width:18px;height:18px;border-radius:50%;vertical-align:middle;margin-right:3px">\
-<span id="nav-profile-name">Profile</span></a>
-</nav>
-<script>
-fetch('/api/me').then(r=>r.json()).then(u=>{{
-  if(u.role==='admin')document.querySelectorAll('.admin-link').forEach(el=>el.style.setProperty('display','inline','important'));
-  if(u.id){{const p=document.getElementById('nav-profile');if(p){{p.style.display='';document.getElementById('nav-avatar').src='/avatars/'+u.id+'.jpg';document.getElementById('nav-profile-name').textContent=u.name||'Profile';}}}}
-}}).catch(()=>{{}});
-</script>"""
-
-
-_FOOTER_HTML = (
-    '<footer style="text-align:center;padding:12px 0 8px;font-size:.7rem;color:#4a5568">'
-    "__GIT_INFO__</footer>"
-)
-
-# ---------------------------------------------------------------------------
-# HTML — inline mobile-first single-page app
-# ---------------------------------------------------------------------------
-
-_HTML = """\
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>J105 Logger</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;font-size:clamp(.85rem,2vw,1rem)}
-__NAV_CSS__
-.page{max-width:480px;margin:0 auto;padding:16px 12px}
-@media(min-width:768px){.page{max-width:720px}}
-@media(min-width:1200px){.page{max-width:900px}}
-@media(min-width:768px){#controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}#btn-end{grid-column:1/-1}}
-h1{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:2px}
-.sub{font-size:.9rem;color:#8892a4;margin-bottom:20px}
-.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:16px}
-.race-name{font-size:1rem;font-weight:600;color:#e8eaf0;margin-bottom:4px}
-.race-meta{font-size:.8rem;color:#8892a4}
-.status-dot{display:inline-block;width:10px;height:10px;border-radius:50%;
-background:#22c55e;margin-right:6px;animation:pulse 1.4s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#8892a4;margin-bottom:8px}
-.duration{font-size:1.6rem;font-weight:700;color:#22c55e;font-variant-numeric:tabular-nums}
-.btn{display:block;width:100%;padding:18px;border:none;border-radius:10px;font-size:1.1rem;font-weight:700;cursor:pointer;margin-bottom:10px;letter-spacing:.02em}
-.btn-primary{background:#2563eb;color:#fff}
-.btn-primary:active{background:#1d4ed8}
-.btn-secondary{background:#1e3a5f;color:#7eb8f7;border:1px solid #2563eb}
-.btn-secondary:active{background:#163252}
-.btn-danger{background:#7f1d1d;color:#fca5a5;border:1px solid #dc2626}
-.btn-practice{background:#1a3a2a;color:#4ade80;border:1px solid #16a34a}
-.btn-practice:active{background:#14532d}
-.btn-debrief{background:#2d1b4e;color:#c084fc;border:1px solid #7c3aed}
-.btn-debrief:active{background:#1e1236}
-.btn-note{background:#1a3a4e;color:#7eb8f7;border:1px solid #2563eb}
-.btn-note:active{background:#163252}
-.badge{font-size:.7rem;padding:1px 6px;border-radius:3px;margin-left:4px;vertical-align:middle}
-.badge-race{background:#1e3a5f;color:#7eb8f7}
-.badge-practice{background:#14532d;color:#4ade80}
-.event-row{display:flex;gap:8px;margin-bottom:16px}
-.event-input{flex:1;background:#0a1628;border:1px solid #2563eb;
-border-radius:8px;padding:12px;color:#e8eaf0;font-size:1rem}
-.btn-save{padding:12px 18px;border:none;border-radius:8px;background:#2563eb;
-color:#fff;font-weight:700;cursor:pointer;font-size:1rem}
-.race-list{margin-top:8px}
-.race-item{padding:10px 0;border-bottom:1px solid #1e3a5f}
-.race-item:last-child{border-bottom:none}
-.race-item-name{font-weight:600;font-size:.9rem;margin-bottom:4px}
-.race-item-time{font-size:.8rem;color:#8892a4}
-.race-exports{margin-top:6px;display:flex;gap:8px}
-.btn-export{padding:8px 12px;border:1px solid #2563eb;border-radius:6px;
-background:#131f35;color:#7eb8f7;font-size:.8rem;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
-.btn-grafana{border-color:#b45309;color:#fbbf24}
-.hidden{display:none}
-.instruments-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 8px;margin-top:6px}
-.inst-stale .inst-value{color:#4a5568}
-.inst-item{display:flex;flex-direction:column}
-.inst-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;color:#8892a4}
-.inst-value{font-size:1.3rem;font-weight:700;color:#7eb8f7;font-variant-numeric:tabular-nums}
-.inst-unit{font-size:.75rem;color:#8892a4;margin-left:2px}
-.polar-delta-pos{color:#22c55e}
-.polar-delta-neg{color:#f87171}
-.inst-time{font-size:1rem;font-weight:600;color:#e8eaf0;font-variant-numeric:tabular-nums;margin-bottom:8px}
-.crew-header{display:flex;align-items:center;justify-content:space-between;cursor:pointer;-webkit-user-select:none;user-select:none}
-.crew-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-.crew-pos{min-width:48px;font-size:.8rem;color:#8892a4;text-transform:uppercase;letter-spacing:.06em}
-.crew-input{flex:1;background:#0a1628;border:1px solid #2563eb;border-radius:6px;padding:8px 10px;color:#e8eaf0;font-size:.9rem}
-.sailor-chip{padding:6px 12px;border:1px solid #2563eb;border-radius:16px;background:#0a1628;color:#7eb8f7;font-size:.82rem;cursor:pointer;white-space:nowrap;-webkit-tap-highlight-color:transparent}
-.sailor-chip:active{background:#1e3a5f}
-.race-item-crew{font-size:.75rem;color:#8892a4;margin-top:2px}
-.results-section{margin-top:8px;border-top:1px solid #1e3a5f;padding-top:6px}
-.results-header{display:flex;align-items:center;gap:6px;cursor:pointer;-webkit-user-select:none;user-select:none;font-size:.8rem;color:#8892a4}
-.results-header:active{opacity:.7}
-.results-row{display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid #0d1a2e}
-.results-row:last-child{border-bottom:none}
-.results-place{min-width:22px;font-size:.82rem;font-weight:700;color:#7eb8f7}
-.results-boat{flex:1;font-size:.82rem}
-.flag-btn{padding:2px 7px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#8892a4;font-size:.72rem;cursor:pointer}
-.flag-btn.active-dnf{background:#7f1d1d;color:#fca5a5;border-color:#dc2626}
-.flag-btn.active-dns{background:#1c1f2e;color:#818cf8;border-color:#4338ca}
-.btn-del-result{padding:2px 7px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#ef4444;font-size:.72rem;cursor:pointer}
-.boat-picker-input{width:100%;background:#0a1628;border:1px solid #374151;border-radius:6px;padding:6px 9px;color:#e8eaf0;font-size:.82rem}
-.boat-dropdown{position:absolute;top:calc(100% + 2px);left:0;right:0;background:#131f35;border:1px solid #2563eb;border-radius:6px;max-height:190px;overflow-y:auto;z-index:200;box-shadow:0 4px 14px rgba(0,0,0,.6)}
-.boat-option{padding:8px 12px;font-size:.82rem;cursor:pointer;border-bottom:1px solid #1e3a5f}
-.boat-option:last-child{border-bottom:none}
-.boat-option:active{background:#1e3a5f}
-.boat-option-new{color:#4ade80}
-.note-tab{padding:5px 12px;border:1px solid #2563eb;border-radius:6px;background:#131f35;color:#8892a4;font-size:.8rem;cursor:pointer}
-.note-tab.active{background:#2563eb;color:#fff}
-.field{background:#0a1628;border:1px solid #2563eb;border-radius:6px;color:#e8eaf0}
-</style>
-</head>
-<body>
-<div class="page">
-<div id="health-banner" style="display:none;background:#7f1d1d;color:#fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.85rem"></div>
-__NAV__
-<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px">
-  <h1>J105 Logger</h1>
-  <div style="display:flex;gap:6px;margin-top:2px">
-    <a id="grafana-nav" class="btn-export btn-grafana" href="#" target="_blank">📊 Grafana</a>
-    <a id="signalk-nav" class="btn-export" href="#" target="_blank" style="display:none">⚙ Signal K</a>
-  </div>
-</div>
-<div class="sub" id="header-sub">Loading…</div>
-
-<div id="event-section" class="hidden">
-  <div class="label">Event name</div>
-  <div class="event-row">
-    <input id="event-input" class="event-input" placeholder="e.g. Regatta" maxlength="40"/>
-    <button class="btn-save" onclick="saveEvent()">Save</button>
-  </div>
-</div>
-
-<div id="current-card" class="card hidden">
-  <div class="label"><span class="status-dot"></span>Race in progress</div>
-  <div class="race-name" id="cur-name">—</div>
-  <div class="race-meta" id="cur-meta">—</div>
-  <div class="label" style="margin-top:12px">Duration</div>
-  <div class="duration" id="cur-duration">—</div>
-  <button class="btn btn-note" id="btn-note" onclick="toggleNotePanel()" style="margin-top:10px;display:none">+ Note</button>
-  <div id="note-panel" style="display:none;margin-top:8px">
-    <div style="display:flex;gap:4px;margin-bottom:8px">
-      <button class="note-tab active" id="note-tab-text"     onclick="selectNoteType('text')">Text</button>
-      <button class="note-tab"        id="note-tab-settings" onclick="selectNoteType('settings')">Settings</button>
-      <button class="note-tab"        id="note-tab-photo"    onclick="selectNoteType('photo')">Photo</button>
-    </div>
-    <div id="note-pane-text">
-      <textarea id="note-body" rows="3"
-        style="width:100%;background:#0a1628;border:1px solid #2563eb;border-radius:6px;
-               padding:8px;color:#e8eaf0;font-size:.9rem;resize:vertical"
-        placeholder="Race observation…"></textarea>
-    </div>
-    <div id="note-pane-settings" style="display:none">
-      <datalist id="settings-key-suggestions"></datalist>
-      <div id="settings-rows"></div>
-      <button onclick="addSettingsRow()" style="font-size:.8rem;color:#7eb8f7;background:none;border:none;cursor:pointer;padding:4px 0">+ Add field</button>
-    </div>
-    <div id="note-pane-photo" style="display:none;text-align:center">
-      <input type="file" id="photo-file" accept="image/*,video/*" capture="environment"
-        style="display:none" onchange="onPhotoSelected(this)"/>
-      <button class="btn btn-secondary" style="width:100%" onclick="document.getElementById('photo-file').click()">📷 Take Photo / Choose File</button>
-      <div id="photo-preview" style="margin-top:8px"></div>
-    </div>
-    <button class="btn btn-primary" style="margin-top:8px;font-size:.9rem;padding:10px;width:100%"
-      onclick="saveNote()">Save Note</button>
-  </div>
-</div>
-
-<div id="debrief-card" class="card hidden">
-  <div class="label">
-    <span class="status-dot" style="background:#c084fc"></span>Debrief in progress
-  </div>
-  <div class="race-name" id="debrief-name">—</div>
-  <div class="label" style="margin-top:12px">Duration</div>
-  <div class="duration" id="debrief-duration" style="color:#c084fc">—</div>
-  <button class="btn btn-danger" style="margin-top:12px" onclick="stopDebrief()">⏹ STOP DEBRIEF</button>
-</div>
-
-<div class="card hidden" id="instruments-card">
-  <div class="crew-header" onclick="toggleInstruments()">
-    <span class="label" style="margin-bottom:0">Instruments</span>
-    <span style="display:flex;align-items:center;gap:8px">
-      <span class="inst-time" id="inst-time" style="margin-bottom:0">--:--:-- UTC</span>
-      <span id="inst-chevron" style="color:#8892a4;font-size:.85rem">▶</span>
-    </span>
-  </div>
-  <div id="inst-body" style="display:none">
-  <div class="instruments-grid" id="inst-grid">
-    <div class="inst-item"><span class="inst-label">BSP</span>
-      <span><span class="inst-value" id="iv-bsp">—</span><span class="inst-unit">kts</span></span></div>
-    <div class="inst-item"><span class="inst-label">TWS</span>
-      <span><span class="inst-value" id="iv-tws">—</span><span class="inst-unit">kts</span></span></div>
-    <div class="inst-item"><span class="inst-label">TWA</span>
-      <span><span class="inst-value" id="iv-twa">—</span><span class="inst-unit">°</span></span></div>
-    <div class="inst-item"><span class="inst-label">HDG</span>
-      <span><span class="inst-value" id="iv-hdg">—</span><span class="inst-unit">°</span></span></div>
-    <div class="inst-item"><span class="inst-label">COG</span>
-      <span><span class="inst-value" id="iv-cog">—</span><span class="inst-unit">°</span></span></div>
-    <div class="inst-item"><span class="inst-label">SOG</span>
-      <span><span class="inst-value" id="iv-sog">—</span><span class="inst-unit">kts</span></span></div>
-    <div class="inst-item"><span class="inst-label">AWS</span>
-      <span><span class="inst-value" id="iv-aws">—</span><span class="inst-unit">kts</span></span></div>
-    <div class="inst-item"><span class="inst-label">AWA</span>
-      <span><span class="inst-value" id="iv-awa">—</span><span class="inst-unit">°</span></span></div>
-    <div class="inst-item"><span class="inst-label">TWD</span>
-      <span><span class="inst-value" id="iv-twd">—</span><span class="inst-unit">°</span></span></div>
-  </div>
-  </div>
-</div>
-
-<div class="card hidden" id="crew-card">
-  <div class="crew-header" onclick="toggleCrew()">
-    <span class="label" style="margin-bottom:0">Crew</span>
-    <span id="crew-chevron" style="color:#8892a4;font-size:.85rem">▶</span>
-  </div>
-  <div id="crew-body" style="display:none;margin-top:10px">
-    <div class="crew-row"><span class="crew-pos">Helm</span><input class="crew-input" id="crew-helm" list="recent-sailors" placeholder="Name…" maxlength="40"/></div>
-    <div class="crew-row"><span class="crew-pos">Main</span><input class="crew-input" id="crew-main" list="recent-sailors" placeholder="Name…" maxlength="40"/></div>
-    <div class="crew-row"><span class="crew-pos">Pit</span><input class="crew-input" id="crew-pit" list="recent-sailors" placeholder="Name…" maxlength="40"/></div>
-    <div class="crew-row"><span class="crew-pos">Bow</span><input class="crew-input" id="crew-bow" list="recent-sailors" placeholder="Name…" maxlength="40"/></div>
-    <div class="crew-row"><span class="crew-pos">Tac</span><input class="crew-input" id="crew-tac" list="recent-sailors" placeholder="Name…" maxlength="40"/></div>
-    <div class="crew-row"><span class="crew-pos">Guest</span><input class="crew-input" id="crew-guest" list="recent-sailors" placeholder="Name…" maxlength="40"/></div>
-    <datalist id="recent-sailors"></datalist>
-    <div id="sailor-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px"></div>
-    <button class="btn btn-secondary" style="margin-top:6px;font-size:.9rem;padding:12px" onclick="saveCrew()">Save Crew</button>
-  </div>
-</div>
-
-<div id="controls">
-  <button class="btn btn-primary"  id="btn-start-race"     onclick="startSession('race')">▶ START RACE 1</button>
-  <button class="btn btn-practice" id="btn-start-practice" onclick="startSession('practice')">▶ START PRACTICE</button>
-  <button class="btn btn-debrief hidden" id="btn-debrief-last" onclick="startDebriefLast()">🎙 DEBRIEF LAST RACE</button>
-  <button class="btn btn-secondary hidden" id="btn-end" onclick="endRace()">■ END RACE</button>
-</div>
-
-<div id="today-summary" class="card hidden" style="text-align:center">
-  <div style="font-size:.85rem;color:#8892a4" id="today-summary-text"></div>
-  <a href="/history" style="font-size:.8rem;color:#7eb8f7;text-decoration:none;margin-top:4px;display:inline-block">View history →</a>
-</div>
-
-<script>
-const _GRAFANA_PORT = '__GRAFANA_PORT__';
-const _GRAFANA_UID = '__GRAFANA_UID__';
-const _SK_PORT = '__SK_PORT__';
-// When served behind a reverse proxy (default HTTPS/HTTP port), use path-based
-// routing (/grafana/, /signalk/).  On the LAN use direct hostname:port.
-const _isDefaultPort = !location.port || location.port === '443' || location.port === '80';
-const GRAFANA_BASE = _isDefaultPort
-  ? location.origin + '/grafana'
-  : location.protocol + '//' + location.hostname + ':' + _GRAFANA_PORT;
-const SK_BASE = _isDefaultPort
-  ? location.origin + '/sk'
-  : location.protocol + '//' + location.hostname + ':' + _SK_PORT;
-(function initNavLinks() {
-  const g = document.getElementById('grafana-nav');
-  if (g) g.href = GRAFANA_BASE + '/d/' + _GRAFANA_UID + '/sailing-data?refresh=10s';
-  const s = document.getElementById('signalk-nav');
-  if (s) { s.href = SK_BASE; s.style.display = ''; }
-})();
-let state = null;
-let tickInterval = null;
-let curRaceStartMs = null;
-let debriefStartMs = null;
-let lastInstrumentDataMs = 0;
-
-async function loadState() {
-  try {
-    const r = await fetch('/api/state');
-    state = await r.json();
-    render(state);
-  } catch(e) { console.error('state error', e); }
-}
-
-function fmt(s) {
-  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), ss = s%60;
-  if(h) return `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
-  return `${m}:${String(ss).padStart(2,'0')}`;
-}
-
-let _tz = 'UTC';
-function fmtTime(iso) {
-  if(!iso) return '—';
-  try {
-    return new Date(iso).toLocaleTimeString('en-US',{timeZone:_tz,hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
-  } catch(e) { return new Date(iso).toISOString().substring(11,19) + ' UTC'; }
-}
-
-function render(s) {
-  if(s.timezone) _tz = s.timezone;
-  document.getElementById('header-sub').textContent =
-    `${s.weekday} · ${s.event || '(no event)'}`;
-
-  const evSec = document.getElementById('event-section');
-  if(!s.event_is_default && !s.current_debrief) {
-    evSec.classList.remove('hidden');
-    if(!document.getElementById('event-input').value && s.event) {
-      document.getElementById('event-input').value = s.event;
-    }
-  } else {
-    evSec.classList.add('hidden');
-  }
-
-  const cur = s.current_race;
-  const curCard = document.getElementById('current-card');
-  const btnEnd = document.getElementById('btn-end');
-  const btnStartRace = document.getElementById('btn-start-race');
-  const btnStartPractice = document.getElementById('btn-start-practice');
-
-  const instCard = document.getElementById('instruments-card');
-  const crewCard = document.getElementById('crew-card');
-  const btnDebriefLast = document.getElementById('btn-debrief-last');
-  const todaySummary = document.getElementById('today-summary');
-  const controlsDiv = document.getElementById('controls');
-
-  const isIdle = !cur && !s.current_debrief;
-  const isRacing = !!cur;
-  const isDebrief = !!s.current_debrief;
-
-  // --- Instruments & crew: visible only during a race ---
-  instCard.classList.toggle('hidden', !isRacing);
-  crewCard.classList.toggle('hidden', !isRacing);
-  // --- Controls: hidden during debrief ---
-  controlsDiv.classList.toggle('hidden', isDebrief);
-
-  if(cur) {
-    curCard.classList.remove('hidden');
-    btnEnd.classList.remove('hidden');
-    btnStartRace.classList.add('hidden');
-    btnStartPractice.classList.add('hidden');
-    btnDebriefLast.classList.add('hidden');
-    document.getElementById('cur-name').textContent = cur.name;
-    document.getElementById('cur-meta').textContent =
-      'Started ' + fmtTime(cur.start_utc);
-    curRaceStartMs = new Date(cur.start_utc).getTime();
-    btnEnd.textContent = '■ END ' + cur.name;
-    if(cur.id !== _crewLoadedForRaceId) {
-      setCrewInputs(cur.crew || []);
-      _crewLoadedForRaceId = cur.id;
-    }
-    document.getElementById('btn-note').style.display = '';
-  } else {
-    curCard.classList.add('hidden');
-    btnEnd.classList.add('hidden');
-    btnStartRace.classList.remove('hidden');
-    btnStartPractice.classList.remove('hidden');
-    curRaceStartMs = null;
-    _crewLoadedForRaceId = null;
-    clearInterval(tickInterval);
-    document.getElementById('btn-note').style.display = 'none';
-    document.getElementById('note-panel').style.display = 'none';
-  }
-
-  const debriefCard = document.getElementById('debrief-card');
-  if(s.current_debrief) {
-    debriefCard.classList.remove('hidden');
-    document.getElementById('debrief-name').textContent = s.current_debrief.race_name + ' — debrief';
-    debriefStartMs = new Date(s.current_debrief.start_utc).getTime();
-    // Hide start buttons during debrief
-    btnStartRace.classList.add('hidden');
-    btnStartPractice.classList.add('hidden');
-    btnDebriefLast.classList.add('hidden');
-  } else {
-    debriefCard.classList.add('hidden');
-    debriefStartMs = null;
-  }
-
-  btnStartRace.textContent = `▶ START RACE ${s.next_race_num}`;
-
-  // --- Debrief last race button: show when idle, has recorder, and finished races exist ---
-  const lastFinished = (s.today_races || []).filter(r => r.end_utc).slice(-1)[0];
-  if (isIdle && s.has_recorder && lastFinished) {
-    btnDebriefLast.classList.remove('hidden');
-    btnDebriefLast.textContent = '🎙 DEBRIEF ' + lastFinished.name;
-    btnDebriefLast.dataset.raceId = lastFinished.id;
-  } else {
-    btnDebriefLast.classList.add('hidden');
-  }
-
-  // --- Compact today's summary (idle only) ---
-  if (isIdle && s.today_races && s.today_races.length) {
-    const finished = s.today_races.filter(r => r.end_utc);
-    const last = finished.length ? finished[finished.length - 1] : null;
-    const parts = [];
-    if (finished.length) parts.push(finished.length + ' race' + (finished.length > 1 ? 's' : '') + ' today');
-    if (last) parts.push('last: ' + last.name);
-    todaySummary.classList.remove('hidden');
-    document.getElementById('today-summary-text').textContent = parts.join(' · ');
-  } else {
-    todaySummary.classList.add('hidden');
-  }
-}
-
-function tick() {
-  const now = new Date();
-  document.getElementById('inst-time').textContent =
-    now.toISOString().substring(11,19) + ' UTC';
-  if(curRaceStartMs) {
-    const elapsed = Math.floor((Date.now() - curRaceStartMs) / 1000);
-    document.getElementById('cur-duration').textContent = fmt(elapsed);
-  }
-  if(debriefStartMs) {
-    const elapsed = Math.floor((Date.now() - debriefStartMs) / 1000);
-    document.getElementById('debrief-duration').textContent = fmt(elapsed);
-  }
-  const grid = document.getElementById('inst-grid');
-  if (grid) {
-    grid.classList.toggle('inst-stale',
-      lastInstrumentDataMs > 0 && Date.now() - lastInstrumentDataMs > 5000);
-  }
-}
-
-async function loadInstruments() {
-  try {
-    const r = await fetch('/api/instruments');
-    const d = await r.json();
-    const set = (id, val, decimals=1) => {
-      const el = document.getElementById(id);
-      el.textContent = val != null ? Number(val).toFixed(decimals) : '—';
-    };
-    set('iv-sog', d.sog_kts, 1);
-    set('iv-cog', d.cog_deg, 0);
-    set('iv-hdg', d.heading_deg, 0);
-    set('iv-bsp', d.bsp_kts, 1);
-    set('iv-aws', d.aws_kts, 1);
-    set('iv-awa', d.awa_deg, 0);
-    set('iv-tws', d.tws_kts, 1);
-    set('iv-twa', d.twa_deg, 0);
-    set('iv-twd', d.twd_deg, 0);
-    if (Object.values(d).some(v => v != null)) {
-      lastInstrumentDataMs = Date.now();
-    }
-  } catch(e) { console.error('instruments error', e); }
-}
-
-let pendingCrew = null;
-let crewExpanded = false;
-let focusedCrewInput = null;
-let _crewLoadedForRaceId = null;
-
-let instExpanded = false;
-
-function toggleInstruments() {
-  instExpanded = !instExpanded;
-  document.getElementById('inst-body').style.display = instExpanded ? '' : 'none';
-  document.getElementById('inst-chevron').textContent = instExpanded ? '▼' : '▶';
-}
-
-function toggleCrew() {
-  crewExpanded = !crewExpanded;
-  document.getElementById('crew-body').style.display = crewExpanded ? '' : 'none';
-  document.getElementById('crew-chevron').textContent = crewExpanded ? '▼' : '▶';
-}
-
-function getCrewFromInputs() {
-  const positions = ['helm','main','pit','bow','tactician','guest'];
-  const ids = ['crew-helm','crew-main','crew-pit','crew-bow','crew-tac','crew-guest'];
-  const crew = [];
-  positions.forEach((pos, i) => {
-    const val = document.getElementById(ids[i]).value.trim();
-    if(val) crew.push({position: pos, sailor: val});
-  });
-  return crew;
-}
-
-function setCrewInputs(crew) {
-  const posToId = {helm:'crew-helm',main:'crew-main',pit:'crew-pit',bow:'crew-bow',tactician:'crew-tac',guest:'crew-guest'};
-  Object.values(posToId).forEach(id => { document.getElementById(id).value = ''; });
-  if(crew) crew.forEach(c => {
-    const id = posToId[c.position];
-    if(id) document.getElementById(id).value = c.sailor;
-  });
-}
-
-function tapSailor(name) {
-  let target = focusedCrewInput;
-  if(!target) {
-    const inputs = [...document.querySelectorAll('.crew-input')];
-    target = inputs.find(i => !i.value.trim()) || inputs[0];
-  }
-  if(!target) return;
-  target.value = name;
-  const inputs = [...document.querySelectorAll('.crew-input')];
-  const idx = inputs.indexOf(target);
-  const nextEmpty = inputs.slice(idx + 1).find(i => !i.value.trim());
-  if(nextEmpty) { nextEmpty.focus(); focusedCrewInput = nextEmpty; }
-}
-
-async function loadRecentSailors() {
-  try {
-    const r = await fetch('/api/sailors/recent');
-    const d = await r.json();
-    const dl = document.getElementById('recent-sailors');
-    dl.innerHTML = d.sailors.map(s => '<option value="' + s.replace(/&/g,'&amp;').replace(/"/g,'&quot;') + '">').join('');
-    const chips = document.getElementById('sailor-chips');
-    chips.innerHTML = d.sailors.map(s => {
-      const display = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      const attr = s.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-      return '<button class="sailor-chip" onpointerdown="event.preventDefault()" onclick="tapSailor(this.dataset.name)" data-name="' + attr + '">' + display + '</button>';
-    }).join('');
-  } catch(e) { console.error('sailors error', e); }
-}
-
-async function saveCrew() {
-  const crew = getCrewFromInputs();
-  if(state && state.current_race) {
-    await fetch('/api/races/' + state.current_race.id + '/crew', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(crew)
-    });
-    await loadRecentSailors();
-  } else {
-    pendingCrew = crew;
-  }
-}
-
-async function startSession(type) {
-  const resp = await fetch(`/api/races/start?session_type=${type}`, {method:'POST'});
-  if(resp.ok) {
-    const data = await resp.json();
-    const crew = pendingCrew && pendingCrew.length ? pendingCrew : getCrewFromInputs();
-    if(crew.length && data.id) {
-      await fetch('/api/races/' + data.id + '/crew', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(crew)
-      });
-      await loadRecentSailors();
-    }
-    pendingCrew = null;
-  } else {
-    const err = await resp.json().catch(()=>null);
-    const msg = err && err.detail ? err.detail : 'Failed to start session';
-    alert(msg);
-  }
-  await loadState();
-  clearInterval(tickInterval);
-  if(curRaceStartMs) tickInterval = setInterval(tick, 1000);
-}
-
-async function endRace() {
-  if(!state || !state.current_race) return;
-  await fetch(`/api/races/${state.current_race.id}/end`, {method:'POST'});
-  await loadState();
-}
-
-async function startDebrief(raceId) {
-  await fetch(`/api/races/${raceId}/debrief/start`, {method: 'POST'});
-  await loadState();
-}
-
-async function startDebriefLast() {
-  const btn = document.getElementById('btn-debrief-last');
-  const raceId = btn && btn.dataset.raceId;
-  if (raceId) await startDebrief(parseInt(raceId, 10));
-}
-
-async function stopDebrief() {
-  await fetch('/api/debrief/stop', {method: 'POST'});
-  await loadState();
-}
-
-async function saveEvent() {
-  const name = document.getElementById('event-input').value.trim();
-  if(!name) return;
-  await fetch('/api/event', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({event_name: name})
-  });
-  await loadState();
-}
-
-// ---- Race results ----
-const expandedResults = {};
-const _pickerBoats = {};
-
-function renderResultRow(res, raceId) {
-  const name = res.boat_name
-    ? res.sail_number + ' <span style="color:#8892a4;font-size:.78rem">' + res.boat_name + '</span>'
-    : res.sail_number;
-  const dnfCls = res.dnf ? ' active-dnf' : '';
-  const dnsCls = res.dns ? ' active-dns' : '';
-  return '<div class="results-row">'
-    + '<span class="results-place">' + res.place + '.</span>'
-    + '<span class="results-boat">' + name + '</span>'
-    + '<div class="results-flags">'
-    + '<button class="flag-btn' + dnfCls + '" onmousedown="event.preventDefault()" onclick="toggleResultFlag(' + raceId + ',' + res.place + ',' + res.boat_id + ',' + (!res.dnf) + ',' + res.dns + ')">DNF</button>'
-    + '<button class="flag-btn' + dnsCls + '" onmousedown="event.preventDefault()" onclick="toggleResultFlag(' + raceId + ',' + res.place + ',' + res.boat_id + ',' + res.dnf + ',' + (!res.dns) + ')">DNS</button>'
-    + '</div>'
-    + '<button class="btn-del-result" onmousedown="event.preventDefault()" onclick="deleteResult(' + raceId + ',' + res.id + ')">✕</button>'
-    + '</div>';
-}
-
-function renderResultsSection(race) {
-  const results = race.results || [];
-  const summary = results.length
-    ? results.slice(0,3).map(r => r.place + '. ' + r.sail_number).join(' · ') + (results.length > 3 ? ' +' + (results.length-3) + ' more' : '')
-    : 'No results yet';
-  const rows = results.map(r => renderResultRow(r, race.id)).join('');
-  return '<div class="results-section">'
-    + '<div class="results-header" onclick="toggleResults(' + race.id + ')">'
-    + '<span id="results-chevron-' + race.id + '" style="font-size:.7rem">▶</span>'
-    + '<span id="results-summary-' + race.id + '">' + summary + '</span>'
-    + '</div>'
-    + '<div id="results-body-' + race.id + '" style="display:none;margin-top:4px">'
-    + '<div id="results-list-' + race.id + '">' + rows + '</div>'
-    + '<div class="results-row" style="border-bottom:none;margin-top:4px">'
-    + '<span class="results-place" id="add-place-' + race.id + '">' + (results.length+1) + '.</span>'
-    + '<div style="position:relative;flex:1">'
-    + '<input class="boat-picker-input" id="picker-input-' + race.id + '" placeholder="Search boat…" autocomplete="off"'
-    + ' oninput="filterBoats(' + race.id + ',this.value)"'
-    + ' onfocus="openPicker(' + race.id + ')"'
-    + ' onblur="closePicker(' + race.id + ')"/>'
-    + '<div class="boat-dropdown" id="picker-dropdown-' + race.id + '" style="display:none"></div>'
-    + '</div></div></div></div>';
-}
-
-function toggleResults(raceId) {
-  expandedResults[raceId] = !expandedResults[raceId];
-  const body = document.getElementById('results-body-' + raceId);
-  const chevron = document.getElementById('results-chevron-' + raceId);
-  if (body) body.style.display = expandedResults[raceId] ? '' : 'none';
-  if (chevron) chevron.textContent = expandedResults[raceId] ? '▼' : '▶';
-}
-
-async function openPicker(raceId) {
-  const r = await fetch('/api/boats?exclude_race=' + raceId);
-  _pickerBoats[raceId] = await r.json();
-  const input = document.getElementById('picker-input-' + raceId);
-  showBoatDropdown(raceId, input ? input.value : '');
-  const dd = document.getElementById('picker-dropdown-' + raceId);
-  if (dd) dd.style.display = '';
-}
-
-function closePicker(raceId) {
-  setTimeout(() => {
-    const dd = document.getElementById('picker-dropdown-' + raceId);
-    if (dd) dd.style.display = 'none';
-  }, 200);
-}
-
-function filterBoats(raceId, searchText) {
-  if (_pickerBoats[raceId]) {
-    // Boats are cached — show/update the dropdown even if it isn't visible
-    // yet (user typed before the openPicker fetch completed) (#36).
-    showBoatDropdown(raceId, searchText);
-    const dd = document.getElementById('picker-dropdown-' + raceId);
-    if (dd) dd.style.display = '';
-  }
-  // If boats aren't cached yet the openPicker fetch is still in flight;
-  // it will call showBoatDropdown with the current input value on arrival.
-}
-
-function showBoatDropdown(raceId, searchText) {
-  const boats = _pickerBoats[raceId] || [];
-  const q = searchText.trim().toLowerCase();
-  const filtered = q
-    ? boats.filter(b => b.sail_number.toLowerCase().includes(q) || (b.name||'').toLowerCase().includes(q))
-    : boats;
-  let html = filtered.slice(0,15).map(b => {
-    const label = b.name ? b.sail_number + ' — ' + b.name : b.sail_number;
-    const esc = label.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    return '<div class="boat-option" onmousedown="event.preventDefault()" onclick="selectBoat(' + raceId + ',' + b.id + ')">' + esc + '</div>';
-  }).join('');
-  const exactMatch = filtered.some(b => b.sail_number.toLowerCase() === searchText.trim().toLowerCase());
-  if (searchText.trim() && !exactMatch) {
-    const esc = searchText.trim().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    const js = searchText.trim().replace(/\\\\/g,'\\\\\\\\').replace(/'/g,"\\\\'");
-    html += '<div class="boat-option boat-option-new" onmousedown="event.preventDefault()" onclick="selectNewBoat(' + raceId + ',\\'' + js + '\\')">+ Add &ldquo;' + esc + '&rdquo;</div>';
-  }
-  if (!html) html = '<div class="boat-option" style="color:#8892a4;cursor:default">No boats found</div>';
-  const dd = document.getElementById('picker-dropdown-' + raceId);
-  if (dd) dd.innerHTML = html;
-}
-
-async function selectBoat(raceId, boatId) {
-  const listEl = document.getElementById('results-list-' + raceId);
-  const nextPlace = listEl ? listEl.children.length + 1 : 1;
-  await fetch('/api/sessions/' + raceId + '/results', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({place: nextPlace, boat_id: boatId})
-  });
-  const input = document.getElementById('picker-input-' + raceId);
-  if (input) input.value = '';
-  const dd = document.getElementById('picker-dropdown-' + raceId);
-  if (dd) dd.style.display = 'none';
-  delete _pickerBoats[raceId];
-  await refreshResults(raceId);
-  // Pre-populate the boat cache immediately so the next entry works without
-  // requiring a focus event. On mobile, the input may retain focus after
-  // selection so onfocus never re-fires — openPicker here ensures filterBoats
-  // has boats to display when the user starts typing the next entry (#36).
-  openPicker(raceId);
-}
-
-async function selectNewBoat(raceId, sailNumber) {
-  const listEl = document.getElementById('results-list-' + raceId);
-  const nextPlace = listEl ? listEl.children.length + 1 : 1;
-  await fetch('/api/sessions/' + raceId + '/results', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({place: nextPlace, sail_number: sailNumber})
-  });
-  const input = document.getElementById('picker-input-' + raceId);
-  if (input) input.value = '';
-  const dd = document.getElementById('picker-dropdown-' + raceId);
-  if (dd) dd.style.display = 'none';
-  delete _pickerBoats[raceId];
-  await refreshResults(raceId);
-  // Same fix as selectBoat — pre-populate cache for the next entry (#36).
-  openPicker(raceId);
-}
-
-async function toggleResultFlag(raceId, place, boatId, dnf, dns) {
-  await fetch('/api/sessions/' + raceId + '/results', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({place, boat_id: boatId, dnf, dns})
-  });
-  await refreshResults(raceId);
-}
-
-async function deleteResult(raceId, resultId) {
-  await fetch('/api/results/' + resultId, {method:'DELETE'});
-  delete _pickerBoats[raceId];
-  await refreshResults(raceId);
-}
-
-async function refreshResults(raceId) {
-  const r = await fetch('/api/sessions/' + raceId + '/results');
-  const results = await r.json();
-  const listEl = document.getElementById('results-list-' + raceId);
-  if (listEl) listEl.innerHTML = results.map(r => renderResultRow(r, raceId)).join('');
-  const addPlace = document.getElementById('add-place-' + raceId);
-  if (addPlace) addPlace.textContent = (results.length + 1) + '.';
-  const summary = results.length
-    ? results.slice(0,3).map(r => r.place + '. ' + r.sail_number).join(' · ') + (results.length > 3 ? ' +' + (results.length-3) + ' more' : '')
-    : 'No results yet';
-  const sumEl = document.getElementById('results-summary-' + raceId);
-  if (sumEl) sumEl.textContent = summary;
-}
-
-// ---- Notes ----
-
-let _activeNoteType = 'text';
-
-function toggleNotePanel() {
-  const panel = document.getElementById('note-panel');
-  panel.style.display = panel.style.display === 'none' ? '' : 'none';
-  if (panel.style.display !== 'none') {
-    document.getElementById('note-body').focus();
-  }
-}
-
-// Whether the settings-key datalist has been populated this session.
-let _settingsKeysFetched = false;
-
-function selectNoteType(type) {
-  _activeNoteType = type;
-  ['text', 'settings', 'photo'].forEach(t => {
-    document.getElementById('note-pane-' + t).style.display = t === type ? '' : 'none';
-    document.getElementById('note-tab-' + t).classList.toggle('active', t === type);
-  });
-  // Lazily populate the key typeahead once per page load when the settings
-  // tab is first shown.  Re-fetches after a save so newly added keys appear
-  // immediately in the same session.
-  if (type === 'settings') _loadSettingsKeys();
-}
-
-async function _loadSettingsKeys() {
-  try {
-    const r = await fetch('/api/notes/settings-keys');
-    if (!r.ok) return;
-    const {keys} = await r.json();
-    const dl = document.getElementById('settings-key-suggestions');
-    if (!dl) return;
-    dl.innerHTML = keys.map(k => '<option value="' + k.replace(/&/g,'&amp;').replace(/"/g,'&quot;') + '"></option>').join('');
-    _settingsKeysFetched = true;
-  } catch (_) { /* non-fatal — degrades to plain input */ }
-}
-
-function addSettingsRow() {
-  const container = document.getElementById('settings-rows');
-  const row = document.createElement('div');
-  row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;align-items:center';
-  // list="settings-key-suggestions" wires this input to the <datalist> above,
-  // giving browser-native typeahead for previously used keys.
-  row.innerHTML = '<input class="field" placeholder="Key" list="settings-key-suggestions" style="flex:1;padding:6px 8px;font-size:.85rem"/>'
-    + '<input class="field" placeholder="Value" style="flex:1;padding:6px 8px;font-size:.85rem"/>'
-    + '<button onclick="this.parentElement.remove()" style="color:#ef4444;background:none;border:none;cursor:pointer;font-size:1.1rem">✕</button>';
-  container.appendChild(row);
-}
-
-function onPhotoSelected(input) {
-  const preview = document.getElementById('photo-preview');
-  if (!input.files || !input.files[0]) { preview.innerHTML = ''; return; }
-  const url = URL.createObjectURL(input.files[0]);
-  preview.innerHTML = '<img src="' + url + '" style="max-width:100%;max-height:150px;border-radius:6px"/>';
-}
-
-async function saveNote() {
-  if (!state || !state.current_race) return;
-  if (_activeNoteType === 'text') await _saveTextNote(state.current_race.id);
-  else if (_activeNoteType === 'settings') await _saveSettingsNote(state.current_race.id);
-  else if (_activeNoteType === 'photo') await _savePhotoNote(state.current_race.id);
-}
-
-async function _saveTextNote(sessionId) {
-  const body = document.getElementById('note-body').value.trim();
-  if (!body) return;
-  await fetch('/api/sessions/' + sessionId + '/notes', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({body, note_type: 'text'})
-  });
-  document.getElementById('note-body').value = '';
-  _closeNotePanel(sessionId);
-}
-
-async function _saveSettingsNote(sessionId) {
-  const rows = document.querySelectorAll('#settings-rows > div');
-  const obj = {};
-  rows.forEach(row => {
-    const inputs = row.querySelectorAll('input');
-    const k = inputs[0].value.trim();
-    const v = inputs[1].value.trim();
-    if (k) obj[k] = v;
-  });
-  if (!Object.keys(obj).length) return;
-  await fetch('/api/sessions/' + sessionId + '/notes', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({body: JSON.stringify(obj), note_type: 'settings'})
-  });
-  document.getElementById('settings-rows').innerHTML = '';
-  // Refresh the datalist so any newly entered keys appear in the next save.
-  _settingsKeysFetched = false;
-  _loadSettingsKeys();
-  _closeNotePanel(sessionId);
-}
-
-async function _savePhotoNote(sessionId) {
-  const input = document.getElementById('photo-file');
-  if (!input.files || !input.files[0]) return;
-  const fd = new FormData();
-  fd.append('file', input.files[0]);
-  await fetch('/api/sessions/' + sessionId + '/notes/photo', {method: 'POST', body: fd});
-  input.value = '';
-  document.getElementById('photo-preview').innerHTML = '';
-  _closeNotePanel(sessionId);
-}
-
-function _closeNotePanel(sessionId) {
-  document.getElementById('note-panel').style.display = 'none';
-  const listEl = document.getElementById('notes-list-' + sessionId);
-  if (listEl && listEl.style.display !== 'none') refreshNotes(sessionId);
-}
-
-function renderNote(n, sessionId) {
-  const t = new Date(n.ts).toISOString().substring(11, 19) + ' UTC';
-  let content = '';
-  if (n.note_type === 'photo' && n.photo_path) {
-    const src = '/notes/' + n.photo_path;
-    content = '<img src="' + src + '" loading="lazy" style="max-width:80px;max-height:60px;border-radius:4px;'
-      + 'cursor:pointer;vertical-align:middle;margin-top:2px" onclick="window.open(this.dataset.src)" data-src="' + src + '" />';
-  } else if (n.note_type === 'settings' && n.body) {
-    try {
-      const obj = JSON.parse(n.body);
-      content = Object.entries(obj).map(([k, v]) =>
-        '<span style="color:#8892a4">' + k.replace(/&/g, '&amp;') + ':</span> ' + String(v).replace(/&/g, '&amp;')
-      ).join(' &nbsp;·&nbsp; ');
-    } catch { content = n.body; }
-  } else {
-    content = (n.body || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-  const delBtn = sessionId != null
-    ? '<button onclick="deleteNote(' + n.id + ',' + sessionId + ')" '
-      + 'style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:.8rem;'
-      + 'padding:0 4px;float:right" title="Delete">✕</button>'
-    : '';
-  return '<div style="padding:4px 0;border-bottom:1px solid #0d1a2e;font-size:.82rem;overflow:hidden">'
-    + delBtn
-    + '<span style="color:#8892a4;margin-right:6px">' + t + '</span>'
-    + content + '</div>';
-}
-
-async function deleteNote(noteId, sessionId) {
-  await fetch('/api/notes/' + noteId, {method: 'DELETE'});
-  await refreshNotes(sessionId);
-}
-
-async function refreshNotes(sessionId) {
-  const el = document.getElementById('notes-list-' + sessionId);
-  if (!el) return;
-  const r = await fetch('/api/sessions/' + sessionId + '/notes');
-  const notes = await r.json();
-  el.innerHTML = notes.length
-    ? notes.map(n => renderNote(n, sessionId)).join('')
-    : '<div style="color:#8892a4;font-size:.8rem">No notes yet</div>';
-}
-
-async function toggleNotes(sessionId) {
-  const el = document.getElementById('notes-list-' + sessionId);
-  if (!el) return;
-  const span = el.previousElementSibling;
-  if (el.style.display !== 'none') {
-    el.style.display = 'none';
-    if (span) span.textContent = 'Notes ▶';
-    return;
-  }
-  el.style.display = '';
-  if (span) span.textContent = 'Notes ▼';
-  await refreshNotes(sessionId);
-}
-
-// ---------------------------------------------------------------------------
-// Video linking — home page
-// ---------------------------------------------------------------------------
-
-async function toggleVideos(sessionId) {
-  const el = document.getElementById('videos-list-' + sessionId);
-  if (!el) return;
-  const span = el.previousElementSibling;
-  if (el.style.display !== 'none') {
-    el.style.display = 'none';
-    if (span) span.textContent = '🎬 Videos ▶';
-    return;
-  }
-  el.style.display = '';
-  if (span) span.textContent = '🎬 Videos ▼';
-  await _loadVideos(sessionId, el);
-}
-
-async function toggleSails(sessionId) {
-  const el = document.getElementById('sails-list-' + sessionId);
-  if (!el) return;
-  const span = el.previousElementSibling;
-  if (el.style.display !== 'none') {
-    el.style.display = 'none';
-    if (span) span.textContent = '⛵ Sails ▶';
-    return;
-  }
-  el.style.display = '';
-  if (span) span.textContent = '⛵ Sails ▼';
-  await _loadSails(sessionId, el);
-}
-
-async function _loadSails(sessionId, el) {
-  if (!el) el = document.getElementById('sails-list-' + sessionId);
-  if (!el) return;
-  const [sailsResp, inventoryResp] = await Promise.all([
-    fetch('/api/sessions/' + sessionId + '/sails'),
-    fetch('/api/sails'),
-  ]);
-  const current = await sailsResp.json();
-  const inventory = await inventoryResp.json();
-  const slots = ['main', 'jib', 'spinnaker'];
-  let html = '<div style="font-size:.78rem">';
-  slots.forEach(slot => {
-    const opts = (inventory[slot] || []).map(s =>
-      '<option value="' + s.id + '"' + (current[slot] && current[slot].id === s.id ? ' selected' : '') + '>'
-      + s.name.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</option>'
-    ).join('');
-    html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
-      + '<span style="color:#8892a4;width:68px;flex-shrink:0">' + slot.charAt(0).toUpperCase() + slot.slice(1) + '</span>'
-      + '<select id="sail-select-' + slot + '-' + sessionId + '" style="flex:1;background:#1a2840;color:#e0e8f0;border:1px solid #2563eb;border-radius:4px;padding:3px 6px;font-size:.78rem">'
-      + '<option value="">— none —</option>' + opts
-      + '</select></div>';
-  });
-  html += '<button class="btn btn-primary" style="font-size:.78rem;padding:5px 12px;margin-top:2px" onclick="saveSails(' + sessionId + ')">Save Sails</button>';
-  html += '</div>';
-  el.innerHTML = html;
-}
-
-async function saveSails(sessionId) {
-  const slots = ['main', 'jib', 'spinnaker'];
-  const body = {};
-  slots.forEach(slot => {
-    const sel = document.getElementById('sail-select-' + slot + '-' + sessionId);
-    body[slot + '_id'] = sel && sel.value ? parseInt(sel.value, 10) : null;
-  });
-  const r = await fetch('/api/sessions/' + sessionId + '/sails', {
-    method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
-  });
-  if (!r.ok) { alert('Failed to save sails'); return; }
-  await _loadSails(sessionId, null);
-}
-
-async function _loadVideos(sessionId, el) {
-  if (!el) el = document.getElementById('videos-list-' + sessionId);
-  if (!el) return;
-  const r = await fetch('/api/sessions/' + sessionId + '/videos');
-  const videos = await r.json();
-  let html = '';
-  if (videos.length) {
-    html += '<div style="margin-bottom:4px">';
-    html += videos.map(v => {
-      const lbl = v.label ? '<b>' + v.label.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</b> — ' : '';
-      const ttl = (v.title || v.youtube_url).replace(/&/g,'&amp;').replace(/</g,'&lt;');
-      const yt = '<a href="' + v.youtube_url.replace(/&/g,'&amp;') + '" target="_blank" style="color:#7eb8f7">' + ttl.substring(0,50) + '</a>';
-      const del = '<button onclick="deleteVideo(' + v.id + ',' + sessionId + ')" style="color:#ef4444;background:none;border:none;cursor:pointer;font-size:.8rem;margin-left:8px">✕</button>';
-      return '<div style="font-size:.78rem;color:#8892a4;margin-bottom:2px">' + lbl + yt + del + '</div>';
-    }).join('');
-    html += '</div>';
-  } else {
-    html += '<div style="font-size:.78rem;color:#8892a4;margin-bottom:4px">No videos linked yet</div>';
-  }
-  html += _videoAddForm(sessionId);
-  el.innerHTML = html;
-}
-
-function _videoAddForm(sessionId) {
-  const container = document.getElementById('videos-list-' + sessionId);
-  const startUtc = container ? container.dataset.startUtc : '';
-  // Format as datetime-local value (YYYY-MM-DDTHH:mm:ss, no timezone suffix)
-  const defaultSyncUtc = startUtc ? new Date(startUtc).toISOString().substring(0, 19) : '';
-  return '<div id="video-add-form-' + sessionId + '" style="display:none;margin-top:4px">'
-    + '<div style="font-size:.75rem;color:#8892a4;margin-bottom:4px">Link a YouTube video</div>'
-    + '<input id="video-url-' + sessionId + '" class="field" placeholder="YouTube URL" style="margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
-    + '<input id="video-label-' + sessionId + '" class="field" placeholder="Label (e.g. Bow cam)" style="margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
-    + '<div style="font-size:.72rem;color:#8892a4;margin-bottom:2px">Sync calibration (optional) — UTC time + video position at the same moment:</div>'
-    + '<input id="video-sync-utc-' + sessionId + '" class="field" type="datetime-local" step="1" placeholder="UTC time at sync point" value="' + defaultSyncUtc + '" style="margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
-    + '<input id="video-sync-pos-' + sessionId + '" class="field" placeholder="Video position at that moment (mm:ss, optional)" style="margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
-    + '<button class="btn btn-primary" style="font-size:.82rem;padding:7px 14px" onclick="submitAddVideo(' + sessionId + ')">Add Video</button>'
-    + ' <button onclick="document.getElementById(\\'video-add-form-' + sessionId + '\\').style.display=\\'none\\'" style="background:none;border:none;color:#8892a4;cursor:pointer;font-size:.82rem">Cancel</button>'
-    + '</div>'
-    + '<button onclick="document.getElementById(\\'video-add-form-' + sessionId + '\\').style.display=\\'\\'" style="font-size:.78rem;color:#7eb8f7;background:none;border:none;cursor:pointer;padding:2px 0">+ Add Video</button>';
-}
-
-function _parseVideoPosition(str) {
-  // Parse "mm:ss", "hh:mm:ss", or plain seconds string into seconds.
-  str = str.trim();
-  const parts = str.split(':').map(Number);
-  if (parts.some(isNaN)) return null;
-  if (parts.length === 1) return parts[0];
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  return null;
-}
-
-async function submitAddVideo(sessionId) {
-  const url = document.getElementById('video-url-' + sessionId).value.trim();
-  const label = document.getElementById('video-label-' + sessionId).value.trim();
-  const syncUtcVal = document.getElementById('video-sync-utc-' + sessionId).value;
-  const syncPosVal = document.getElementById('video-sync-pos-' + sessionId).value.trim();
-  if (!url) { alert('YouTube URL is required'); return; }
-  // Sync fields are optional — default to now / 0s if not provided.
-  const syncUtc = syncUtcVal
-    ? (syncUtcVal.includes('Z') || syncUtcVal.includes('+') ? syncUtcVal : syncUtcVal + 'Z')
-    : new Date().toISOString();
-  const syncOffsetS = syncPosVal ? _parseVideoPosition(syncPosVal) : 0;
-  if (syncOffsetS === null) { alert('Video position must be mm:ss or seconds'); return; }
-  const btn = document.querySelector('#video-add-form-' + sessionId + ' .btn-primary');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-  try {
-    const resp = await fetch('/api/sessions/' + sessionId + '/videos', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({youtube_url: url, label, sync_utc: syncUtc, sync_offset_s: syncOffsetS})
-    });
-    if (!resp.ok) { alert('Failed to add video: ' + resp.status); return; }
-    await _loadVideos(sessionId);
-  } catch (e) {
-    alert('Error saving video: ' + e.message);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Add Video'; }
-  }
-}
-
-async function deleteVideo(videoId, sessionId) {
-  if (!confirm('Remove this video link?')) return;
-  await fetch('/api/videos/' + videoId, {method: 'DELETE'});
-  await _loadVideos(sessionId);
-}
-
-let _sailInventoryExpanded = false;
-
-function toggleSailInventory() {
-  _sailInventoryExpanded = !_sailInventoryExpanded;
-  document.getElementById('sails-inventory-body').style.display = _sailInventoryExpanded ? '' : 'none';
-  document.getElementById('sails-inventory-chevron').textContent = _sailInventoryExpanded ? '▼' : '▶';
-  if (_sailInventoryExpanded) _loadSailInventory();
-}
-
-async function _loadSailInventory() {
-  const el = document.getElementById('sail-inventory-list');
-  if (!el) return;
-  const r = await fetch('/api/sails?include_inactive=1');
-  const data = await r.json();
-  const allSails = ['main','jib','spinnaker'].flatMap(t => (data[t] || []).map(s => ({...s, type:t})));
-  if (!allSails.length) { el.innerHTML = '<div style="font-size:.78rem;color:#8892a4">No sails yet</div>'; return; }
-  el.innerHTML = '<table style="width:100%;font-size:.78rem;border-collapse:collapse">'
-    + '<tr><th style="text-align:left;color:#8892a4;padding-bottom:4px">Type</th>'
-    + '<th style="text-align:left;color:#8892a4;padding-bottom:4px">Name</th>'
-    + '<th style="text-align:left;color:#8892a4;padding-bottom:4px">Status</th>'
-    + '<th></th></tr>'
-    + allSails.map(s => '<tr style="border-top:1px solid #1e3a5f">'
-      + '<td style="padding:3px 6px 3px 0;color:#8892a4">' + s.type.charAt(0).toUpperCase() + s.type.slice(1) + '</td>'
-      + '<td style="padding:3px 6px 3px 0' + (s.active ? '' : ';color:#8892a4') + '">' + s.name.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</td>'
-      + '<td style="padding:3px 6px 3px 0;color:' + (s.active ? '#4ade80' : '#8892a4') + '">' + (s.active ? 'Active' : 'Retired') + '</td>'
-      + '<td><button onclick="toggleRetireSail(' + s.id + ',' + (s.active ? 'false' : 'true') + ')" style="font-size:.72rem;color:#8892a4;background:none;border:none;cursor:pointer">'
-      + (s.active ? 'Retire' : 'Restore') + '</button></td>'
-      + '</tr>'
-    ).join('')
-    + '</table>';
-}
-
-async function addSail() {
-  const type = document.getElementById('new-sail-type').value;
-  const name = document.getElementById('new-sail-name').value.trim();
-  if (!name) { alert('Enter a sail name'); return; }
-  const r = await fetch('/api/sails', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({type, name}),
-  });
-  if (r.status === 409) { alert('A sail with that name already exists'); return; }
-  if (!r.ok) { alert('Failed to add sail'); return; }
-  document.getElementById('new-sail-name').value = '';
-  await _loadSailInventory();
-}
-
-async function toggleRetireSail(id, makeActive) {
-  await fetch('/api/sails/' + id, {
-    method: 'PATCH', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({active: makeActive}),
-  });
-  await _loadSailInventory();
-}
-
-async function checkSystemHealth() {
-  try {
-    const r = await fetch('/api/system-health');
-    if (!r.ok) return;
-    const h = await r.json();
-    const banner = document.getElementById('health-banner');
-    const warnings = [];
-    if (h.disk_pct > 85) warnings.push('Disk ' + h.disk_pct.toFixed(0) + '% full');
-    if (h.cpu_temp_c != null && h.cpu_temp_c > 75) warnings.push('CPU temp ' + h.cpu_temp_c.toFixed(0) + '°C');
-    if (warnings.length) {
-      banner.textContent = '⚠ ' + warnings.join(' · ');
-      banner.style.display = 'block';
-    } else {
-      banner.style.display = 'none';
-    }
-  } catch(e) { /* non-fatal */ }
-}
-
-async function loadPolar() {
-  try {
-    const r = await fetch('/api/polar/current');
-    if (!r.ok) return;
-    const d = await r.json();
-    const set = (id, val, dec) => {
-      const el = document.getElementById(id);
-      if (el) el.textContent = val != null ? Number(val).toFixed(dec) : '—';
-    };
-    set('pv-bsp', d.bsp, 1);
-    set('pv-baseline', d.baseline_bsp, 1);
-    const deltaEl = document.getElementById('pv-delta');
-    const noData = document.getElementById('polar-no-data');
-    if (d.sufficient_data && d.delta != null) {
-      deltaEl.textContent = (d.delta >= 0 ? '+' : '') + d.delta.toFixed(2);
-      deltaEl.className = 'inst-value ' + (d.delta >= 0 ? 'polar-delta-pos' : 'polar-delta-neg');
-      if (noData) noData.style.display = 'none';
-    } else {
-      deltaEl.textContent = '—';
-      deltaEl.className = 'inst-value';
-      if (noData) noData.style.display = d.tws != null ? 'block' : 'none';
-    }
-  } catch(e) {}
-}
-
-loadState();
-setInterval(loadState, 10000);
-setInterval(tick, 1000);
-loadInstruments();
-setInterval(loadInstruments, 2000);
-loadRecentSailors();
-checkSystemHealth();
-setInterval(checkSystemHealth, 30000);
-document.querySelectorAll('.crew-input').forEach(inp => {
-  inp.addEventListener('focus', () => { focusedCrewInput = inp; });
-});
-</script>
-__FOOTER__
-</div>
-</body>
-</html>
-"""
-
-
-# ---------------------------------------------------------------------------
-# History page HTML
-# ---------------------------------------------------------------------------
-
-_HISTORY_HTML = """\
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Session History — J105 Logger</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;font-size:clamp(.85rem,2vw,1rem)}
-__NAV_CSS__
-.page{max-width:600px;margin:0 auto;padding:16px 12px}
-@media(min-width:768px){.page{max-width:860px}}
-@media(min-width:1200px){.page{max-width:1100px}}
-h1{font-size:1.3rem;font-weight:700;color:#7eb8f7}
-.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:12px}
-.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#8892a4;margin-bottom:6px}
-.btn{display:inline-block;padding:10px 18px;border:none;border-radius:8px;
-font-size:.95rem;font-weight:700;cursor:pointer;letter-spacing:.02em}
-.btn-secondary{background:#1e3a5f;color:#7eb8f7;border:1px solid #2563eb}
-.btn-export{padding:8px 12px;border:1px solid #2563eb;border-radius:6px;
-background:#131f35;color:#7eb8f7;font-size:.8rem;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
-.btn-grafana{border-color:#b45309;color:#fbbf24}
-.event-input{background:#0a1628;border:1px solid #2563eb;border-radius:8px;
-padding:10px 12px;color:#e8eaf0;font-size:.95rem;width:100%}
-.filter-btn{padding:7px 14px;border:1px solid #2563eb;border-radius:20px;
-background:#0a1628;color:#7eb8f7;font-size:.8rem;cursor:pointer}
-.filter-btn.active{background:#2563eb;color:#fff}
-.badge{font-size:.7rem;padding:1px 6px;border-radius:3px;margin-left:4px;vertical-align:middle}
-.badge-race{background:#1e3a5f;color:#7eb8f7}
-.badge-practice{background:#14532d;color:#4ade80}
-.badge-debrief{background:#2d1b4e;color:#c084fc}
-.session-name{font-weight:600;font-size:.95rem;margin-bottom:3px}
-.session-meta{font-size:.8rem;color:#8892a4}
-.session-exports{margin-top:8px;display:flex;gap:6px;flex-wrap:wrap}
-.empty{color:#8892a4;text-align:center;padding:24px 0}
-.pager{display:flex;gap:8px;justify-content:center;align-items:center;margin-top:8px}
-.pager-info{color:#8892a4;font-size:.85rem}
-.session-crew{font-size:.78rem;color:#8892a4;margin-top:3px}
-.session-results{font-size:.78rem;color:#8892a4;margin-top:3px}
-.results-row{display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid #0d1a2e}
-.results-row:last-child{border-bottom:none}
-.results-place{min-width:22px;font-size:.82rem;font-weight:700;color:#7eb8f7}
-.results-boat{flex:1;font-size:.82rem}
-.results-flags{display:flex;gap:3px}
-.flag-btn{padding:2px 7px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#8892a4;font-size:.72rem;cursor:pointer}
-.flag-btn.active-dnf{background:#7f1d1d;color:#fca5a5;border-color:#dc2626}
-.flag-btn.active-dns{background:#1c1f2e;color:#818cf8;border-color:#4338ca}
-.btn-del-result{padding:2px 7px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#ef4444;font-size:.72rem;cursor:pointer}
-.boat-picker-input{width:100%;background:#0a1628;border:1px solid #374151;border-radius:6px;padding:6px 9px;color:#e8eaf0;font-size:.82rem}
-.boat-dropdown{position:absolute;top:calc(100% + 2px);left:0;right:0;background:#131f35;border:1px solid #2563eb;border-radius:6px;max-height:190px;overflow-y:auto;z-index:200;box-shadow:0 4px 14px rgba(0,0,0,.6)}
-.boat-option{padding:8px 12px;font-size:.82rem;cursor:pointer;border-bottom:1px solid #1e3a5f}
-.boat-option:last-child{border-bottom:none}
-.boat-option:active{background:#1e3a5f}
-.boat-option-new{color:#4ade80}
-</style>
-</head>
-<body>
-<div class="page">
-__NAV__
-<h1 style="margin-bottom:12px">Session History</h1>
-
-<div class="card">
-  <input id="q" class="event-input" placeholder="Search by name or event…"
-    oninput="scheduleLoad()" style="margin-bottom:10px"/>
-  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
-    <button class="filter-btn active" onclick="setType(this,'')">All</button>
-    <button class="filter-btn" onclick="setType(this,'race')">Race</button>
-    <button class="filter-btn" onclick="setType(this,'practice')">Practice</button>
-    <button class="filter-btn" onclick="setType(this,'debrief')">Debrief</button>
-  </div>
-  <div style="display:flex;gap:8px">
-    <div style="flex:1">
-      <div class="label">From</div>
-      <input id="from-date" type="date" class="event-input" onchange="load()"/>
-    </div>
-    <div style="flex:1">
-      <div class="label">To</div>
-      <input id="to-date" type="date" class="event-input" onchange="load()"/>
-    </div>
-  </div>
-</div>
-
-<div id="results"></div>
-<div id="pager" class="pager"></div>
-
-<script>
-const _GRAFANA_PORT = '__GRAFANA_PORT__';
-const _GRAFANA_UID = '__GRAFANA_UID__';
-const _isDefaultPort = !location.port || location.port === '443' || location.port === '80';
-const GRAFANA_URL = _isDefaultPort
-  ? location.origin + '/grafana'
-  : location.protocol + '//' + location.hostname + ':' + _GRAFANA_PORT;
-const GRAFANA_UID = _GRAFANA_UID;
-let currentType = '';
-let currentOffset = 0;
-const LIMIT = 25;
-let loadTimer = null;
-
-function setType(btn, t) {
-  currentType = t;
-  currentOffset = 0;
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  load();
-}
-
-function scheduleLoad() {
-  clearTimeout(loadTimer);
-  loadTimer = setTimeout(load, 300);
-}
-
-async function load() {
-  const params = new URLSearchParams();
-  const q = document.getElementById('q').value.trim();
-  if (q) params.set('q', q);
-  if (currentType) params.set('type', currentType);
-  const from = document.getElementById('from-date').value;
-  const to = document.getElementById('to-date').value;
-  if (from) params.set('from_date', from);
-  if (to) params.set('to_date', to);
-  params.set('limit', LIMIT);
-  params.set('offset', currentOffset);
-  const r = await fetch('/api/sessions?' + params);
-  const data = await r.json();
-  render(data);
-}
-
-let _tz = 'UTC';
-function fmtTime(iso) {
-  if (!iso) return '—';
-  try {
-    return new Date(iso).toLocaleTimeString('en-US',{timeZone:_tz,hour:'2-digit',minute:'2-digit',hour12:false});
-  } catch(e) { return new Date(iso).toISOString().substring(11,16) + ' UTC'; }
-}
-
-function fmtDur(s) {
-  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), ss = Math.floor(s%60);
-  if (h) return h + ':' + String(m).padStart(2,'0') + ':' + String(ss).padStart(2,'0');
-  return m + ':' + String(ss).padStart(2,'0');
-}
-
-function render(data) {
-  const el = document.getElementById('results');
-  if (!data.sessions.length) {
-    el.innerHTML = '<div class="empty">No sessions found</div>';
-    document.getElementById('pager').innerHTML = '';
-    return;
-  }
-  el.innerHTML = data.sessions.map(s => {
-    const start = fmtTime(s.start_utc);
-    const end = s.end_utc ? fmtTime(s.end_utc) : 'in progress';
-    const dur = (s.end_utc && s.duration_s != null) ? ' (' + fmtDur(Math.round(s.duration_s)) + ')' : '';
-    const typeClass = s.type === 'race' ? 'badge-race' : s.type === 'practice' ? 'badge-practice' : 'badge-debrief';
-    const badge = '<span class="badge ' + typeClass + '">' + s.type.toUpperCase() + '</span>';
-    const parent = s.parent_race_name ? '<div class="session-meta">Debrief of ' + s.parent_race_name + '</div>' : '';
-
-    // --- Toggle buttons: Results, Crew, Sails, Notes, Videos, Transcript ---
-    let toggles = '';
-    if (s.type !== 'debrief') {
-      toggles += '<button class="btn-export" id="hist-results-btn-' + s.id + '" onclick="toggleHistoryResults(' + s.id + ')">Results ▶</button>';
-      toggles += '<button class="btn-export" id="hist-crew-btn-' + s.id + '" onclick="toggleHistoryCrew(' + s.id + ')">Crew ▶</button>';
-      toggles += '<button class="btn-export" id="hist-sails-btn-' + s.id + '" onclick="toggleHistorySails(' + s.id + ')">Sails ▶</button>';
-      toggles += '<button class="btn-export" id="hist-notes-btn-' + s.id + '" onclick="toggleHistoryNotes(' + s.id + ')">Notes ▶</button>';
-      toggles += '<button class="btn-export" id="hist-videos-btn-' + s.id + '" onclick="toggleHistoryVideos(' + s.id + ')">Videos ▶</button>';
-    }
-    if (s.has_audio && s.audio_session_id) {
-      toggles += '<button class="btn-export" id="hist-transcript-btn-' + s.id + '" onclick="toggleHistoryTranscript(' + s.id + ',' + s.audio_session_id + ')">Transcript ▶</button>';
-    }
-    const togglesHtml = toggles ? '<div class="session-exports">' + toggles + '</div>' : '';
-
-    // --- Download links ---
-    let downloads = '';
-    if (s.type !== 'debrief' && s.end_utc) {
-      const from = new Date(s.start_utc).getTime();
-      const to = new Date(s.end_utc).getTime();
-      downloads += '<a class="btn-export" href="/api/races/' + s.id + '/export.csv">&#8595; CSV</a>';
-      downloads += '<a class="btn-export" href="/api/races/' + s.id + '/export.gpx">&#8595; GPX</a>';
-      downloads += '<a class="btn-export btn-grafana" href="' + GRAFANA_URL + '/d/' + GRAFANA_UID + '/sailing-data?from=' + from + '&to=' + to + '&orgId=1&refresh=" target="_blank">&#128202; Grafana</a>';
-    }
-    if (s.has_audio && s.audio_session_id) {
-      downloads += '<a class="btn-export" href="/api/audio/' + s.audio_session_id + '/download">&#8595; WAV</a>';
-    }
-    const downloadsHtml = downloads ? '<div class="session-exports">' + downloads + '</div>' : '';
-
-    // --- Expandable panels (order matches toggle buttons) ---
-    const resultsPanel = s.type !== 'debrief'
-      ? '<div class="session-results" id="hist-results-' + s.id + '" style="display:none"></div>'
-      : '';
-    const crewPanel = s.type !== 'debrief'
-      ? '<div class="session-results" id="hist-crew-' + s.id + '" style="display:none"></div>'
-      : '';
-    const sailsPanel = s.type !== 'debrief'
-      ? '<div class="session-results" id="hist-sails-' + s.id + '" style="display:none"></div>'
-      : '';
-    const notesPanel = s.type !== 'debrief'
-      ? '<div class="session-results" id="hist-notes-' + s.id + '" style="display:none"></div>'
-      : '';
-    const videosPanel = s.type !== 'debrief'
-      ? '<div class="session-results" id="hist-videos-' + s.id + '" data-start-utc="' + s.start_utc + '" style="display:none"></div>'
-      : '';
-    const transcriptPanel = s.has_audio && s.audio_session_id
-      ? '<div class="session-results" id="hist-transcript-' + s.id + '" style="display:none"></div>'
-      : '';
-
-    // --- Audio playback at the bottom ---
-    const audioHtml = (s.has_audio && s.audio_session_id)
-      ? '<div style="margin-top:6px"><audio controls style="width:100%">'
-        + '<source src="/api/audio/' + s.audio_session_id + '/stream" type="audio/wav">'
-        + '</audio></div>'
-      : '';
-
-    return '<div class="card"><div class="session-name">' + s.name + badge + '</div>'
-      + '<div class="session-meta">' + s.date + ' &nbsp;·&nbsp; ' + start + ' → ' + end + dur + '</div>'
-      + parent
-      + togglesHtml + resultsPanel + crewPanel + sailsPanel + notesPanel + videosPanel + transcriptPanel
-      + downloadsHtml + audioHtml + '</div>';
-  }).join('');
-
-  const total = data.total;
-  const page = Math.floor(currentOffset / LIMIT);
-  const totalPages = Math.ceil(total / LIMIT);
-  const pager = document.getElementById('pager');
-  if (totalPages <= 1) {
-    pager.innerHTML = '<span class="pager-info">' + total + ' session' + (total !== 1 ? 's' : '') + '</span>';
-  } else {
-    pager.innerHTML =
-      '<button class="btn btn-secondary" style="padding:8px 14px" onclick="go(' + (page-1) + ')"' + (page===0?' disabled':'') + '>&#8592; Prev</button>'
-      + '<span class="pager-info">Page ' + (page+1) + ' of ' + totalPages + ' (' + total + ' total)</span>'
-      + '<button class="btn btn-secondary" style="padding:8px 14px" onclick="go(' + (page+1) + ')"' + (page>=totalPages-1?' disabled':'') + '>Next &#8594;</button>';
-  }
-}
-
-function go(page) {
-  currentOffset = page * LIMIT;
-  load();
-  window.scrollTo(0, 0);
-}
-
-// ---- History page results (editable) ----
-const _histPickerBoats = {};
-
-function _renderHistResultRow(res, raceId) {
-  const name = res.sail_number + (res.boat_name ? ' — ' + res.boat_name : '');
-  const dnfCls = res.dnf ? ' active-dnf' : '';
-  const dnsCls = res.dns ? ' active-dns' : '';
-  return '<div class="results-row">'
-    + '<span class="results-place">' + res.place + '.</span>'
-    + '<span class="results-boat">' + name + '</span>'
-    + '<div class="results-flags">'
-    + '<button class="flag-btn' + dnfCls + '" onmousedown="event.preventDefault()" onclick="_histToggleFlag(' + raceId + ',' + res.place + ',' + res.boat_id + ',' + (!res.dnf) + ',' + res.dns + ')">DNF</button>'
-    + '<button class="flag-btn' + dnsCls + '" onmousedown="event.preventDefault()" onclick="_histToggleFlag(' + raceId + ',' + res.place + ',' + res.boat_id + ',' + res.dnf + ',' + (!res.dns) + ')">DNS</button>'
-    + '</div>'
-    + '<button class="btn-del-result" onmousedown="event.preventDefault()" onclick="_histDeleteResult(' + raceId + ',' + res.id + ')">✕</button>'
-    + '</div>';
-}
-
-async function toggleHistoryResults(sessionId) {
-  const el = document.getElementById('hist-results-' + sessionId);
-  const btn = document.getElementById('hist-results-btn-' + sessionId);
-  if (!el) return;
-  if (el.style.display !== 'none') {
-    el.style.display = 'none';
-    if (btn) btn.textContent = 'Results ▶';
-    return;
-  }
-  el.innerHTML = _renderHistResultsPanel(sessionId);
-  await _refreshHistResults(sessionId);
-  el.style.display = '';
-  if (btn) btn.textContent = 'Results ▼';
-}
-
-function _renderHistResultsPanel(raceId) {
-  return '<div id="results-list-' + raceId + '"></div>'
-    + '<div class="results-row" style="border-bottom:none;margin-top:4px">'
-    + '<span class="results-place" id="add-place-' + raceId + '">1.</span>'
-    + '<div style="position:relative;flex:1">'
-    + '<input class="boat-picker-input" id="picker-input-' + raceId + '" placeholder="Search boat…" autocomplete="off"'
-    + ' oninput="_histFilterBoats(' + raceId + ',this.value)"'
-    + ' onfocus="_histOpenPicker(' + raceId + ')"'
-    + ' onblur="_histClosePicker(' + raceId + ')"/>'
-    + '<div class="boat-dropdown" id="picker-dropdown-' + raceId + '" style="display:none"></div>'
-    + '</div></div>';
-}
-
-async function _histOpenPicker(raceId) {
-  const r = await fetch('/api/boats?exclude_race=' + raceId);
-  _histPickerBoats[raceId] = await r.json();
-  const input = document.getElementById('picker-input-' + raceId);
-  _histShowBoatDropdown(raceId, input ? input.value : '');
-  const dd = document.getElementById('picker-dropdown-' + raceId);
-  if (dd) dd.style.display = '';
-}
-
-function _histClosePicker(raceId) {
-  setTimeout(() => {
-    const dd = document.getElementById('picker-dropdown-' + raceId);
-    if (dd) dd.style.display = 'none';
-  }, 200);
-}
-
-function _histFilterBoats(raceId, searchText) {
-  if (_histPickerBoats[raceId]) {
-    _histShowBoatDropdown(raceId, searchText);
-    const dd = document.getElementById('picker-dropdown-' + raceId);
-    if (dd) dd.style.display = '';
-  }
-}
-
-function _histShowBoatDropdown(raceId, searchText) {
-  const boats = _histPickerBoats[raceId] || [];
-  const q = searchText.trim().toLowerCase();
-  const filtered = q
-    ? boats.filter(b => b.sail_number.toLowerCase().includes(q) || (b.name||'').toLowerCase().includes(q))
-    : boats;
-  let html = filtered.slice(0,15).map(b => {
-    const label = b.name ? b.sail_number + ' — ' + b.name : b.sail_number;
-    const esc = label.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    return '<div class="boat-option" onmousedown="event.preventDefault()" onclick="_histSelectBoat(' + raceId + ',' + b.id + ')">' + esc + '</div>';
-  }).join('');
-  const exactMatch = filtered.some(b => b.sail_number.toLowerCase() === searchText.trim().toLowerCase());
-  if (searchText.trim() && !exactMatch) {
-    const esc = searchText.trim().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    const js = searchText.trim().replace(/\\\\/g,'\\\\\\\\').replace(/'/g,"\\\\'");
-    html += '<div class="boat-option boat-option-new" onmousedown="event.preventDefault()" onclick="_histSelectNewBoat(' + raceId + ',\\'' + js + '\\')">+ Add &ldquo;' + esc + '&rdquo;</div>';
-  }
-  if (!html) html = '<div class="boat-option" style="color:#8892a4;cursor:default">No boats found</div>';
-  const dd = document.getElementById('picker-dropdown-' + raceId);
-  if (dd) dd.innerHTML = html;
-}
-
-async function _histSelectBoat(raceId, boatId) {
-  const listEl = document.getElementById('results-list-' + raceId);
-  const nextPlace = listEl ? listEl.children.length + 1 : 1;
-  await fetch('/api/sessions/' + raceId + '/results', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({place: nextPlace, boat_id: boatId})
-  });
-  const input = document.getElementById('picker-input-' + raceId);
-  if (input) input.value = '';
-  const dd = document.getElementById('picker-dropdown-' + raceId);
-  if (dd) dd.style.display = 'none';
-  delete _histPickerBoats[raceId];
-  await _refreshHistResults(raceId);
-  _histOpenPicker(raceId);
-}
-
-async function _histSelectNewBoat(raceId, sailNumber) {
-  const listEl = document.getElementById('results-list-' + raceId);
-  const nextPlace = listEl ? listEl.children.length + 1 : 1;
-  await fetch('/api/sessions/' + raceId + '/results', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({place: nextPlace, sail_number: sailNumber})
-  });
-  const input = document.getElementById('picker-input-' + raceId);
-  if (input) input.value = '';
-  const dd = document.getElementById('picker-dropdown-' + raceId);
-  if (dd) dd.style.display = 'none';
-  delete _histPickerBoats[raceId];
-  await _refreshHistResults(raceId);
-  _histOpenPicker(raceId);
-}
-
-async function _histToggleFlag(raceId, place, boatId, dnf, dns) {
-  await fetch('/api/sessions/' + raceId + '/results', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({place, boat_id: boatId, dnf, dns})
-  });
-  await _refreshHistResults(raceId);
-}
-
-async function _histDeleteResult(raceId, resultId) {
-  await fetch('/api/results/' + resultId, {method:'DELETE'});
-  delete _histPickerBoats[raceId];
-  await _refreshHistResults(raceId);
-}
-
-async function _refreshHistResults(raceId) {
-  const r = await fetch('/api/sessions/' + raceId + '/results');
-  const results = await r.json();
-  const listEl = document.getElementById('results-list-' + raceId);
-  if (listEl) listEl.innerHTML = results.map(r => _renderHistResultRow(r, raceId)).join('');
-  const addPlace = document.getElementById('add-place-' + raceId);
-  if (addPlace) addPlace.textContent = (results.length + 1) + '.';
-}
-
-function renderHistoryNote(n, sessionId) {
-  const t = new Date(n.ts).toISOString().substring(11,19) + ' UTC';
-  let content = '';
-  if (n.note_type === 'photo' && n.photo_path) {
-    const src = '/notes/' + n.photo_path;
-    content = '<img src="' + src + '" loading="lazy" style="max-width:80px;max-height:60px;border-radius:4px;'
-      + 'cursor:pointer;vertical-align:middle;margin-top:2px" onclick="window.open(this.dataset.src)" data-src="' + src + '" />';
-  } else if (n.note_type === 'settings' && n.body) {
-    try {
-      const obj = JSON.parse(n.body);
-      content = Object.entries(obj).map(([k,v]) =>
-        '<span style="color:#8892a4">' + k.replace(/&/g,'&amp;') + ':</span> ' + String(v).replace(/&/g,'&amp;')
-      ).join(' &nbsp;·&nbsp; ');
-    } catch { content = n.body; }
-  } else {
-    content = (n.body||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  }
-  const delBtn = '<button onclick="deleteHistoryNote(' + n.id + ',' + sessionId + ')" '
-    + 'style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:.8rem;'
-    + 'padding:0 4px;float:right" title="Delete">✕</button>';
-  return '<div style="padding:4px 0;border-bottom:1px solid #0d1a2e;font-size:.82rem;overflow:hidden">'
-    + delBtn
-    + '<span style="color:#8892a4;margin-right:6px">' + t + '</span>'
-    + content + '</div>';
-}
-
-async function deleteHistoryNote(noteId, sessionId) {
-  await fetch('/api/notes/' + noteId, {method:'DELETE'});
-  await _refreshHistoryNotes(sessionId);
-}
-
-async function _refreshHistoryNotes(sessionId) {
-  const el = document.getElementById('hist-notes-' + sessionId);
-  if (!el) return;
-  const r = await fetch('/api/sessions/' + sessionId + '/notes');
-  const notes = await r.json();
-  el.innerHTML = notes.length
-    ? notes.map(n => renderHistoryNote(n, sessionId)).join('')
-    : '<span style="color:#8892a4;font-size:.8rem">No notes</span>';
-}
-
-async function toggleHistoryCrew(sessionId) {
-  const el = document.getElementById('hist-crew-' + sessionId);
-  const btn = document.getElementById('hist-crew-btn-' + sessionId);
-  if (!el) return;
-  if (el.style.display !== 'none') {
-    el.style.display = 'none';
-    if (btn) btn.textContent = 'Crew ▶';
-    return;
-  }
-  el.innerHTML = '<span style="color:#8892a4;font-size:.8rem">Loading…</span>';
-  const r = await fetch('/api/races/' + sessionId + '/crew');
-  const data = await r.json();
-  const crew = data.crew || [];
-  if (crew.length) {
-    el.innerHTML = '<div style="font-size:.82rem">' + crew.map(c =>
-      '<span style="color:#8892a4">' + c.position.charAt(0).toUpperCase() + c.position.slice(1) + ':</span> ' + c.sailor
-    ).join(' &nbsp;·&nbsp; ') + '</div>';
-  } else {
-    el.innerHTML = '<span style="color:#8892a4;font-size:.8rem">No crew recorded</span>';
-  }
-  el.style.display = '';
-  if (btn) btn.textContent = 'Crew ▼';
-}
-
-async function toggleHistoryNotes(sessionId) {
-  const el = document.getElementById('hist-notes-' + sessionId);
-  const btn = document.getElementById('hist-notes-btn-' + sessionId);
-  if (!el) return;
-  if (el.style.display !== 'none') {
-    el.style.display = 'none';
-    if (btn) btn.textContent = 'Notes ▶';
-    return;
-  }
-  await _refreshHistoryNotes(sessionId);
-  el.style.display = '';
-  if (btn) btn.textContent = 'Notes ▼';
-}
-
-async function toggleHistoryVideos(sessionId) {
-  const el = document.getElementById('hist-videos-' + sessionId);
-  const btn = document.getElementById('hist-videos-btn-' + sessionId);
-  if (!el) return;
-  if (el.style.display !== 'none') {
-    el.style.display = 'none';
-    if (btn) btn.textContent = '🎬 Videos ▶';
-    return;
-  }
-  await _loadVideos(sessionId, el);
-  el.style.display = '';
-  if (btn) btn.textContent = '🎬 Videos ▼';
-}
-
-// Shared video helpers (same functions used by home page are available here
-// since _loadVideos, submitAddVideo, deleteVideo are defined in the main page
-// JS — the history page re-defines them inline for self-containedness).
-async function _loadVideos(sessionId, el) {
-  if (!el) el = document.getElementById('hist-videos-' + sessionId);
-  if (!el) return;
-  const r = await fetch('/api/sessions/' + sessionId + '/videos');
-  const videos = await r.json();
-  let html = '';
-  if (videos.length) {
-    html += '<div style="margin-bottom:4px">';
-    html += videos.map(v => {
-      const lbl = v.label ? '<b>' + v.label.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</b> — ' : '';
-      const ttl = (v.title || v.youtube_url).replace(/&/g,'&amp;').replace(/</g,'&lt;');
-      const yt = '<a href="' + v.youtube_url.replace(/&/g,'&amp;') + '" target="_blank" style="color:#7eb8f7">' + ttl.substring(0,50) + '</a>';
-      const del = '<button onclick="deleteHistVideo(' + v.id + ',' + sessionId + ')" style="color:#ef4444;background:none;border:none;cursor:pointer;font-size:.8rem;margin-left:8px">✕</button>';
-      return '<div style="font-size:.78rem;color:#8892a4;margin-bottom:2px">' + lbl + yt + del + '</div>';
-    }).join('');
-    html += '</div>';
-  } else {
-    html += '<div style="font-size:.78rem;color:#8892a4;margin-bottom:4px">No videos linked yet</div>';
-  }
-  html += _histVideoAddForm(sessionId);
-  el.innerHTML = html;
-}
-
-function _histVideoAddForm(sessionId) {
-  const container = document.getElementById('hist-videos-' + sessionId);
-  const startUtc = container ? container.dataset.startUtc : '';
-  const defaultSyncUtc = startUtc ? new Date(startUtc).toISOString().substring(0, 19) : '';
-  return '<div id="hist-video-add-form-' + sessionId + '" style="display:none;margin-top:4px">'
-    + '<input id="hist-video-url-' + sessionId + '" class="field" placeholder="YouTube URL" style="margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
-    + '<input id="hist-video-label-' + sessionId + '" class="field" placeholder="Label (e.g. Bow cam)" style="margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
-    + '<div style="font-size:.72rem;color:#8892a4;margin-bottom:2px">Sync calibration (optional) — UTC time + video position at the same moment:</div>'
-    + '<input id="hist-video-sync-utc-' + sessionId + '" class="field" type="datetime-local" step="1" placeholder="UTC time at sync point" value="' + defaultSyncUtc + '" style="margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
-    + '<input id="hist-video-sync-pos-' + sessionId + '" class="field" placeholder="Video position (mm:ss, optional)" style="margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
-    + '<button class="btn-export" style="background:#2563eb;color:#fff;border-color:#2563eb" onclick="submitHistAddVideo(' + sessionId + ')">Add Video</button>'
-    + ' <button onclick="document.getElementById(\\'hist-video-add-form-' + sessionId + '\\').style.display=\\'none\\'" style="background:none;border:none;color:#8892a4;cursor:pointer;font-size:.82rem">Cancel</button>'
-    + '</div>'
-    + '<button onclick="document.getElementById(\\'hist-video-add-form-' + sessionId + '\\').style.display=\\'\\'" style="font-size:.78rem;color:#7eb8f7;background:none;border:none;cursor:pointer;padding:2px 0">+ Add Video</button>';
-}
-
-function _parseVideoPos(str) {
-  str = str.trim();
-  const parts = str.split(':').map(Number);
-  if (parts.some(isNaN)) return null;
-  if (parts.length === 1) return parts[0];
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  return null;
-}
-
-async function submitHistAddVideo(sessionId) {
-  const url = document.getElementById('hist-video-url-' + sessionId).value.trim();
-  const label = document.getElementById('hist-video-label-' + sessionId).value.trim();
-  const syncUtcVal = document.getElementById('hist-video-sync-utc-' + sessionId).value;
-  const syncPosVal = document.getElementById('hist-video-sync-pos-' + sessionId).value.trim();
-  if (!url) { alert('YouTube URL is required'); return; }
-  // Sync fields are optional — default to now / 0s if not provided.
-  const syncUtc = syncUtcVal
-    ? (syncUtcVal.includes('Z') || syncUtcVal.includes('+') ? syncUtcVal : syncUtcVal + 'Z')
-    : new Date().toISOString();
-  const syncOffsetS = syncPosVal ? _parseVideoPos(syncPosVal) : 0;
-  if (syncOffsetS === null) { alert('Video position must be mm:ss or seconds'); return; }
-  const btn = document.querySelector('#hist-video-add-form-' + sessionId + ' .btn-export');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-  try {
-    const resp = await fetch('/api/sessions/' + sessionId + '/videos', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({youtube_url: url, label, sync_utc: syncUtc, sync_offset_s: syncOffsetS})
-    });
-    if (!resp.ok) { alert('Failed to add video: ' + resp.status); return; }
-    const el = document.getElementById('hist-videos-' + sessionId);
-    await _loadVideos(sessionId, el);
-  } catch (e) {
-    alert('Error saving video: ' + e.message);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Add Video'; }
-  }
-}
-
-async function deleteHistVideo(videoId, sessionId) {
-  if (!confirm('Remove this video link?')) return;
-  await fetch('/api/videos/' + videoId, {method: 'DELETE'});
-  const el = document.getElementById('hist-videos-' + sessionId);
-  await _loadVideos(sessionId, el);
-}
-
-async function toggleHistorySails(sessionId) {
-  const el = document.getElementById('hist-sails-' + sessionId);
-  const btn = document.getElementById('hist-sails-btn-' + sessionId);
-  if (!el) return;
-  if (el.style.display !== 'none') {
-    el.style.display = 'none';
-    if (btn) btn.textContent = '⛵ Sails ▶';
-    return;
-  }
-  await _loadSailsForHistory(sessionId, el);
-  el.style.display = '';
-  if (btn) btn.textContent = '⛵ Sails ▼';
-}
-
-async function _loadSailsForHistory(sessionId, el) {
-  if (!el) el = document.getElementById('hist-sails-' + sessionId);
-  if (!el) return;
-  const [sailsResp, inventoryResp] = await Promise.all([
-    fetch('/api/sessions/' + sessionId + '/sails'),
-    fetch('/api/sails'),
-  ]);
-  const current = await sailsResp.json();
-  const inventory = await inventoryResp.json();
-  const slots = ['main', 'jib', 'spinnaker'];
-  let html = '<div style="font-size:.78rem">';
-  slots.forEach(slot => {
-    const opts = (inventory[slot] || []).map(s =>
-      '<option value="' + s.id + '"' + (current[slot] && current[slot].id === s.id ? ' selected' : '') + '>'
-      + s.name.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</option>'
-    ).join('');
-    html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
-      + '<span style="color:#8892a4;width:68px;flex-shrink:0">' + slot.charAt(0).toUpperCase() + slot.slice(1) + '</span>'
-      + '<select id="hist-sail-select-' + slot + '-' + sessionId + '" style="flex:1;background:#1a2840;color:#e0e8f0;border:1px solid #2563eb;border-radius:4px;padding:3px 6px;font-size:.78rem">'
-      + '<option value="">— none —</option>' + opts
-      + '</select></div>';
-  });
-  html += '<button class="btn-export" style="background:#2563eb;color:#fff;border-color:#2563eb;font-size:.78rem" onclick="saveHistSails(' + sessionId + ')">Save Sails</button>';
-  html += '</div>';
-  el.innerHTML = html;
-}
-
-async function saveHistSails(sessionId) {
-  const slots = ['main', 'jib', 'spinnaker'];
-  const body = {};
-  slots.forEach(slot => {
-    const sel = document.getElementById('hist-sail-select-' + slot + '-' + sessionId);
-    body[slot + '_id'] = sel && sel.value ? parseInt(sel.value, 10) : null;
-  });
-  const r = await fetch('/api/sessions/' + sessionId + '/sails', {
-    method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
-  });
-  if (!r.ok) { alert('Failed to save sails'); return; }
-  await _loadSailsForHistory(sessionId, null);
-}
-
-async function toggleHistoryTranscript(sessionId, audioSessionId) {
-  const el = document.getElementById('hist-transcript-' + sessionId);
-  const btn = document.getElementById('hist-transcript-btn-' + sessionId);
-  if (!el) return;
-  if (el.style.display !== 'none') {
-    el.style.display = 'none';
-    if (btn) btn.textContent = '📝 Transcript ▶';
-    return;
-  }
-  el.style.display = '';
-  if (btn) btn.textContent = '📝 Transcript ▼';
-  await _loadTranscript(sessionId, audioSessionId, el);
-}
-
-async function _loadTranscript(sessionId, audioSessionId, el) {
-  if (!el) el = document.getElementById('hist-transcript-' + sessionId);
-  if (!el) return;
-  el.innerHTML = '<span style="color:#8892a4;font-size:.8rem">Loading…</span>';
-  const r = await fetch('/api/audio/' + audioSessionId + '/transcript');
-  if (r.status === 404) {
-    // No job yet — offer a button to start transcription
-    el.innerHTML = '<div style="font-size:.8rem;color:#8892a4">No transcript yet. '
-      + '<button class="btn-export" style="font-size:.75rem" onclick="startTranscript(' + sessionId + ',' + audioSessionId + ')">▶ Transcribe</button></div>';
-    return;
-  }
-  const t = await r.json();
-  if (t.status === 'pending' || t.status === 'running') {
-    el.innerHTML = '<span style="color:#facc15;font-size:.8rem">⏳ Transcription in progress…</span>';
-    setTimeout(() => _loadTranscript(sessionId, audioSessionId, el), 3000);
-    return;
-  }
-  if (t.status === 'error') {
-    el.innerHTML = '<span style="color:#f87171;font-size:.8rem">⚠ Error: ' + (t.error_msg || 'unknown') + '</span>';
-    return;
-  }
-  // status === 'done'
-  if (t.segments && t.segments.length > 0) {
-    // merge consecutive same-speaker segments for readability
-    const blocks = [];
-    for (const seg of t.segments) {
-      const last = blocks[blocks.length - 1];
-      if (last && last.speaker === seg.speaker) {
-        last.text += ' ' + seg.text; last.end = seg.end;
-      } else { blocks.push({...seg}); }
-    }
-    const speakers = [...new Set(blocks.map(b => b.speaker))];
-    const palette = ['#7dd3fc','#86efac','#fde68a','#fca5a5','#c4b5fd','#f9a8d4'];
-    const color = s => palette[speakers.indexOf(s) % palette.length];
-    const fmt = s => { const m=Math.floor(s/60); return m+':'+String(Math.floor(s%60)).padStart(2,'0'); };
-    const html = blocks.map(b =>
-      `<div style="margin-bottom:8px">
-         <span style="color:${color(b.speaker)};font-weight:600;font-size:.75rem">${b.speaker}</span>
-         <span style="color:#8892a4;font-size:.7rem;margin-left:4px">[${fmt(b.start)}]</span>
-         <div style="color:#c4cdd8;font-size:.8rem;margin-top:2px">${b.text.trim().replace(/</g,'&lt;')}</div>
-       </div>`
-    ).join('');
-    el.innerHTML = '<div style="max-height:300px;overflow-y:auto;background:#0d1929;border-radius:6px;padding:8px">' + html + '</div>';
-  } else {
-    // legacy: plain text fallback
-    const text = t.text ? t.text.replace(/</g,'&lt;') : '(empty)';
-    el.innerHTML = '<div style="font-size:.8rem;color:#c4cdd8;white-space:pre-wrap;max-height:200px;overflow-y:auto;background:#0d1929;border-radius:6px;padding:8px">' + text + '</div>';
-  }
-}
-
-async function startTranscript(sessionId, audioSessionId) {
-  const r = await fetch('/api/audio/' + audioSessionId + '/transcribe', {method: 'POST'});
-  if (!r.ok) { alert('Failed to start transcription'); return; }
-  const el = document.getElementById('hist-transcript-' + sessionId);
-  await _loadTranscript(sessionId, audioSessionId, el);
-}
-
-// Default: last 30 days
-const now = new Date();
-const past = new Date(now - 30 * 86400000);
-document.getElementById('to-date').value = now.toISOString().substring(0,10);
-document.getElementById('from-date').value = past.toISOString().substring(0,10);
-fetch('/api/state').then(r=>r.json()).then(s=>{if(s.timezone)_tz=s.timezone;}).catch(()=>{}).finally(()=>load());
-</script>
-__FOOTER__
-</div>
-</body>
-</html>
-"""
-
-
-# ---------------------------------------------------------------------------
-# Admin — boat registry page
-# ---------------------------------------------------------------------------
-
-_ADMIN_BOATS_HTML = """\
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Boat Registry — J105 Logger</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;font-size:clamp(.85rem,2vw,1rem)}
-__NAV_CSS__
-.page{max-width:640px;margin:0 auto;padding:16px 12px}
-@media(min-width:768px){.page{max-width:860px}}
-@media(min-width:1200px){.page{max-width:1100px}}
-h1{font-size:1.3rem;font-weight:700;color:#7eb8f7}
-.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:12px}
-.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#8892a4;margin-bottom:8px}
-.btn-export{padding:8px 12px;border:1px solid #2563eb;border-radius:6px;
-background:#131f35;color:#7eb8f7;font-size:.8rem;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
-.field{background:#0a1628;border:1px solid #2563eb;border-radius:6px;
-padding:9px 12px;color:#e8eaf0;font-size:.9rem;width:100%}
-.btn-add{padding:9px 16px;border:none;border-radius:6px;background:#2563eb;
-color:#fff;font-weight:700;cursor:pointer;font-size:.9rem}
-.btn-sm{padding:8px 12px;border:1px solid #374151;border-radius:4px;
-background:#0a1628;font-size:.78rem;cursor:pointer;min-height:36px}
-.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-.btn-edit{color:#7eb8f7;border-color:#2563eb}
-.btn-del{color:#ef4444;border-color:#7f1d1d}
-.btn-save{color:#4ade80;border-color:#16a34a}
-.btn-cancel{color:#8892a4}
-table{width:100%;border-collapse:collapse;font-size:.87rem}
-th{text-align:left;color:#8892a4;font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;
-padding:6px 8px;border-bottom:1px solid #1e3a5f}
-td{padding:7px 8px;border-bottom:1px solid #0d1a2e;vertical-align:middle}
-tr:last-child td{border-bottom:none}
-.empty{color:#8892a4;text-align:center;padding:20px 0}
-</style>
-</head>
-<body>
-<div class="page">
-__NAV__
-<h1 style="margin-bottom:12px">Boat Registry</h1>
-
-<div class="card">
-  <div class="label">Add Boat</div>
-  <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:10px">
-    <input id="new-sail" class="field" placeholder="Sail number *" maxlength="30"/>
-    <input id="new-name" class="field" placeholder="Boat name" maxlength="40"/>
-    <input id="new-class" class="field" placeholder="Class" maxlength="20"/>
-  </div>
-  <button class="btn-add" onclick="addBoat()">+ Add Boat</button>
-</div>
-
-<div class="card">
-  <div class="table-wrap" id="boat-table-wrap">Loading…</div>
-</div>
-
-<script>
-async function loadBoats() {
-  const wrap = document.getElementById('boat-table-wrap');
-  try {
-    const r = await fetch('/api/boats');
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const boats = await r.json();
-    if (!boats.length) {
-      wrap.innerHTML = '<div class="empty">No boats yet</div>';
-      return;
-    }
-    let html = '<table><thead><tr><th>Sail #</th><th>Name</th><th>Class</th><th>Last used</th><th></th></tr></thead><tbody>';
-    boats.forEach(b => {
-      const lu = b.last_used ? new Date(b.last_used).toLocaleDateString() : '—';
-      const safeSail = (b.sail_number||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      const safeName = (b.name||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      const safeCls  = (b.class||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      // Store values in data attributes — avoids embedding strings in onclick
-      // which caused a JS SyntaxError via Python triple-quote escaping (#36).
-      html += '<tr id="boat-row-' + b.id + '" data-sail="' + safeSail + '" data-name="' + safeName + '" data-cls="' + safeCls + '">'
-        + '<td>' + safeSail + '</td>'
-        + '<td>' + (safeName||'<span style="color:#8892a4">—</span>') + '</td>'
-        + '<td>' + (safeCls||'<span style="color:#8892a4">—</span>') + '</td>'
-        + '<td>' + lu + '</td>'
-        + '<td style="white-space:nowrap;display:flex;gap:4px">'
-        + '<button class="btn-sm btn-edit" onclick="editBoat(' + b.id + ')">Edit</button>'
-        + '<button class="btn-sm btn-del" onclick="deleteBoat(' + b.id + ')">Delete</button>'
-        + '</td></tr>';
-    });
-    html += '</tbody></table>';
-    wrap.innerHTML = html;
-  } catch(e) {
-    wrap.innerHTML = '<div class="empty" style="color:#ef4444">Failed to load boats: ' + e.message + '</div>';
-  }
-}
-
-async function addBoat() {
-  const sail = document.getElementById('new-sail').value.trim();
-  if (!sail) { alert('Sail number is required'); return; }
-  const name = document.getElementById('new-name').value.trim() || null;
-  const cls  = document.getElementById('new-class').value.trim() || null;
-  const resp = await fetch('/api/boats', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({sail_number: sail, name, class_name: cls})
-  });
-  if (!resp.ok) { alert('Failed to add boat'); return; }
-  document.getElementById('new-sail').value = '';
-  document.getElementById('new-name').value = '';
-  document.getElementById('new-class').value = '';
-  await loadBoats();
-}
-
-function editBoat(id) {
-  const row = document.getElementById('boat-row-' + id);
-  // Read values from data attributes set during render — safe, no escaping needed.
-  const sail = row.dataset.sail || '';
-  const name = row.dataset.name || '';
-  const cls  = row.dataset.cls  || '';
-  const eSail = sail.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-  const eName = name.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-  const eCls  = cls.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-  row.innerHTML = ''
-    + '<td><input class="field" id="edit-sail-' + id + '" value="' + eSail + '" style="width:90px"/></td>'
-    + '<td><input class="field" id="edit-name-' + id + '" value="' + eName + '" style="width:120px"/></td>'
-    + '<td><input class="field" id="edit-class-' + id + '" value="' + eCls + '" style="width:80px"/></td>'
-    + '<td></td>'
-    + '<td style="white-space:nowrap;display:flex;gap:4px">'
-    + '<button class="btn-sm btn-save" onclick="saveBoat(' + id + ')">Save</button>'
-    + '<button class="btn-sm btn-cancel" onclick="loadBoats()">Cancel</button>'
-    + '</td>';
-}
-
-async function saveBoat(id) {
-  const sail  = document.getElementById('edit-sail-' + id).value.trim();
-  if (!sail) { alert('Sail number is required'); return; }
-  const name  = document.getElementById('edit-name-' + id).value.trim() || null;
-  const cls   = document.getElementById('edit-class-' + id).value.trim() || null;
-  await fetch('/api/boats/' + id, {
-    method:'PATCH',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({sail_number: sail, name, class_name: cls})
-  });
-  await loadBoats();
-}
-
-async function deleteBoat(id) {
-  if (!confirm('Delete this boat?')) return;
-  await fetch('/api/boats/' + id, {method:'DELETE'});
-  await loadBoats();
-}
-
-loadBoats();
-</script>
-__FOOTER__
-</div>
-</body>
-</html>
-"""
-
-
-# ---------------------------------------------------------------------------
-# Request/Response models
-# ---------------------------------------------------------------------------
-
-
-POSITIONS: tuple[str, ...] = ("helm", "main", "pit", "bow", "tactician", "guest")
-
-
-class EventRequest(BaseModel):
-    event_name: str
-
-
-class CrewEntry(BaseModel):
-    position: str
-    sailor: str
-
-
-class BoatCreate(BaseModel):
-    sail_number: str
-    name: str | None = None
-    class_name: str | None = None
-
-
-class BoatUpdate(BaseModel):
-    sail_number: str | None = None
-    name: str | None = None
-    class_name: str | None = None
-
-
-class RaceResultEntry(BaseModel):
-    place: int
-    boat_id: int | None = None
-    sail_number: str | None = None
-    finish_time: str | None = None
-    dnf: bool = False
-    dns: bool = False
-    notes: str | None = None
-
-
-class NoteCreate(BaseModel):
-    body: str | None = None
-    note_type: str = "text"
-    ts: str | None = None  # UTC ISO 8601; defaults to server time if absent
-
-
-class VideoCreate(BaseModel):
-    youtube_url: str
-    label: str = ""
-    # Sync point: a known UTC time and the corresponding video player position.
-    # offset = logger_utc_s - video_position_s
-    # The UI may send either the raw offset or derive it via the calibration
-    # helper (sync_utc + sync_video_s).
-    sync_utc: str  # UTC ISO 8601
-    sync_offset_s: float = 0.0  # seconds; can also be supplied by calibration
-
-
-class VideoUpdate(BaseModel):
-    label: str | None = None
-    sync_utc: str | None = None
-    sync_offset_s: float | None = None
-
-
-class SailCreate(BaseModel):
-    type: str  # 'main' | 'jib' | 'spinnaker'
-    name: str
-    notes: str | None = None
-
-
-class SailUpdate(BaseModel):
-    name: str | None = None
-    notes: str | None = None
-    active: bool | None = None
-
-
-class RaceSailsSet(BaseModel):
-    main_id: int | None = None
-    jib_id: int | None = None
-    spinnaker_id: int | None = None
-
-
-# ---------------------------------------------------------------------------
-# App factory
-# ---------------------------------------------------------------------------
-
-_LOGIN_HTML = """\
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>J105 Logger — Sign In</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;
-padding:16px;max-width:480px;margin:0 auto}
-h1{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:16px}
-.card{background:#131f35;border-radius:12px;padding:20px}
-label{font-size:.85rem;color:#8892a4;display:block;margin-bottom:6px}
-input{width:100%;background:#0a1628;border:1px solid #2563eb;border-radius:8px;
-padding:12px;color:#e8eaf0;font-size:1rem;margin-bottom:14px}
-.btn{display:block;width:100%;padding:14px;border:none;border-radius:10px;
-font-size:1rem;font-weight:700;cursor:pointer;background:#2563eb;color:#fff}
-</style>
-</head>
-<body>
-<h1>J105 Logger</h1>
-<div class="card">
-<form method="post" action="/login">
-<input type="hidden" name="next" value="__NEXT__"/>
-<label>Invite token</label>
-<input type="text" name="token" placeholder="Paste your invite token here" autocomplete="off" value="__TOKEN__"/>
-<button class="btn" type="submit">Sign in</button>
-</form>
-<!--ERROR-->
-</div>
-__EMAIL_FORM__
-</body>
-</html>
-"""
-
-_EMAIL_FORM_HTML = """\
-<div class="card" style="margin-top:16px">
-<form method="post" action="/auth/request-link">
-<label>Don't have a token?</label>
-<input type="email" name="email" placeholder="Enter your email address" required/>
-<button class="btn" type="submit" style="background:#475569">Send me a login link</button>
-</form>
-</div>
-"""
-
-
-def _render_admin_users_html(users: list[dict[str, Any]], sessions: list[dict[str, Any]]) -> str:
-    """Render a simple admin users management page."""
-    from logger.races import configured_tz
-
-    tz = configured_tz()
-
-    def _local_ts(utc_str: str | None) -> str:
-        if not utc_str:
-            return "—"
-        try:
-            from datetime import datetime as _dt
-
-            dt = _dt.fromisoformat(utc_str).astimezone(tz)
-            return dt.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:  # noqa: BLE001
-            return utc_str[:19]
-
-    nav = _nav_html("/admin/users")
-    footer = _FOOTER_HTML.replace("__GIT_INFO__", _GIT_INFO)
-    role_colors = {"admin": "#f59e0b", "crew": "#34d399", "viewer": "#60a5fa"}
-
-    def _badge(role: str) -> str:
-        color = role_colors.get(role, "#8892a4")
-        return f'<span style="background:{color}22;color:{color};padding:1px 7px;border-radius:4px;font-size:.75rem">{role}</span>'
-
-    rows = "".join(
-        f"<tr><td>{u['email']}</td><td>{u['name'] or '—'}</td>"
-        f"<td>{_badge(u['role'])}</td>"
-        f"<td>{_local_ts(u['last_seen'])}</td>"
-        f'<td><button onclick="changeRole({u["id"]})" style="cursor:pointer;background:none;border:1px solid #2563eb;color:#7eb8f7;border-radius:4px;padding:2px 8px;font-size:.8rem">Change role</button></td>'
-        f"</tr>"
-        for u in users
-    )
-    sess_rows = "".join(
-        f"<tr><td>{s.get('email', '')}</td><td>{s.get('role', '')}</td>"
-        f"<td>{s.get('ip', '—')}</td>"
-        f"<td>{_local_ts(s['created_at'])}</td>"
-        f"<td>{_local_ts(s['expires_at'])}</td>"
-        f'<td><button onclick="revokeSession(\'{s["session_id"]}\')" style="cursor:pointer;background:#7f1d1d;border:none;color:#fca5a5;border-radius:4px;padding:2px 8px;font-size:.8rem">Revoke</button></td>'
-        f"</tr>"
-        for s in sessions
-    )
-    return f"""<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>J105 Logger — Admin Users</title>
-<style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;padding:16px;max-width:900px;margin:0 auto}}
-h1{{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:4px}}
-h2{{font-size:1rem;font-weight:600;color:#e8eaf0;margin:20px 0 10px}}
-{_NAV_CSS}
-.card{{background:#131f35;border-radius:12px;padding:16px;margin-bottom:16px}}
-table{{width:100%;border-collapse:collapse;font-size:.85rem}}
-th{{text-align:left;padding:6px 8px;color:#8892a4;font-weight:500;border-bottom:1px solid #1e3a5f}}
-td{{padding:6px 8px;border-bottom:1px solid #0d1a2e}}
-label{{font-size:.85rem;color:#8892a4;display:block;margin-bottom:4px}}
-input,select{{background:#0a1628;border:1px solid #2563eb;border-radius:6px;padding:8px 10px;color:#e8eaf0;font-size:.9rem;margin-bottom:10px}}
-.btn{{padding:10px 18px;border:none;border-radius:8px;font-size:.9rem;font-weight:700;cursor:pointer;background:#2563eb;color:#fff}}
-#invite-result{{margin-top:12px;font-size:.85rem;color:#4ade80;word-break:break-all}}
-</style>
-</head>
-<body>
-{nav}
-<h1>Admin — Users &amp; Sessions</h1>
-<div class="card">
-<h2>Users</h2>
-<table><thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Last seen</th><th></th></tr></thead>
-<tbody>{rows}</tbody>
-</table>
-</div>
-<div class="card">
-<h2>Invite a user</h2>
-<form id="invite-form">
-<label>Email</label><input type="email" id="inv-email" required/>
-<label>Name</label><input type="text" id="inv-name" placeholder="Optional"/>
-<label>Role</label>
-<select id="inv-role"><option value="viewer">viewer</option><option value="crew">crew</option><option value="admin">admin</option></select><br/>
-<button class="btn" type="submit">Generate invite link</button>
-</form>
-<div id="invite-result"></div>
-</div>
-<div class="card">
-<h2>Active sessions</h2>
-<table><thead><tr><th>User</th><th>Role</th><th>IP</th><th>Created</th><th>Expires</th><th></th></tr></thead>
-<tbody>{sess_rows}</tbody>
-</table>
-</div>
-<script>
-document.getElementById('invite-form').addEventListener('submit', async e => {{
-  e.preventDefault();
-  const email = document.getElementById('inv-email').value;
-  const name = document.getElementById('inv-name').value;
-  const role = document.getElementById('inv-role').value;
-  const fd = new FormData();
-  fd.append('email', email);
-  fd.append('name', name);
-  fd.append('role', role);
-  const r = await fetch('/admin/users/invite', {{method:'POST', body:fd}});
-  const d = await r.json();
-  document.getElementById('invite-result').textContent = d.invite_url || JSON.stringify(d);
-}});
-async function changeRole(userId) {{
-  const role = prompt('New role (viewer/crew/admin):');
-  if (!role) return;
-  await fetch('/admin/users/' + userId + '/role', {{method:'PUT', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{role}})}});
-  location.reload();
-}}
-async function revokeSession(sid) {{
-  await fetch('/admin/sessions/' + sid, {{method:'DELETE'}});
-  location.reload();
-}}
-</script>
-{footer}
-</body></html>"""
-
-
-def _render_profile_html(user: dict[str, Any]) -> str:
-    """Render the self-service profile page."""
-    import time
-
-    nav = _nav_html("/profile")
-    footer = _FOOTER_HTML.replace("__GIT_INFO__", _GIT_INFO)
-    user_id = user.get("id") or 0
-    name = user.get("name") or user.get("email") or "Unknown"
-    email = user.get("email") or ""
-    role = user.get("role", "viewer")
-    role_colors = {"admin": "#f59e0b", "crew": "#34d399", "viewer": "#60a5fa"}
-    rc = role_colors.get(role, "#8892a4")
-    cache_bust = int(time.time())
-    avatar_url = f"/avatars/{user_id}.jpg?v={cache_bust}" if user_id else ""
-    return f"""<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>J105 Logger — Profile</title>
-<style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;padding:16px;max-width:500px;margin:0 auto}}
-h1{{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:12px}}
-.card{{background:#131f35;border-radius:12px;padding:24px;text-align:center}}
-.avatar{{width:128px;height:128px;border-radius:50%;object-fit:cover;cursor:pointer;border:3px solid {rc};margin-bottom:16px}}
-.name{{font-size:1.2rem;font-weight:600;margin-bottom:4px}}
-.email{{color:#8892a4;font-size:.85rem;margin-bottom:8px}}
-.role{{background:{rc}22;color:{rc};padding:2px 10px;border-radius:4px;font-size:.8rem;display:inline-block}}
-a{{color:#7eb8f7;text-decoration:none}}
-{_NAV_CSS}
-</style>
-</head>
-<body>
-{nav}
-<h1 style="margin-bottom:12px">Profile</h1>
-<div class="card">
-  <img class="avatar" id="avatar" src="{avatar_url}" alt="avatar" onclick="document.getElementById('file').click()"/>
-  <input type="file" id="file" accept="image/*" style="display:none"/>
-  <div class="name">{name}</div>
-  <div class="email">{email}</div>
-  <div class="role">{role}</div>
-</div>
-<script>
-document.getElementById('file').addEventListener('change', async e => {{
-  const f = e.target.files[0];
-  if (!f) return;
-  const fd = new FormData();
-  fd.append('file', f);
-  const r = await fetch('/profile/avatar', {{method:'POST', body:fd}});
-  if (r.ok) {{
-    window.location.reload();
-  }} else {{
-    const d = await r.json();
-    alert(d.detail || 'Upload failed');
-  }}
-}});
-</script>
-{footer}
-</body></html>"""
-
-
-def _render_admin_audit_html(entries: list[dict[str, Any]]) -> str:
-    """Render the audit log page."""
-    from logger.races import configured_tz
-
-    tz = configured_tz()
-
-    def _local_ts(utc_str: str) -> str:
-        try:
-            from datetime import datetime as _dt
-
-            dt = _dt.fromisoformat(utc_str).astimezone(tz)
-            return dt.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:  # noqa: BLE001
-            return utc_str[:19]
-
-    nav = _nav_html("/admin/audit")
-    footer = _FOOTER_HTML.replace("__GIT_INFO__", _GIT_INFO)
-    rows = "".join(
-        f"<tr><td>{_local_ts(e['ts'])}</td>"
-        f"<td>{e.get('user_name') or e.get('user_email') or '—'}</td>"
-        f"<td><code>{e['action']}</code></td>"
-        f'<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{e.get("detail") or ""}</td>'  # noqa: E501
-        f'<td style="font-size:.7rem">{e.get("ip_address") or ""}</td></tr>'
-        for e in entries
-    )
-    return f"""<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>J105 Logger — Audit Log</title>
-<style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;padding:16px;max-width:1000px;margin:0 auto}}
-h1{{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:12px}}
-.card{{background:#131f35;border-radius:12px;padding:16px;margin-bottom:16px}}
-table{{width:100%;border-collapse:collapse;font-size:.82rem}}
-th{{text-align:left;padding:6px 8px;color:#8892a4;font-weight:500;border-bottom:1px solid #1e3a5f}}
-td{{padding:6px 8px;border-bottom:1px solid #0d1a2e}}
-code{{background:#1e3a5f;padding:1px 5px;border-radius:3px;font-size:.78rem}}
-a{{color:#7eb8f7;text-decoration:none}}
-{_NAV_CSS}
-</style>
-</head>
-<body>
-{nav}
-<h1 style="margin-bottom:12px">Audit Log</h1>
-<div class="card">
-<table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th><th>IP</th></tr></thead>
-<tbody>{rows}</tbody>
-</table>
-{('<p style="text-align:center;color:#8892a4;padding:20px">No audit entries yet.</p>' if not entries else "")}
-</div>
-{footer}
-</body></html>"""
-
-
-_ADMIN_CAMERAS_HTML = """\
-<!doctype html><html lang="en"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Cameras — J105 Logger</title>
-<style>
-*{box-sizing:border-box}
-__NAV_CSS__
-body{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;margin:0;padding:16px}
-.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:12px}
-.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#8892a4;margin-bottom:8px}
-table{width:100%;border-collapse:collapse;font-size:.87rem}
-th{text-align:left;color:#8892a4;font-size:.75rem;text-transform:uppercase;padding:6px 8px}
-td{padding:7px 8px;border-bottom:1px solid #0d1a2e}
-.badge{padding:2px 8px;border-radius:4px;font-size:.78rem;font-weight:600}
-.badge-rec{background:#16a34a22;color:#4ade80}
-.badge-idle{background:#374151;color:#8892a4}
-.badge-err{background:#7f1d1d22;color:#ef4444}
-.btn-sm{padding:6px 12px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.78rem;cursor:pointer}
-.btn-start{color:#4ade80;border-color:#16a34a}
-.btn-stop{color:#ef4444;border-color:#7f1d1d}
-.btn-refresh{color:#7eb8f7;border-color:#2563eb}
-.btn-add{color:#4ade80;border-color:#16a34a}
-.btn-edit{color:#f59e0b;border-color:#92400e}
-.btn-del{color:#ef4444;border-color:#7f1d1d}
-.form-row{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
-.form-row input{padding:6px 10px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.85rem}
-.form-row input::placeholder{color:#586578}
-#add-err,#edit-err{color:#ef4444;font-size:.8rem;margin-top:4px}
-dialog{background:#131f35;color:#e8eaf0;border:1px solid #374151;border-radius:12px;padding:20px;max-width:400px;width:90%}
-dialog::backdrop{background:rgba(0,0,0,.6)}
-dialog .form-row{flex-direction:column;align-items:stretch}
-dialog .form-row input{width:100%}
-dialog .form-row label{font-size:.75rem;color:#8892a4;margin-bottom:2px}
-dialog .btn-row{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
-</style></head><body>
-__NAV__
-<h1>Cameras</h1>
-<div class="card">
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-<div class="label">Configured Cameras</div>
-<div style="display:flex;gap:6px">
-<button class="btn-sm btn-refresh" onclick="loadCameras()">↻ Refresh</button>
-<button class="btn-sm btn-add" onclick="showAddForm()">+ Add Camera</button>
-</div>
-</div>
-<div id="cam-table">Loading…</div>
-<div id="add-form" style="display:none">
-<div class="form-row">
-<input id="add-name" placeholder="Name (e.g. bow)" maxlength="50"/>
-<input id="add-ip" placeholder="IP address" maxlength="45"/>
-<input id="add-ssid" placeholder="WiFi SSID" maxlength="64"/>
-<input id="add-pass" placeholder="WiFi password" maxlength="64"/>
-<button class="btn-sm btn-add" onclick="addCamera()">Save</button>
-<button class="btn-sm" onclick="hideAddForm()">Cancel</button>
-</div>
-<div id="add-err"></div>
-</div>
-</div>
-
-<dialog id="edit-dlg">
-<h3 style="margin:0 0 12px">Edit Camera</h3>
-<div class="form-row">
-<label>Name</label><input id="edit-name" maxlength="50"/>
-</div>
-<div class="form-row">
-<label>IP Address</label><input id="edit-ip" maxlength="45"/>
-</div>
-<div class="form-row">
-<label>WiFi SSID</label><input id="edit-ssid" maxlength="64"/>
-</div>
-<div class="form-row">
-<label>WiFi Password</label><input id="edit-pass" maxlength="64" type="password"/>
-</div>
-<div id="edit-err"></div>
-<div class="btn-row">
-<button class="btn-sm" onclick="document.getElementById('edit-dlg').close()">Cancel</button>
-<button class="btn-sm btn-edit" onclick="saveEdit()">Save</button>
-</div>
-</dialog>
-
-<div class="card">
-<div class="label">Recent Camera Sessions</div>
-<div id="cam-sessions">Loading…</div>
-</div>
-<script>
-let _editOrigName='';
-function showAddForm(){document.getElementById('add-form').style.display='';document.getElementById('add-name').focus()}
-function hideAddForm(){document.getElementById('add-form').style.display='none';document.getElementById('add-err').textContent='';document.getElementById('add-name').value='';document.getElementById('add-ip').value='';document.getElementById('add-ssid').value='';document.getElementById('add-pass').value=''}
-async function addCamera(){
-  const name=document.getElementById('add-name').value.trim();
-  const ip=document.getElementById('add-ip').value.trim();
-  const wifi_ssid=document.getElementById('add-ssid').value.trim();
-  const wifi_password=document.getElementById('add-pass').value.trim();
-  if(!name||!ip){document.getElementById('add-err').textContent='Name and IP are required';return}
-  const r=await fetch('/api/cameras',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,ip,wifi_ssid,wifi_password})});
-  if(!r.ok){const d=await r.json();document.getElementById('add-err').textContent=d.detail||'Failed';return}
-  hideAddForm();loadCameras();
-}
-function showEdit(name,ip,ssid,pass_){
-  _editOrigName=name;
-  document.getElementById('edit-name').value=name;
-  document.getElementById('edit-ip').value=ip;
-  document.getElementById('edit-ssid').value=ssid||'';
-  document.getElementById('edit-pass').value=pass_||'';
-  document.getElementById('edit-err').textContent='';
-  document.getElementById('edit-dlg').showModal();
-}
-async function saveEdit(){
-  const name=document.getElementById('edit-name').value.trim();
-  const ip=document.getElementById('edit-ip').value.trim();
-  const wifi_ssid=document.getElementById('edit-ssid').value.trim();
-  const wifi_password=document.getElementById('edit-pass').value.trim();
-  if(!name||!ip){document.getElementById('edit-err').textContent='Name and IP are required';return}
-  const r=await fetch('/api/cameras/'+encodeURIComponent(_editOrigName),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,ip,wifi_ssid,wifi_password})});
-  if(!r.ok){const d=await r.json();document.getElementById('edit-err').textContent=d.detail||'Failed';return}
-  document.getElementById('edit-dlg').close();loadCameras();
-}
-async function delCamera(name){
-  if(!confirm('Delete camera "'+name+'"?'))return;
-  const r=await fetch('/api/cameras/'+encodeURIComponent(name),{method:'DELETE'});
-  if(!r.ok){const d=await r.json();alert(d.detail||'Failed');return}
-  loadCameras();
-}
-async function loadCameras(){
-  document.getElementById('cam-table').textContent='Loading…';
-  const r=await fetch('/api/cameras');
-  if(!r.ok){document.getElementById('cam-table').textContent='Failed to load';return}
-  const cams=await r.json();
-  if(!cams.length){document.getElementById('cam-table').innerHTML='<p style="color:#8892a4">No cameras configured. Click <b>+ Add Camera</b> above to get started.</p>';return}
-  let h='<table><thead><tr><th>Name</th><th>IP</th><th>WiFi</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
-  for(const c of cams){
-    const badge=c.error?`<span class="badge badge-err">error</span>`:c.recording?`<span class="badge badge-rec">recording</span>`:`<span class="badge badge-idle">idle</span>`;
-    const recBtn=c.recording?`<button class="btn-sm btn-stop" onclick="camAction('${c.name}','stop')">⏹ Stop</button>`:`<button class="btn-sm btn-start" onclick="camAction('${c.name}','start')">⏺ Start</button>`;
-    const ssidEsc=(c.wifi_ssid||'').replace(/'/g,"\\'");
-    const passEsc=(c.wifi_password||'').replace(/'/g,"\\'");
-    const editBtn=`<button class="btn-sm btn-edit" onclick="showEdit('${c.name}','${c.ip}','${ssidEsc}','${passEsc}')">✎</button>`;
-    const delBtn=`<button class="btn-sm btn-del" onclick="delCamera('${c.name}')">✕</button>`;
-    const wifi=c.wifi_ssid?`<span style="color:#7eb8f7">${c.wifi_ssid}</span>`:'<span style="color:#586578">—</span>';
-    h+=`<tr><td>${c.name}</td><td>${c.ip}</td><td>${wifi}</td><td>${badge}${c.error?' <small style="color:#ef4444">'+c.error.slice(0,60)+'</small>':''}</td><td style="display:flex;gap:4px">${recBtn}${editBtn}${delBtn}</td></tr>`;
-  }
-  h+='</tbody></table>';
-  document.getElementById('cam-table').innerHTML=h;
-}
-async function camAction(name,action){
-  const r=await fetch('/api/cameras/'+encodeURIComponent(name)+'/'+action,{method:'POST'});
-  const d=await r.json();
-  if(d.error)alert('Camera '+name+': '+d.error);
-  if(action==='stop') await new Promise(r=>setTimeout(r,1500));
-  loadCameras();
-}
-async function loadSessions(){
-  const r=await fetch('/api/cameras/sessions');
-  if(!r.ok)return;
-  const rows=await r.json();
-  if(!rows.length){document.getElementById('cam-sessions').innerHTML='<p style="color:#8892a4">No camera sessions recorded yet.</p>';return}
-  let h='<table><thead><tr><th>Camera</th><th>Race</th><th>Started</th><th>Stopped</th><th>Latency</th><th>Error</th></tr></thead><tbody>';
-  for(const s of rows){
-    const started=s.recording_started_utc?new Date(s.recording_started_utc).toLocaleString():'—';
-    const stopped=s.recording_stopped_utc?new Date(s.recording_stopped_utc).toLocaleString():'—';
-    const lat=s.sync_offset_ms!=null?s.sync_offset_ms+'ms':'—';
-    const err=s.error?`<small style="color:#ef4444">${s.error.slice(0,40)}</small>`:'—';
-    h+=`<tr><td>${s.camera_name}</td><td>${s.race_name||s.session_id}</td><td>${started}</td><td>${stopped}</td><td>${lat}</td><td>${err}</td></tr>`;
-  }
-  h+='</tbody></table>';
-  document.getElementById('cam-sessions').innerHTML=h;
-}
-loadCameras();loadSessions();
-</script>
-__FOOTER__
-</body></html>"""
-
-# ---------------------------------------------------------------------------
-# Admin: Events (day-of-week rules)
-# ---------------------------------------------------------------------------
-
-_ADMIN_EVENTS_HTML = """\
-<!doctype html><html lang="en"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Event Rules — J105 Logger</title>
-<style>
-*{box-sizing:border-box}
-__NAV_CSS__
-body{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;margin:0;padding:16px}
-.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:12px}
-.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#8892a4;margin-bottom:8px}
-table{width:100%;border-collapse:collapse;font-size:.87rem}
-th{text-align:left;color:#8892a4;font-size:.75rem;text-transform:uppercase;padding:6px 8px}
-td{padding:7px 8px;border-bottom:1px solid #0d1a2e}
-.btn-sm{padding:6px 12px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.78rem;cursor:pointer}
-.btn-add{color:#4ade80;border-color:#16a34a}
-.btn-del{color:#ef4444;border-color:#7f1d1d}
-.form-row{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
-.form-row input,.form-row select{padding:6px 10px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.85rem}
-.form-row input::placeholder{color:#586578}
-#add-err{color:#ef4444;font-size:.8rem;margin-top:4px}
-</style></head><body>
-__NAV__
-<h1>Event Rules</h1>
-<div class="card">
-<div class="label">Day-of-Week Rules</div>
-<p style="color:#8892a4;font-size:.85rem;margin-top:0">
-Auto-fill the event name when starting a race. A custom event set on the home page overrides these.
-</p>
-<div id="rules-table">Loading…</div>
-<div class="form-row" style="margin-top:16px">
-<select id="add-weekday">
-<option value="0">Monday</option><option value="1">Tuesday</option>
-<option value="2">Wednesday</option><option value="3">Thursday</option>
-<option value="4">Friday</option><option value="5">Saturday</option>
-<option value="6">Sunday</option>
-</select>
-<input id="add-event" placeholder="Event name" maxlength="40"/>
-<button class="btn-sm btn-add" onclick="addRule()">+ Add Rule</button>
-</div>
-<div id="add-err"></div>
-</div>
-<script>
-const DAYS=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-async function loadRules(){
-  const r=await fetch('/api/event-rules');
-  if(!r.ok){document.getElementById('rules-table').textContent='Failed to load';return}
-  const rules=await r.json();
-  if(!rules.length){document.getElementById('rules-table').innerHTML='<p style="color:#8892a4">No rules configured. Races will require a manual event name.</p>';return}
-  let h='<table><thead><tr><th>Day</th><th>Event Name</th><th></th></tr></thead><tbody>';
-  for(const rule of rules){
-    h+=`<tr><td>${DAYS[rule.weekday]}</td><td>${rule.event_name}</td>`;
-    h+=`<td><button class="btn-sm btn-del" onclick="delRule(${rule.weekday})">Delete</button></td></tr>`;
-  }
-  h+='</tbody></table>';
-  document.getElementById('rules-table').innerHTML=h;
-}
-async function addRule(){
-  const weekday=parseInt(document.getElementById('add-weekday').value);
-  const event_name=document.getElementById('add-event').value.trim();
-  if(!event_name){document.getElementById('add-err').textContent='Event name is required';return}
-  const r=await fetch('/api/event-rules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({weekday,event_name})});
-  if(!r.ok){const d=await r.json();document.getElementById('add-err').textContent=d.detail||'Failed';return}
-  document.getElementById('add-event').value='';
-  document.getElementById('add-err').textContent='';
-  loadRules();
-}
-async function delRule(weekday){
-  if(!confirm('Delete rule for '+DAYS[weekday]+'?'))return;
-  await fetch('/api/event-rules/'+weekday,{method:'DELETE'});
-  loadRules();
-}
-loadRules();
-</script>
-__FOOTER__
-</body></html>"""
+_TEMPLATES_DIR = Path(__file__).parent / "templates"
+_STATIC_DIR = Path(__file__).parent / "static"
+_templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
 @dataclass(frozen=True)
@@ -2856,101 +153,86 @@ _SETTINGS_DEFS: tuple[_SettingDef, ...] = (
 
 _SETTINGS_BY_KEY: dict[str, _SettingDef] = {s.key: s for s in _SETTINGS_DEFS}
 
-_ADMIN_SETTINGS_HTML = """\
-<!doctype html><html lang="en"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Settings — J105 Logger</title>
-<style>
-*{box-sizing:border-box}
-__NAV_CSS__
-body{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;margin:0;padding:16px}
-.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:12px}
-.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#8892a4;margin-bottom:8px}
-.setting{margin-bottom:18px}
-.setting label{display:block;font-weight:600;margin-bottom:4px;font-size:.9rem}
-.setting .help{font-size:.75rem;color:#8892a4;margin-top:2px}
-.setting input,.setting select{width:100%;max-width:480px;padding:7px 10px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.85rem}
-.setting input[type=number]{max-width:120px}
-.source-badge{display:inline-block;font-size:.65rem;text-transform:uppercase;letter-spacing:.06em;padding:2px 6px;border-radius:3px;margin-left:8px;vertical-align:middle}
-.source-db{background:#1e3a5f;color:#60a5fa}
-.source-env{background:#1a3329;color:#4ade80}
-.source-default{background:#2a2033;color:#c084fc}
-.btn-row{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
-.btn{padding:8px 18px;border:1px solid #374151;border-radius:6px;background:#1e293b;color:#e8eaf0;font-size:.85rem;cursor:pointer}
-.btn:hover{background:#253449}
-.btn-primary{background:#2563eb;border-color:#2563eb;color:#fff}
-.btn-primary:hover{background:#1d4ed8}
-.btn-reset{color:#f87171;border-color:#7f1d1d;font-size:.75rem;padding:4px 10px}
-.btn-reset:hover{background:#1f1215}
-.status{margin-top:12px;padding:8px;border-radius:6px;font-size:.85rem;display:none}
-.status.ok{display:block;background:#0d2818;color:#4ade80;border:1px solid #16a34a}
-.status.err{display:block;background:#1f1215;color:#f87171;border:1px solid #7f1d1d}
-</style>
-__NAV__
-</head><body>
-<div class="card">
-  <div class="label">Settings</div>
-  <div id="status" class="status"></div>
-  <form id="settings-form" onsubmit="return saveAll(event)">
-    <div id="fields"></div>
-    <div class="btn-row">
-      <button type="submit" class="btn btn-primary">Save all</button>
-    </div>
-  </form>
-</div>
-<script>
-let DEFS=[], loaded={};
-async function init(){
-  const r=await fetch('/api/settings');
-  if(!r.ok){showStatus('Failed to load settings','err');return}
-  const data=await r.json();
-  DEFS=data.settings;
-  loaded=data;
-  render();
-}
-function render(){
-  const c=document.getElementById('fields');
-  c.innerHTML='';
-  for(const s of DEFS){
-    const d=document.createElement('div');
-    d.className='setting';
-    let inp='';
-    const val=esc(s.effective_value);
-    if(s.input_type==='select'){
-      const opts=s.options.map(o=>'<option value="'+esc(o)+'"'+(o===s.effective_value?' selected':'')+'>'+esc(o)+'</option>').join('');
-      inp='<select name="'+esc(s.key)+'">'+opts+'</select>';
-    } else if(s.input_type==='number'){
-      inp='<input type="number" name="'+esc(s.key)+'" value="'+val+'" step="any"/>';
-    } else {
-      const t=s.sensitive?'password':'text';
-      inp='<input type="'+t+'" name="'+esc(s.key)+'" value="'+val+'" placeholder="'+esc(s.default_value)+'"/>';
-    }
-    const badge='<span class="source-badge source-'+s.source+'">'+s.source+'</span>';
-    const reset=s.source==='db'?'<button type="button" class="btn btn-reset" onclick="resetKey(\\''+esc(s.key)+'\\')">Reset</button>':'';
-    d.innerHTML='<label>'+esc(s.label)+badge+' '+reset+'</label>'+inp+'<div class="help">'+esc(s.help_text)+' <code>'+esc(s.key)+'</code></div>';
-    c.appendChild(d);
-  }
-}
-function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')}
-async function saveAll(e){
-  e.preventDefault();
-  const fd=new FormData(document.getElementById('settings-form'));
-  const payload={};
-  for(const [k,v] of fd.entries()) payload[k]=v;
-  const r=await fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  if(r.ok){showStatus('Settings saved','ok');setTimeout(init,800)}
-  else{const d=await r.json();showStatus(d.detail||'Save failed','err')}
-}
-async function resetKey(key){
-  const r=await fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({[key]:''})});
-  if(r.ok){showStatus(key+' reset to default','ok');setTimeout(init,600)}
-  else showStatus('Reset failed','err');
-}
-function showStatus(msg,cls){const el=document.getElementById('status');el.textContent=msg;el.className='status '+cls;setTimeout(()=>{el.className='status'},4000)}
-init();
-</script>
-__FOOTER__
-</body></html>"""
+
+# ---------------------------------------------------------------------------
+# Pydantic request models
+# ---------------------------------------------------------------------------
+
+
+class EventRequest(BaseModel):
+    event_name: str
+
+
+class CrewEntry(BaseModel):
+    position: str
+    sailor: str
+
+
+class BoatCreate(BaseModel):
+    sail_number: str
+    name: str | None = None
+    class_name: str | None = None
+
+
+class BoatUpdate(BaseModel):
+    sail_number: str | None = None
+    name: str | None = None
+    class_name: str | None = None
+
+
+class RaceResultEntry(BaseModel):
+    place: int
+    boat_id: int | None = None
+    sail_number: str | None = None
+    finish_time: str | None = None
+    dnf: bool = False
+    dns: bool = False
+    notes: str | None = None
+
+
+class NoteCreate(BaseModel):
+    body: str | None = None
+    note_type: str = "text"
+    ts: str | None = None  # UTC ISO 8601; defaults to server time if absent
+
+
+class VideoCreate(BaseModel):
+    youtube_url: str
+    label: str = ""
+    sync_utc: str  # UTC ISO 8601
+    sync_offset_s: float = 0.0
+
+
+class VideoUpdate(BaseModel):
+    label: str | None = None
+    sync_utc: str | None = None
+    sync_offset_s: float | None = None
+
+
+class SailCreate(BaseModel):
+    type: str  # 'main' | 'jib' | 'spinnaker'
+    name: str
+    notes: str | None = None
+
+
+class SailUpdate(BaseModel):
+    name: str | None = None
+    notes: str | None = None
+    active: bool | None = None
+
+
+class RaceSailsSet(BaseModel):
+    main_id: int | None = None
+    jib_id: int | None = None
+    spinnaker_id: int | None = None
+
+
+POSITIONS: tuple[str, ...] = ("helm", "main", "pit", "bow", "tactician", "guest")
+
+
+# ---------------------------------------------------------------------------
+# App factory
+# ---------------------------------------------------------------------------
 
 
 def create_app(
@@ -2983,30 +265,11 @@ def create_app(
 
     cfg = RaceConfig()
 
-    def _inject_shared(html: str, current: str) -> str:
-        return (
-            html.replace("__NAV_CSS__", _NAV_CSS)
-            .replace("__NAV__", _nav_html(current))
-            .replace("__FOOTER__", _FOOTER_HTML)
-            .replace("__GIT_INFO__", _GIT_INFO)
-        )
+    # -- Static files + templates --
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
-    _page = _inject_shared(
-        _HTML.replace("__GRAFANA_PORT__", cfg.grafana_port)
-        .replace("__GRAFANA_UID__", cfg.grafana_uid)
-        .replace("__SK_PORT__", cfg.sk_port),
-        "/",
-    )
-    _history_page = _inject_shared(
-        _HISTORY_HTML.replace("__GRAFANA_PORT__", cfg.grafana_port).replace(
-            "__GRAFANA_UID__", cfg.grafana_uid
-        ),
-        "/history",
-    )
-    _admin_page = _inject_shared(_ADMIN_BOATS_HTML, "/admin/boats")
-    _admin_cameras_page = _inject_shared(_ADMIN_CAMERAS_HTML, "/admin/cameras")
-    _admin_events_page = _inject_shared(_ADMIN_EVENTS_HTML, "/admin/events")
-    _admin_settings_page = _inject_shared(_ADMIN_SETTINGS_HTML, "/admin/settings")
+    def _tpl_ctx(request: Request, page: str, **extra: Any) -> dict[str, Any]:  # noqa: ANN401
+        return {"request": request, "active_page": page, "git_info": _GIT_INFO, **extra}
 
     from logger.auth import (
         _is_auth_disabled,
@@ -3017,7 +280,7 @@ def create_app(
         session_expires_at,
     )
 
-    _PUBLIC_PATHS = {"/login", "/logout", "/healthz", "/avatars", "/auth/request-link"}
+    _PUBLIC_PATHS = {"/login", "/logout", "/healthz", "/avatars", "/auth/request-link", "/static"}
 
     async def _load_cameras() -> list[Any]:
         """Load cameras from the database and return Camera objects."""
@@ -3058,7 +321,7 @@ def create_app(
 
             request.state.user = _MOCK_ADMIN
             return await call_next(request)  # type: ignore[no-any-return]
-        if path in _PUBLIC_PATHS or path.startswith("/notes/"):
+        if path in _PUBLIC_PATHS or path.startswith(("/notes/", "/static/")):
             return await call_next(request)  # type: ignore[no-any-return]
         from http.cookies import SimpleCookie
 
@@ -3103,17 +366,33 @@ def create_app(
             }
         )
 
+    _EMAIL_FORM_HTML = (
+        '<div class="card" style="margin-top:16px">'
+        '<form method="post" action="/auth/request-link">'
+        "<label>Don't have a token?</label>"
+        '<input type="email" name="email" placeholder="Enter your email address" required/>'
+        '<button class="btn" type="submit" style="background:#475569">'
+        "Send me a login link</button></form></div>"
+    )
+
+    def _login_ctx(
+        next_url: str, token_value: str, error_html: str = "", email_form: str = ""
+    ) -> dict[str, str]:
+        return {
+            "next_url": next_url,
+            "token_value": token_value,
+            "error_html": error_html,
+            "email_form_html": email_form,
+        }
+
     @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
-    async def login_page(next: str = "/", token: str = "") -> HTMLResponse:
+    async def login_page(request: Request, next: str = "/", token: str = "") -> HTMLResponse:
         from logger.email import smtp_configured
 
         email_form = _EMAIL_FORM_HTML if smtp_configured() else ""
-        html = (
-            _LOGIN_HTML.replace("__NEXT__", next)
-            .replace("__TOKEN__", token)
-            .replace("__EMAIL_FORM__", email_form)
+        return _templates.TemplateResponse(
+            request, "login.html", _login_ctx(next, token, email_form=email_form)
         )
-        return HTMLResponse(html)
 
     @app.post("/login", include_in_schema=False)
     @limiter.limit("10/minute")
@@ -3125,42 +404,19 @@ def create_app(
         from datetime import UTC as _UTC
         from datetime import datetime as _dt
 
+        def _login_err(msg: str) -> HTMLResponse:
+            ctx = _login_ctx(next, token, f'<p style="color:#f87171;margin-top:12px">{msg}</p>')
+            return _templates.TemplateResponse(request, "login.html", ctx, status_code=400)
+
         token = token.strip()
         row = await storage.get_invite_token(token)
         if row is None:
-            return HTMLResponse(
-                _LOGIN_HTML.replace("__NEXT__", next)
-                .replace("__TOKEN__", token)
-                .replace(
-                    "<!--ERROR-->",
-                    '<p style="color:#f87171;margin-top:12px">Invalid or expired token.</p>',
-                )
-                .replace("__EMAIL_FORM__", ""),
-                status_code=400,
-            )
+            return _login_err("Invalid or expired token.")
         if row["used_at"] is not None:
-            return HTMLResponse(
-                _LOGIN_HTML.replace("__NEXT__", next)
-                .replace("__TOKEN__", token)
-                .replace(
-                    "<!--ERROR-->",
-                    '<p style="color:#f87171;margin-top:12px">Token already used.</p>',
-                )
-                .replace("__EMAIL_FORM__", ""),
-                status_code=400,
-            )
+            return _login_err("Token already used.")
         expires_dt = _dt.fromisoformat(row["expires_at"])
         if _dt.now(_UTC) > expires_dt:
-            return HTMLResponse(
-                _LOGIN_HTML.replace("__NEXT__", next)
-                .replace("__TOKEN__", token)
-                .replace(
-                    "<!--ERROR-->",
-                    '<p style="color:#f87171;margin-top:12px">Token expired.</p>',
-                )
-                .replace("__EMAIL_FORM__", ""),
-                status_code=400,
-            )
+            return _login_err("Token expired.")
 
         # Find or create the user
         user = await storage.get_user_by_email(row["email"])
@@ -3215,24 +471,23 @@ def create_app(
     ) -> HTMLResponse:
         from logger.email import send_login_link_email, smtp_configured
 
-        html = (
-            _LOGIN_HTML.replace("__NEXT__", "/")
-            .replace("__TOKEN__", "")
-            .replace("<!--ERROR-->", _REQUEST_LINK_RESPONSE)
-            .replace("__EMAIL_FORM__", "")
-        )
+        ctx = _login_ctx("/", "", error_html=_REQUEST_LINK_RESPONSE)
+
+        def _resp() -> HTMLResponse:
+            return _templates.TemplateResponse(request, "login.html", ctx)
+
         email = email.strip().lower()
         if not email or not smtp_configured():
-            return HTMLResponse(html)
+            return _resp()
 
         user = await storage.get_user_by_email(email)
         if user is None:
-            return HTMLResponse(html)
+            return _resp()
 
         # Per-email rate limit: max 3 tokens/hour
         recent = await storage.count_recent_tokens_for_email(email)
         if recent >= 3:
-            return HTMLResponse(html)
+            return _resp()
 
         # Create token and send email
         token = generate_token()
@@ -3243,7 +498,7 @@ def create_app(
         login_url = f"{public_url}/login?token={token}"
         asyncio.ensure_future(send_login_link_email(user.get("name"), email, login_url))
         await _audit(request, "auth.request_link", detail=email)
-        return HTMLResponse(html)
+        return _resp()
 
     @app.post("/logout", include_in_schema=False)
     async def logout(request: Request) -> Response:
@@ -3263,25 +518,94 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-    async def index() -> HTMLResponse:
-        return HTMLResponse(_page)
+    async def index(request: Request) -> Response:
+        return _templates.TemplateResponse(
+            request,
+            "home.html",
+            _tpl_ctx(
+                request,
+                "/",
+                grafana_port=cfg.grafana_port,
+                grafana_uid=cfg.grafana_uid,
+                sk_port=cfg.sk_port,
+            ),
+        )
 
     @app.get("/history", response_class=HTMLResponse, include_in_schema=False)
-    async def history_page() -> HTMLResponse:
-        return HTMLResponse(_history_page)
+    async def history_page(request: Request) -> Response:
+        return _templates.TemplateResponse(
+            request,
+            "history.html",
+            _tpl_ctx(
+                request,
+                "/history",
+                grafana_port=cfg.grafana_port,
+                grafana_uid=cfg.grafana_uid,
+            ),
+        )
 
     @app.get("/admin/boats", response_class=HTMLResponse, include_in_schema=False)
-    async def admin_boats_page() -> HTMLResponse:
-        return HTMLResponse(_admin_page)
+    async def admin_boats_page(request: Request) -> Response:
+        return _templates.TemplateResponse(
+            request, "admin/boats.html", _tpl_ctx(request, "/admin/boats")
+        )
 
     @app.get("/admin/users", response_class=HTMLResponse, include_in_schema=False)
     async def admin_users_page(
+        request: Request,
         _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
-    ) -> HTMLResponse:
+    ) -> Response:
+        from logger.races import configured_tz
+
+        tz = configured_tz()
         users = await storage.list_users()
         sessions = await storage.list_auth_sessions()
         await storage.delete_expired_sessions()
-        return HTMLResponse(_render_admin_users_html(users, sessions))
+
+        def _local_ts(utc_str: str | None) -> str:
+            if not utc_str:
+                return "—"
+            try:
+                from datetime import datetime as _dt
+
+                dt = _dt.fromisoformat(utc_str).astimezone(tz)
+                return dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:  # noqa: BLE001
+                return utc_str[:19]
+
+        role_colors = {"admin": "#f59e0b", "crew": "#34d399", "viewer": "#60a5fa"}
+
+        def _badge(role: str) -> str:
+            color = role_colors.get(role, "#8892a4")
+            return f'<span style="background:{color}22;color:{color};padding:1px 7px;border-radius:4px;font-size:.75rem">{role}</span>'
+
+        user_rows = "".join(
+            f"<tr><td>{u['email']}</td><td>{u['name'] or '—'}</td>"
+            f"<td>{_badge(u['role'])}</td>"
+            f"<td>{_local_ts(u['last_seen'])}</td>"
+            f'<td><button onclick="changeRole({u["id"]})" style="cursor:pointer;background:none;border:1px solid #2563eb;color:#7eb8f7;border-radius:4px;padding:2px 8px;font-size:.8rem">Change role</button></td>'  # noqa: E501
+            f"</tr>"
+            for u in users
+        )
+        sess_rows = "".join(
+            f"<tr><td>{s.get('email', '')}</td><td>{s.get('role', '')}</td>"
+            f"<td>{s.get('ip', '—')}</td>"
+            f"<td>{_local_ts(s['created_at'])}</td>"
+            f"<td>{_local_ts(s['expires_at'])}</td>"
+            f'<td><button onclick="revokeSession(\'{s["session_id"]}\')" style="cursor:pointer;background:#7f1d1d;border:none;color:#fca5a5;border-radius:4px;padding:2px 8px;font-size:.8rem">Revoke</button></td>'  # noqa: E501
+            f"</tr>"
+            for s in sessions
+        )
+        return _templates.TemplateResponse(
+            request,
+            "admin/users.html",
+            _tpl_ctx(
+                request,
+                "/admin/users",
+                user_rows=user_rows,
+                session_rows=sess_rows,
+            ),
+        )
 
     @app.post("/admin/users/invite", status_code=201, include_in_schema=False)
     @limiter.limit("5/minute")
@@ -3346,10 +670,36 @@ def create_app(
 
     @app.get("/admin/audit", response_class=HTMLResponse, include_in_schema=False)
     async def admin_audit_page(
+        request: Request,
         _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
-    ) -> HTMLResponse:
+    ) -> Response:
+        from logger.races import configured_tz
+
+        tz = configured_tz()
+
+        def _local_ts(utc_str: str) -> str:
+            try:
+                from datetime import datetime as _dt
+
+                dt = _dt.fromisoformat(utc_str).astimezone(tz)
+                return dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:  # noqa: BLE001
+                return utc_str[:19]
+
         entries = await storage.list_audit_log(limit=200)
-        return HTMLResponse(_render_admin_audit_html(entries))
+        audit_rows = "".join(
+            f"<tr><td>{_local_ts(e['ts'])}</td>"
+            f"<td>{e.get('user_name') or e.get('user_email') or '—'}</td>"
+            f"<td><code>{e['action']}</code></td>"
+            f'<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{e.get("detail") or ""}</td>'  # noqa: E501
+            f'<td style="font-size:.7rem">{e.get("ip_address") or ""}</td></tr>'
+            for e in entries
+        )
+        return _templates.TemplateResponse(
+            request,
+            "admin/audit.html",
+            _tpl_ctx(request, "/admin/audit", audit_rows=audit_rows, has_entries=bool(entries)),
+        )
 
     @app.get("/api/audit")
     async def api_audit_log(
@@ -3366,15 +716,21 @@ def create_app(
 
     @app.get("/admin/cameras", response_class=HTMLResponse, include_in_schema=False)
     async def admin_cameras_page(
+        request: Request,
         _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
-    ) -> HTMLResponse:
-        return HTMLResponse(_admin_cameras_page)
+    ) -> Response:
+        return _templates.TemplateResponse(
+            request, "admin/cameras.html", _tpl_ctx(request, "/admin/cameras")
+        )
 
     @app.get("/admin/events", response_class=HTMLResponse, include_in_schema=False)
     async def admin_events_page(
+        request: Request,
         _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
-    ) -> HTMLResponse:
-        return HTMLResponse(_admin_events_page)
+    ) -> Response:
+        return _templates.TemplateResponse(
+            request, "admin/events.html", _tpl_ctx(request, "/admin/events")
+        )
 
     # ------------------------------------------------------------------
     # /admin/settings (#146)
@@ -3382,9 +738,12 @@ def create_app(
 
     @app.get("/admin/settings", response_class=HTMLResponse, include_in_schema=False)
     async def admin_settings_page(
+        request: Request,
         _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
-    ) -> HTMLResponse:
-        return HTMLResponse(_admin_settings_page)
+    ) -> Response:
+        return _templates.TemplateResponse(
+            request, "admin/settings.html", _tpl_ctx(request, "/admin/settings")
+        )
 
     @app.get("/api/settings")
     async def api_get_settings(
@@ -5158,9 +2517,27 @@ def create_app(
 
     @app.get("/profile", response_class=HTMLResponse, include_in_schema=False)
     async def profile_page(
+        request: Request,
         _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
-    ) -> HTMLResponse:
-        return HTMLResponse(_render_profile_html(_user))
+    ) -> Response:
+        import time
+
+        user_id = _user.get("id") or 0
+        role = _user.get("role", "viewer")
+        role_colors = {"admin": "#f59e0b", "crew": "#34d399", "viewer": "#60a5fa"}
+        return _templates.TemplateResponse(
+            request,
+            "profile.html",
+            _tpl_ctx(
+                request,
+                "/profile",
+                name=_user.get("name") or _user.get("email") or "Unknown",
+                email=_user.get("email") or "",
+                role=role,
+                role_color=role_colors.get(role, "#8892a4"),
+                avatar_url=f"/avatars/{user_id}.jpg?v={int(time.time())}" if user_id else "",
+            ),
+        )
 
     @app.post("/profile/avatar", status_code=200, include_in_schema=False)
     async def upload_avatar(

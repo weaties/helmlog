@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}J105 Logger{% endblock %}
+
+{% block extra_css %}
+<style>
+{% raw %}@media(min-width:768px){#controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}#btn-end{grid-column:1/-1}}{% endraw %}
+</style>
+{% endblock %}
+
+{% block pre_nav %}
+<div id="health-banner" style="display:none;background:#7f1d1d;color:#fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.85rem"></div>
+{% endblock %}
+
+{% block content %}
+<div id="app-config" data-grafana-port="{{ grafana_port }}" data-grafana-uid="{{ grafana_uid }}" data-sk-port="{{ sk_port }}" style="display:none"></div>
+
+<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px">
+  <h1>J105 Logger</h1>
+  <div style="display:flex;gap:6px;margin-top:2px">
+    <a id="grafana-nav" class="btn-export btn-grafana" href="#" target="_blank">Grafana</a>
+    <a id="signalk-nav" class="btn-export" href="#" target="_blank" style="display:none">Signal K</a>
+  </div>
+</div>
+<div class="sub" id="header-sub">Loading...</div>
+
+<div id="event-section" class="hidden">
+  <div class="label">Event name</div>
+  <div class="event-row">
+    <input id="event-input" class="event-input" placeholder="e.g. Regatta" maxlength="40"/>
+    <button class="btn-save" onclick="saveEvent()">Save</button>
+  </div>
+</div>
+
+<div id="current-card" class="card hidden">
+  <div class="label"><span class="status-dot"></span>Race in progress</div>
+  <div class="race-name" id="cur-name">&mdash;</div>
+  <div class="race-meta" id="cur-meta">&mdash;</div>
+  <div class="label" style="margin-top:12px">Duration</div>
+  <div class="duration" id="cur-duration">&mdash;</div>
+  <button class="btn btn-note" id="btn-note" onclick="toggleNotePanel()" style="margin-top:10px;display:none">+ Note</button>
+  <div id="note-panel" style="display:none;margin-top:8px">
+    <div style="display:flex;gap:4px;margin-bottom:8px">
+      <button class="note-tab active" id="note-tab-text"     onclick="selectNoteType('text')">Text</button>
+      <button class="note-tab"        id="note-tab-settings" onclick="selectNoteType('settings')">Settings</button>
+      <button class="note-tab"        id="note-tab-photo"    onclick="selectNoteType('photo')">Photo</button>
+    </div>
+    <div id="note-pane-text">
+      <textarea id="note-body" rows="3"
+        style="width:100%;background:#0a1628;border:1px solid #2563eb;border-radius:6px;
+               padding:8px;color:#e8eaf0;font-size:.9rem;resize:vertical"
+        placeholder="Race observation..."></textarea>
+    </div>
+    <div id="note-pane-settings" style="display:none">
+      <datalist id="settings-key-suggestions"></datalist>
+      <div id="settings-rows"></div>
+      <button onclick="addSettingsRow()" style="font-size:.8rem;color:#7eb8f7;background:none;border:none;cursor:pointer;padding:4px 0">+ Add field</button>
+    </div>
+    <div id="note-pane-photo" style="display:none;text-align:center">
+      <input type="file" id="photo-file" accept="image/*,video/*" capture="environment"
+        style="display:none" onchange="onPhotoSelected(this)"/>
+      <button class="btn btn-secondary" style="width:100%" onclick="document.getElementById('photo-file').click()">Take Photo / Choose File</button>
+      <div id="photo-preview" style="margin-top:8px"></div>
+    </div>
+    <button class="btn btn-primary" style="margin-top:8px;font-size:.9rem;padding:10px;width:100%"
+      onclick="saveNote()">Save Note</button>
+  </div>
+</div>
+
+<div id="debrief-card" class="card hidden">
+  <div class="label">
+    <span class="status-dot" style="background:#c084fc"></span>Debrief in progress
+  </div>
+  <div class="race-name" id="debrief-name">&mdash;</div>
+  <div class="label" style="margin-top:12px">Duration</div>
+  <div class="duration" id="debrief-duration" style="color:#c084fc">&mdash;</div>
+  <button class="btn btn-danger" style="margin-top:12px" onclick="stopDebrief()">STOP DEBRIEF</button>
+</div>
+
+<div class="card hidden" id="instruments-card">
+  <div class="crew-header" onclick="toggleInstruments()">
+    <span class="label" style="margin-bottom:0">Instruments</span>
+    <span style="display:flex;align-items:center;gap:8px">
+      <span class="inst-time" id="inst-time" style="margin-bottom:0">--:--:-- UTC</span>
+      <span id="inst-chevron" style="color:#8892a4;font-size:.85rem">&#9654;</span>
+    </span>
+  </div>
+  <div id="inst-body" style="display:none">
+  <div class="instruments-grid" id="inst-grid">
+    <div class="inst-item"><span class="inst-label">BSP</span>
+      <span><span class="inst-value" id="iv-bsp">&mdash;</span><span class="inst-unit">kts</span></span></div>
+    <div class="inst-item"><span class="inst-label">TWS</span>
+      <span><span class="inst-value" id="iv-tws">&mdash;</span><span class="inst-unit">kts</span></span></div>
+    <div class="inst-item"><span class="inst-label">TWA</span>
+      <span><span class="inst-value" id="iv-twa">&mdash;</span><span class="inst-unit">&deg;</span></span></div>
+    <div class="inst-item"><span class="inst-label">HDG</span>
+      <span><span class="inst-value" id="iv-hdg">&mdash;</span><span class="inst-unit">&deg;</span></span></div>
+    <div class="inst-item"><span class="inst-label">COG</span>
+      <span><span class="inst-value" id="iv-cog">&mdash;</span><span class="inst-unit">&deg;</span></span></div>
+    <div class="inst-item"><span class="inst-label">SOG</span>
+      <span><span class="inst-value" id="iv-sog">&mdash;</span><span class="inst-unit">kts</span></span></div>
+    <div class="inst-item"><span class="inst-label">AWS</span>
+      <span><span class="inst-value" id="iv-aws">&mdash;</span><span class="inst-unit">kts</span></span></div>
+    <div class="inst-item"><span class="inst-label">AWA</span>
+      <span><span class="inst-value" id="iv-awa">&mdash;</span><span class="inst-unit">&deg;</span></span></div>
+    <div class="inst-item"><span class="inst-label">TWD</span>
+      <span><span class="inst-value" id="iv-twd">&mdash;</span><span class="inst-unit">&deg;</span></span></div>
+  </div>
+  </div>
+</div>
+
+<div class="card hidden" id="crew-card">
+  <div class="crew-header" onclick="toggleCrew()">
+    <span class="label" style="margin-bottom:0">Crew</span>
+    <span id="crew-chevron" style="color:#8892a4;font-size:.85rem">&#9654;</span>
+  </div>
+  <div id="crew-body" style="display:none;margin-top:10px">
+    <div class="crew-row"><span class="crew-pos">Helm</span><input class="crew-input" id="crew-helm" list="recent-sailors" placeholder="Name..." maxlength="40"/></div>
+    <div class="crew-row"><span class="crew-pos">Main</span><input class="crew-input" id="crew-main" list="recent-sailors" placeholder="Name..." maxlength="40"/></div>
+    <div class="crew-row"><span class="crew-pos">Pit</span><input class="crew-input" id="crew-pit" list="recent-sailors" placeholder="Name..." maxlength="40"/></div>
+    <div class="crew-row"><span class="crew-pos">Bow</span><input class="crew-input" id="crew-bow" list="recent-sailors" placeholder="Name..." maxlength="40"/></div>
+    <div class="crew-row"><span class="crew-pos">Tac</span><input class="crew-input" id="crew-tac" list="recent-sailors" placeholder="Name..." maxlength="40"/></div>
+    <div class="crew-row"><span class="crew-pos">Guest</span><input class="crew-input" id="crew-guest" list="recent-sailors" placeholder="Name..." maxlength="40"/></div>
+    <datalist id="recent-sailors"></datalist>
+    <div id="sailor-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px"></div>
+    <button class="btn btn-secondary" style="margin-top:6px;font-size:.9rem;padding:12px" onclick="saveCrew()">Save Crew</button>
+  </div>
+</div>
+
+<div id="controls">
+  <button class="btn btn-primary"  id="btn-start-race"     onclick="startSession('race')">&#9654; START RACE 1</button>
+  <button class="btn btn-practice" id="btn-start-practice" onclick="startSession('practice')">&#9654; START PRACTICE</button>
+  <button class="btn btn-debrief hidden" id="btn-debrief-last" onclick="startDebriefLast()">DEBRIEF LAST RACE</button>
+  <button class="btn btn-secondary hidden" id="btn-end" onclick="endRace()">&#9632; END RACE</button>
+</div>
+
+<div id="today-summary" class="card hidden" style="text-align:center">
+  <div style="font-size:.85rem;color:#8892a4" id="today-summary-text"></div>
+  <a href="/history" style="font-size:.8rem;color:#7eb8f7;text-decoration:none;margin-top:4px;display:inline-block">View history &rarr;</a>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/home.js"></script>
+{% endblock %}
