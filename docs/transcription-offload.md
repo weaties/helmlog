@@ -73,7 +73,7 @@ curl http://localhost:8321/healthz
 
 ```bash
 export HF_TOKEN=hf_your_token_here
-uv run uvicorn scripts.transcribe_worker:app --host 0.0.0.0 --port 8321
+uv run python scripts/transcribe_worker.py
 ```
 
 The worker uses the same `_run_with_diarization` and `_run_whisper` functions
@@ -86,7 +86,7 @@ To keep the worker running across reboots on macOS:
 ```bash
 # Simple approach — run in a tmux session:
 tmux new -s transcribe
-uv run uvicorn scripts.transcribe_worker:app --host 0.0.0.0 --port 8321
+uv run python scripts/transcribe_worker.py
 # Ctrl-B D to detach
 
 # Or use a launchd plist for persistent service (see macOS docs)

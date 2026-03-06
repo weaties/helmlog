@@ -580,6 +580,24 @@ SQLite.
 Remove (or comment out) `HF_TOKEN` from `.env` and restart the logger.
 Transcription will continue to work using the plain Whisper path.
 
+### Remote offload (recommended)
+
+Transcription on the Pi is slow. You can offload it to a Mac over Tailscale —
+a 30-minute recording processes in under a minute on an M-series chip instead
+of 30+ minutes on the Pi.
+
+```bash
+# On the Mac — start the worker:
+uv run python scripts/transcribe_worker.py
+
+# On the Pi — point to the Mac:
+echo 'TRANSCRIBE_URL=http://<mac-tailscale-hostname>:8321' >> ~/j105-logger/.env
+sudo systemctl restart j105-logger
+```
+
+If the Mac is unreachable, the Pi falls back to local transcription automatically.
+See [`docs/transcription-offload.md`](docs/transcription-offload.md) for full setup.
+
 ### Limitations
 
 - Accuracy degrades in high wind/engine noise environments.
