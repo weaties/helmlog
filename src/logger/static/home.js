@@ -12,7 +12,7 @@ let lastInstrumentDataMs = 0;
 
 async function loadState() {
   try {
-    const r = await fetch('/api/state');
+    const r = await fetch('/api/state?_t=' + Date.now());
     if (!r.ok) { console.error('state fetch failed:', r.status); return; }
     state = await r.json();
     render(state);
@@ -276,29 +276,43 @@ async function startSession(type) {
 }
 
 let _endConfirmTimer = null;
+let _endCountdownInterval = null;
+const END_CONFIRM_SECONDS = 4;
 
 function confirmEndRace() {
   const btn = document.getElementById('btn-end');
   if (btn.dataset.confirming === 'true') {
     // Second tap — actually end the race
-    btn.dataset.confirming = '';
-    clearTimeout(_endConfirmTimer);
+    _clearEndConfirm(btn);
     endRace();
     return;
   }
-  // First tap — show confirmation state
+  // First tap — start countdown
   btn.dataset.confirming = 'true';
-  btn.textContent = '⚠ TAP AGAIN TO CONFIRM';
-  btn.style.opacity = '1';
   btn.classList.add('btn-end-confirm');
-  _endConfirmTimer = setTimeout(() => {
-    // Reset after 4 seconds if not confirmed
-    btn.dataset.confirming = '';
-    btn.classList.remove('btn-end-confirm');
-    if (state && state.current_race) {
-      btn.textContent = '■ END ' + state.current_race.name;
+  let remaining = END_CONFIRM_SECONDS;
+  btn.textContent = 'TAP TO CONFIRM (' + remaining + ')';
+  _endCountdownInterval = setInterval(() => {
+    remaining--;
+    if (remaining <= 0) {
+      _clearEndConfirm(btn);
+      return;
     }
-  }, 4000);
+    btn.textContent = 'TAP TO CONFIRM (' + remaining + ')';
+  }, 1000);
+  _endConfirmTimer = setTimeout(() => _clearEndConfirm(btn), END_CONFIRM_SECONDS * 1000);
+}
+
+function _clearEndConfirm(btn) {
+  clearTimeout(_endConfirmTimer);
+  clearInterval(_endCountdownInterval);
+  _endConfirmTimer = null;
+  _endCountdownInterval = null;
+  btn.dataset.confirming = '';
+  btn.classList.remove('btn-end-confirm');
+  if (state && state.current_race) {
+    btn.textContent = '\u25A0 END ' + state.current_race.name;
+  }
 }
 
 async function endRace() {
