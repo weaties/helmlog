@@ -13,6 +13,7 @@ let lastInstrumentDataMs = 0;
 async function loadState() {
   try {
     const r = await fetch('/api/state');
+    if (!r.ok) { console.error('state fetch failed:', r.status); return; }
     state = await r.json();
     render(state);
   } catch(e) { console.error('state error', e); }
@@ -248,27 +249,56 @@ async function saveCrew() {
 }
 
 async function startSession(type) {
-  const resp = await fetch(`/api/races/start?session_type=${type}`, {method:'POST'});
-  if(resp.ok) {
-    const data = await resp.json();
-    const crew = pendingCrew && pendingCrew.length ? pendingCrew : getCrewFromInputs();
-    if(crew.length && data.id) {
-      await fetch('/api/races/' + data.id + '/crew', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(crew)
-      });
-      await loadRecentSailors();
+  try {
+    const resp = await fetch(`/api/races/start?session_type=${type}`, {method:'POST'});
+    if(resp.ok) {
+      const data = await resp.json();
+      const crew = pendingCrew && pendingCrew.length ? pendingCrew : getCrewFromInputs();
+      if(crew.length && data.id) {
+        await fetch('/api/races/' + data.id + '/crew', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(crew)
+        });
+        await loadRecentSailors();
+      }
+      pendingCrew = null;
+    } else {
+      const err = await resp.json().catch(()=>null);
+      const msg = err && err.detail ? err.detail : 'Failed to start session';
+      alert(msg);
     }
-    pendingCrew = null;
-  } else {
-    const err = await resp.json().catch(()=>null);
-    const msg = err && err.detail ? err.detail : 'Failed to start session';
-    alert(msg);
+    await loadState();
+  } catch(e) {
+    console.error('startSession error', e);
+    alert('Error: ' + e.message);
   }
-  await loadState();
-  clearInterval(tickInterval);
-  if(curRaceStartMs) tickInterval = setInterval(tick, 1000);
+}
+
+let _endConfirmTimer = null;
+
+function confirmEndRace() {
+  const btn = document.getElementById('btn-end');
+  if (btn.dataset.confirming === 'true') {
+    // Second tap — actually end the race
+    btn.dataset.confirming = '';
+    clearTimeout(_endConfirmTimer);
+    endRace();
+    return;
+  }
+  // First tap — show confirmation state
+  btn.dataset.confirming = 'true';
+  btn.textContent = '⚠ TAP AGAIN TO CONFIRM';
+  btn.style.opacity = '1';
+  btn.classList.add('btn-end-confirm');
+  _endConfirmTimer = setTimeout(() => {
+    // Reset after 4 seconds if not confirmed
+    btn.dataset.confirming = '';
+    btn.classList.remove('btn-end-confirm');
+    if (state && state.current_race) {
+      btn.textContent = '■ END ' + state.current_race.name;
+    }
+  }, 4000);
 }
 
 async function endRace() {
