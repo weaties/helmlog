@@ -47,7 +47,7 @@ grafana-server.service (independent, starts at boot)
 2. [Web interfaces](#web-interfaces)
 3. [Race marking](#race-marking)
 4. [Sail tracking](#sail-tracking)
-5. [Linking YouTube videos](#linking-youtube-videos)
+5. [Linking YouTube videos](#linking-youtube-videos) (automated Insta360 pipeline + manual)
 6. [External data — weather and tides](#external-data--weather-and-tides)
 7. [Recording audio commentary](#recording-audio-commentary)
 8. [Audio transcription](#audio-transcription)
@@ -287,10 +287,30 @@ inventory. Selections are saved immediately and appear in the race summary.
 
 ## Linking YouTube videos
 
-If you record a race on video and upload it to YouTube, you can link it to
-your instrument data. Once linked, every row in the exported CSV gets a
-`video_url` column with a deep-link (`?t=<seconds>`) that jumps straight to
-that moment in the video.
+Race videos can be linked to instrument data so every row in the exported CSV
+gets a `video_url` column with a deep-link (`?t=<seconds>`) that jumps straight
+to that moment in the video.
+
+### Automated pipeline (Insta360 X4)
+
+If you use an Insta360 X4, the video pipeline handles everything automatically:
+insert the SD card into your Mac, confirm the dialog, and recordings are
+stitched (360° `.insv`) or copied (single-lens `.mp4`), uploaded to YouTube,
+matched to sessions by timestamp, and linked in J105 Logger.
+
+One-time setup:
+
+```bash
+./scripts/setup-video-mac.sh
+```
+
+See [`docs/video-pipeline.md`](docs/video-pipeline.md) for full setup
+(YouTube API credentials, Docker image, session cookie for auto-linking).
+
+### Manual linking
+
+If you upload videos manually to YouTube, you can link them to
+your instrument data from the command line.
 
 ### How to find your sync point
 
