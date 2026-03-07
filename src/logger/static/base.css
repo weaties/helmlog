@@ -195,12 +195,12 @@ h1 {
   color: #fbbf24;
 }
 
-.btn-has-data {
+.btn-export.btn-has-data {
   border-color: #22c55e;
   color: #86efac;
 }
 
-.btn-no-data {
+.btn-export.btn-no-data {
   border-color: #334155;
   color: #64748b;
 }
