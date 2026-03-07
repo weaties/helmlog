@@ -343,7 +343,7 @@ Environment=GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s/grafana/
 Environment=GF_SERVER_SERVE_FROM_SUB_PATH=true
 Environment=GF_AUTH_DISABLE_LOGIN_FORM=false
 Environment=GF_AUTH_ANONYMOUS_ENABLED=true
-Environment=GF_AUTH_ANONYMOUS_ORG_ROLE=None
+Environment=GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
 EOF
 
 sudo systemctl daemon-reload
