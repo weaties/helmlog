@@ -43,6 +43,39 @@ Checked items are complete.
 - [ ] **Integration test replay** — replay a recorded `candump .log` file through the full
       stack (reader → decoder → storage → export) to catch regressions with real data.
 
+### Data co-op platform (from data licensing policy technical requirements)
+
+- [ ] **Multi-co-op data model** — `data_sharing_consent` table, co-op membership tracking,
+      per-session co-op assignment, and consent audit trail in SQLite.
+
+- [ ] **Per-event exclusivity enforcement** — when a boat belongs to multiple co-ops,
+      require assignment of each session to exactly one co-op at mark time.
+
+- [ ] **Audit logging** — record all data access events (view, export, query) with
+      user/boat/timestamp. Rate-limit detection with auto-freeze on anomalous patterns
+      (50+ views/minute).
+
+- [ ] **Coach access controls** — time-limited, view-only access grants with no-aggregation
+      enforcement, derivative works prohibition, and mandatory deletion on expiry.
+
+- [ ] **Observed current model pipeline** — BSP/heading vs SOG/COG vector derivation,
+      geographic scoping per sailing area, unanimous consent gating, per-area opt-out.
+
+- [ ] **Cross-co-op isolation** — prevent aggregation across co-ops unless both co-ops
+      vote (2/3 supermajority each) to allow it.
+
+- [ ] **Soft delete / anonymization** — suppression (hidden but recoverable for 30 days),
+      then permanent purge. "Boat X" anonymization with reversible mapping during grace period.
+
+- [ ] **No bulk export enforcement** — co-op data is view-only in-platform; prevent
+      join-download-leave data extraction.
+
+- [ ] **Pre-join disclosure** — surface all active co-op agreements (commercial, ML,
+      current models, cross-co-op) to prospective members before they join.
+
+- [ ] **AIS exclusion** — ensure the platform does not capture proximity or tracking data
+      from non-member vessels.
+
 ---
 
 ## Completed
@@ -112,3 +145,13 @@ Checked items are complete.
 - [x] CAN HAT hardware setup & loopback testing on Pi (all 7 PGNs verified in loopback)
 - [x] Full test suite (330+ tests — all modules covered)
 - [x] ruff + mypy clean
+
+### Licensing & governance
+- [x] AGPLv3 software license (`LICENSE`)
+- [x] Data licensing policy (`docs/data-licensing.md`) — 13-section policy covering data
+      ownership, co-op sharing model, governance, crew access, retention/deletion, cross-co-op
+      boundaries, non-member protections, AI/ML rights, commercial use, tide/current data,
+      and technical requirements
+- [x] Co-op charter template (`docs/co-op-charter-template.md`) — fillable template for
+      individual co-ops to define mission, membership, governance, active agreements, and
+      fleet-specific rules
