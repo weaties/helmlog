@@ -1,5 +1,24 @@
 # Helm Log — Data Licensing Policy
 
+## Plain English Summary
+
+- **You own your data.** Your instrument logs, notes, and photos belong to you.
+- **Reciprocal sharing.** By joining a co-op, you share your instrument data
+  (wind, speed, GPS) to see everyone else's.
+- **Privacy by default.** Your audio recordings, personal notes, and hard-earned
+  current observations are private and never shared unless you say so.
+- **Crew rights.** Any crew member can ask to have their voice or face deleted or
+  scrambled from your logs at any time.
+- **No spying.** We don't track non-member boats via AIS or radar.
+- **Governance.** The co-op is a democracy. Big moves (like building AI current
+  models or selling data) require a supermajority or unanimous vote.
+- **Easy exit.** You can leave anytime. Your data stays in the co-op but becomes
+  permanently anonymous ("Boat X").
+- **Safety first.** This data is for performance analysis, not navigation. Don't
+  hit a rock because of a shared log.
+
+---
+
 This document defines data ownership, access, sharing, and retention rules for all
 data collected, stored, and shared through the Helm Log platform. These rules
 govern both single-boat usage and co-op data sharing.
@@ -777,7 +796,7 @@ codebase:
 | ML opt-out flag | Per-boat flag to exclude data from approved ML training projects |
 | ML project governance | Record ML project proposals, votes, model ownership, and opt-outs |
 | Commercial use tracking | Record commercial agreements, votes, and revenue distribution |
-| Audit logging | Log all co-op data access (who viewed which session, when) to detect extraction patterns (e.g., a member viewing hundreds of sessions in a short period) |
+| Audit logging | Log all co-op data access (who viewed which session, when) to detect extraction patterns; automatically freeze co-op access and alert admin when anomalous access is detected (e.g., 50+ session views per minute) |
 | Co-op dormancy tracking | Track last governance activity date; trigger dormant status after 2 years of inactivity |
 | AIS data filtering | Exclude AIS and proximity data from other vessels during capture; never store non-member tracking data |
 | Non-member result scoping | When importing full-fleet results, store only official scored finish data for non-members; no instrument or session data |
@@ -827,3 +846,4 @@ beyond what the AGPLv3 allows.
 | 2026-03-07 | Rev 9 — pre-join disclosure of active agreements, informed consent on joining, standalone platform use without co-op |
 | 2026-03-07 | Rev 10 — dual co-op membership rules, per-event exclusivity (same session cannot go to multiple co-ops), dual membership disclosure and co-op-level opt-out |
 | 2026-03-07 | Rev 11 — OA result import liability on co-op not platform, minimum viable co-op (3 boats) triggers dormancy |
+| 2026-03-07 | Rev 12 — plain English summary at top of document, rate-limiting auto-freeze on anomalous access patterns |
