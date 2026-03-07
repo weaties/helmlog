@@ -97,10 +97,20 @@ Because race results are **publicly available data** published by third parties:
 
 ### Coach and combined datasets
 
-When a coach imports multiple boats' data for analysis, the coach holds a
-**delegated access license**, not ownership. The coach may view and analyze the
-data but does not own it. The boat owner can revoke the coach's access at any
-time, at which point the coach must delete that boat's data from their systems.
+When a coach accesses multiple boats' data for analysis, the coach holds a
+**delegated access license**, not ownership. The following rules apply:
+
+- The coach may **view and analyze** data within the Helm Log platform but may
+  **not bulk-export or download** co-op data from other boats
+- The coach may **not aggregate** multiple boats' data into a derived dataset that
+  the coach retains independently of the platform
+- Coach access grants are **time-limited** and must be renewed each season (or at
+  an interval set by the boat owner). There is no perpetual coach access
+- When a coaching engagement ends — whether by expiration, revocation, or mutual
+  agreement — the coach must **delete all data** from that boat. This is mandatory,
+  not optional
+- The boat owner can revoke a coach's access at any time, which triggers immediate
+  deletion obligations
 
 ---
 
@@ -136,13 +146,24 @@ owner explicitly opts in:
 - Sail selections and tuning notes
 - YouTube video links and metadata
 
+### No bulk export of co-op data
+
+Co-op data is available for **in-platform viewing and comparison only**. Members
+may not bulk-export, scrape, or programmatically extract other boats' raw data
+from the co-op. Each boat can export its own data freely, but co-op data from
+other boats is view-only within the Helm Log interface.
+
+This restriction exists to prevent data extraction attacks (join, download
+everything, leave) and to preserve the collective value of the co-op dataset.
+
 ### Explicit sharing with coaches and tuning partners
 
 Boat owners can explicitly share private data (notes, transcripts, audio, photos)
 with:
 
 - **Designated coaches**: identified by user account, granted access to specific
-  sessions or all sessions. The boat owner can revoke a coach's access at any time.
+  sessions or all sessions. Coach access is time-limited and must be renewed each
+  season (see Section 1). The boat owner can revoke a coach's access at any time.
 - **Tuning partners**: another boat in the co-op granted reciprocal access to
   private data for collaborative tuning work
 
@@ -188,6 +209,29 @@ owns multiple boats, the following rules apply:
   (e.g., a sailing club's fleet), the vote-capping rule does not apply — the entity
   has full governance control. However, if independently-owned boats later join, the
   1/3 cap takes effect immediately for the original entity's boats
+
+### Co-op administration
+
+#### Admin role
+
+Co-op admins handle day-to-day operations: approving new members, managing
+settings, and enforcing policy. The admin role is **not** a governance override —
+admins are subject to the same voting rules as any other member.
+
+#### Admin selection
+
+- During **bootstrap phase** (fewer than 5 boats), the co-op founder serves as
+  admin
+- Once the co-op exits bootstrap, admins are **elected by simple majority** of
+  boat representatives
+- Admin terms last **one year**, with no term limits. Admins may be re-elected
+- There may be more than one admin
+
+#### Admin removal
+
+An admin can be removed by the same **supermajority (2/3) vote** used for
+expulsion. Admin removal does not affect the person's co-op membership — they
+remain a member, just no longer an admin.
 
 ### Joining
 
@@ -332,7 +376,127 @@ During the grace period:
 
 ---
 
-## 6. Technical Requirements
+## 6. Cross-Co-op Data Boundaries
+
+### No cross-co-op aggregation
+
+Each co-op's data pool is **independent and isolated**. Members who belong to
+multiple co-ops may not aggregate data across co-ops into a combined dataset.
+
+Specifically:
+
+- A member of both Co-op A and Co-op B may **not** merge, join, or cross-reference
+  data from A and B into a single dataset or analysis
+- This applies to both manual and automated aggregation
+- A boat's **own data** is exempt — a boat owner can always use their own data
+  across any context, since they own it
+
+### Cross-co-op data sharing agreements
+
+Two or more co-ops may choose to share data with each other. This requires:
+
+1. A **supermajority (2/3) vote** in **each** participating co-op
+2. A written agreement specifying what data is shared, for what purpose, and for
+   how long
+3. Either co-op may **withdraw** from the agreement at any time by supermajority
+   vote, at which point cross-shared data must be deleted from the withdrawing
+   co-op's systems
+
+Cross-co-op agreements do not merge co-ops — each retains independent governance,
+membership, and the right to withdraw.
+
+---
+
+## 7. AI, Machine Learning, and Derived Models
+
+### Individual boat data
+
+A boat owner may use **their own data** for any purpose, including training machine
+learning models, building performance predictors, or developing automated systems.
+The boat owner's data is theirs — no restrictions apply beyond the PII protections
+in Section 1.
+
+### Co-op data and ML
+
+Co-op data may **not** be used for machine learning or model training by default.
+To use co-op data for ML, the following conditions must all be met:
+
+1. **Supermajority (2/3) vote** of co-op boat representatives approving the
+   specific ML project
+2. The vote must specify:
+   - What data will be used for training
+   - What kind of model will be built
+   - Who will build and maintain the model
+   - How the model will be used
+3. The resulting model and any derivatives are **owned by the co-op**, not by any
+   individual member or external party
+4. The co-op is responsible for **maintaining, hosting, and governing** the model
+   — it cannot be handed off to a third party without a new supermajority vote
+5. Individual members may **opt out** of having their data included in ML training.
+   Opting out does not affect their co-op membership or access to co-op data
+
+### Prohibitions
+
+- No member may use co-op data to train models **without co-op approval**
+- No member may sell, license, or provide co-op data to a third party for ML
+  training purposes
+- Coaches and tuning partners may **not** use their delegated access to train
+  models on co-op data
+- Models trained on co-op data may **not** be sold or commercially licensed
+  without a separate supermajority vote specifically authorizing commercial use
+
+---
+
+## 8. Commercial Use and Value
+
+### Non-commercial by default
+
+Co-op data and any models, analytics, or derivatives produced from co-op data are
+**non-commercial by default**. They exist for the benefit of co-op members.
+
+### Commercial use requires co-op approval
+
+Any commercial use of co-op data or its derivatives — including but not limited to
+selling access, licensing to third parties (e.g., sail manufacturers, yacht
+designers, analytics companies), or building commercial products — requires:
+
+1. A **supermajority (2/3) vote** of co-op boat representatives
+2. A clear definition of what is being commercialized and by whom
+3. A **revenue-sharing agreement** that returns value to contributing boats
+
+### Value stays with the co-op
+
+The co-op dataset, its derivatives, and the value they generate belong to the
+co-op that sourced the data. No individual member, admin, coach, or external party
+may capture the value of the co-op dataset for private benefit without co-op
+approval.
+
+This principle applies regardless of who performs the technical work of building
+analytics, models, or products on top of co-op data.
+
+### Revenue distribution
+
+If the co-op votes to commercialize data or derivatives, revenue is distributed to
+contributing boats. The specific distribution formula is determined by the co-op at
+the time of the commercial agreement and must be included in the vote.
+
+---
+
+## 9. Dataset Representativeness
+
+### No guarantee of balance
+
+The co-op dataset reflects the boats that choose to participate and the sessions
+they choose to share. Better-resourced programs with higher-quality sensors, more
+sessions, and cleaner data will be disproportionately represented.
+
+The co-op makes **no guarantee** that its dataset is representative, balanced, or
+free from systematic bias. Members and any approved ML projects should account for
+this when drawing conclusions from co-op data.
+
+---
+
+## 10. Technical Requirements
 
 This policy requires the following technical capabilities in the Helm Log
 codebase:
@@ -344,19 +508,25 @@ codebase:
 | Per-session sharing flags | Mark individual sessions as co-op-shared, coach-shared, or private |
 | Boat-level identity in auth | Boats are first-class entities with owners, designated representatives, crew, and sharing posture |
 | Club/multi-boat entity support | Track which boats belong to the same owning entity for vote-capping rules |
-| Coach/tuning-partner ACLs | Explicit, revocable access grants for private data to designated coaches and tuning partners |
+| Coach/tuning-partner ACLs | Time-limited, revocable access grants with mandatory deletion on expiration |
+| No-bulk-export enforcement | Co-op data viewable in-platform only; API and export restricted to own-boat data |
 | Reversible anonymization | Replace boat identity with "Boat X" in co-op comparisons; retain mapping for 30-day reversal window, then permanently delete mapping |
 | Audio anonymization | Voice scrambling / redaction as an alternative to full deletion |
 | Photo PII handling | Deletion or anonymization of identifiable photos on request |
 | Data suppression | Hide (but preserve) a boat's data during 30-day grace periods |
 | Deletion pipeline | 30-day delayed deletion with cancellation support |
 | Audio PII deletion | Ability to delete or anonymize specific audio segments by speaker (requires diarization) |
+| Admin election tracking | Record admin elections, terms, and removal votes |
 | Expulsion vote tracking | Record votes (by boat representative), notice periods, and appeal outcomes |
 | YouTube metadata cleanup | Remove linked video metadata on boat departure/deletion |
+| Cross-co-op isolation | Enforce data pool boundaries; prevent cross-co-op queries or exports |
+| ML opt-out flag | Per-boat flag to exclude data from approved ML training projects |
+| ML project governance | Record ML project proposals, votes, model ownership, and opt-outs |
+| Commercial use tracking | Record commercial agreements, votes, and revenue distribution |
 
 ---
 
-## 7. Software License
+## 11. Software License
 
 The Helm Log source code is licensed under the **GNU Affero General Public
 License v3.0 (AGPLv3)**. See the `LICENSE` file in the repository root.
@@ -385,3 +555,4 @@ beyond what the AGPLv3 allows.
 | 2026-03-07 | Rev 2 — multi-co-op model, photos, YouTube metadata, audio anonymization, club ownership, boat representatives, bootstrap phase, data suppression during grace periods, per-recording crew deletion rights |
 | 2026-03-07 | Rev 3 — single-entity co-op governance, race results as public data, reversible anonymization on departure, post-expulsion data contribution rules |
 | 2026-03-07 | Rev 4 — rebrand from "J105 Logger" to "Helm Log" (helmlog.org) |
+| 2026-03-07 | Rev 5 — data extraction protections (no bulk export), coach access hardening (time-limited, no-aggregation, mandatory deletion), AI/ML governance (co-op-owned models, opt-out, commercial vote), commercial use framework (non-commercial default, revenue sharing), cross-co-op isolation, admin elections and removal, dataset bias disclaimer |
