@@ -1339,7 +1339,15 @@ class Storage:
                 f" (SELECT COUNT(*) > 0 FROM transcripts t"
                 f"   JOIN audio_sessions a2 ON a2.id = t.audio_session_id"
                 f"   WHERE a2.race_id = r.id AND t.status = 'done'"
-                f" ) AS has_transcript"
+                f" ) AS has_transcript,"
+                f" (SELECT COUNT(*) > 0 FROM race_results rr"
+                f"   WHERE rr.race_id = r.id) AS has_results,"
+                f" (SELECT COUNT(*) > 0 FROM race_crew rc"
+                f"   WHERE rc.race_id = r.id) AS has_crew,"
+                f" (SELECT COUNT(*) > 0 FROM race_sails rs"
+                f"   WHERE rs.race_id = r.id) AS has_sails,"
+                f" (SELECT COUNT(*) > 0 FROM session_notes sn"
+                f"   WHERE sn.race_id = r.id) AS has_notes"
                 f" FROM races r"
                 f" LEFT JOIN audio_sessions a"
                 f"   ON a.race_id = r.id AND a.session_type IN ('race', 'practice')"
@@ -1373,7 +1381,8 @@ class Storage:
                 f" 0 AS has_track, NULL AS first_video_url,"
                 f" (SELECT COUNT(*) > 0 FROM transcripts t"
                 f"   WHERE t.audio_session_id = a.id AND t.status = 'done'"
-                f" ) AS has_transcript"
+                f" ) AS has_transcript,"
+                f" 0 AS has_results, 0 AS has_crew, 0 AS has_sails, 0 AS has_notes"
                 f" FROM audio_sessions a"
                 f" LEFT JOIN races r ON r.id = a.race_id"
                 f" {where}"
@@ -1420,6 +1429,10 @@ class Storage:
                     "has_track": bool(row["has_track"]),
                     "first_video_url": row["first_video_url"],
                     "has_transcript": bool(row["has_transcript"]),
+                    "has_results": bool(row["has_results"]),
+                    "has_crew": bool(row["has_crew"]),
+                    "has_sails": bool(row["has_sails"]),
+                    "has_notes": bool(row["has_notes"]),
                     "crew": [],
                 }
             )

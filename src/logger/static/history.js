@@ -52,21 +52,19 @@ function render(data) {
     const badge = '<span class="badge ' + typeClass + '">' + s.type.toUpperCase() + '</span>';
     const parent = s.parent_race_name ? '<div class="session-meta">Debrief of ' + s.parent_race_name + '</div>' : '';
 
-    // --- Toggle buttons: Track, Results, Crew, Sails, Notes, Videos, Transcript ---
+    // --- Toggle buttons: Track, Video, Results, Crew, Sails, Notes, Transcript ---
     let toggles = '';
+    const _dc = has => has ? 'btn-export btn-has-data' : 'btn-export btn-no-data';
     if (s.type !== 'debrief') {
-      const trackCls = s.has_track ? 'btn-export btn-has-data' : 'btn-export btn-no-data';
-      toggles += '<button class="' + trackCls + '" id="hist-track-btn-' + s.id + '"' + (s.has_track ? ' onclick="toggleHistoryTrack(' + s.id + ')"' : ' disabled') + '>Track ▶</button>';
-      const videoCls = s.first_video_url ? 'btn-export btn-has-data' : 'btn-export btn-no-data';
-      toggles += '<button class="' + videoCls + '" id="hist-videos-btn-' + s.id + '" onclick="toggleHistoryPlayer(' + s.id + ')">Video ▶</button>';
-      toggles += '<button class="btn-export" id="hist-results-btn-' + s.id + '" onclick="toggleHistoryResults(' + s.id + ')">Results ▶</button>';
-      toggles += '<button class="btn-export" id="hist-crew-btn-' + s.id + '" onclick="toggleHistoryCrew(' + s.id + ')">Crew ▶</button>';
-      toggles += '<button class="btn-export" id="hist-sails-btn-' + s.id + '" onclick="toggleHistorySails(' + s.id + ')">Sails ▶</button>';
-      toggles += '<button class="btn-export" id="hist-notes-btn-' + s.id + '" onclick="toggleHistoryNotes(' + s.id + ')">Notes ▶</button>';
+      toggles += '<button class="' + _dc(s.has_track) + '" id="hist-track-btn-' + s.id + '"' + (s.has_track ? ' onclick="toggleHistoryTrack(' + s.id + ')"' : ' disabled') + '>Track ▶</button>';
+      toggles += '<button class="' + _dc(s.first_video_url) + '" id="hist-videos-btn-' + s.id + '" onclick="toggleHistoryPlayer(' + s.id + ')">Video ▶</button>';
+      toggles += '<button class="' + _dc(s.has_results) + '" id="hist-results-btn-' + s.id + '" onclick="toggleHistoryResults(' + s.id + ')">Results ▶</button>';
+      toggles += '<button class="' + _dc(s.has_crew) + '" id="hist-crew-btn-' + s.id + '" onclick="toggleHistoryCrew(' + s.id + ')">Crew ▶</button>';
+      toggles += '<button class="' + _dc(s.has_sails) + '" id="hist-sails-btn-' + s.id + '" onclick="toggleHistorySails(' + s.id + ')">Sails ▶</button>';
+      toggles += '<button class="' + _dc(s.has_notes) + '" id="hist-notes-btn-' + s.id + '" onclick="toggleHistoryNotes(' + s.id + ')">Notes ▶</button>';
     }
     if (s.has_audio && s.audio_session_id) {
-      const transCls = s.has_transcript ? 'btn-export btn-has-data' : 'btn-export btn-no-data';
-      toggles += '<button class="' + transCls + '" id="hist-transcript-btn-' + s.id + '" onclick="toggleHistoryTranscript(' + s.id + ',' + s.audio_session_id + ')">Transcript ▶</button>';
+      toggles += '<button class="' + _dc(s.has_transcript) + '" id="hist-transcript-btn-' + s.id + '" onclick="toggleHistoryTranscript(' + s.id + ',' + s.audio_session_id + ')">Transcript ▶</button>';
     }
     const togglesHtml = toggles ? '<div class="session-exports">' + toggles + '</div>' : '';
 
