@@ -63,7 +63,7 @@ sudo apt-get install -y \
     ca-certificates lsb-release jq \
     libportaudio2 libsndfile1 \
     unattended-upgrades apt-listchanges \
-    tmux locales
+    tmux locales acl
 
 # Ensure en_US.UTF-8 locale is generated (prevents setlocale warnings on SSH)
 sudo sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
@@ -576,7 +576,10 @@ info "$PROJECT_DIR/data/notes (photo notes)"
 # setgid ensures new files/dirs inherit the group so both users can always read/write.
 sudo chown -R "$CURRENT_USER:$CURRENT_USER" "$PROJECT_DIR/data"
 sudo chmod -R g+ws "$PROJECT_DIR/data"
-info "data/ owned by $CURRENT_USER, group-writable (j105logger is a member)."
+# Default POSIX ACL: new files created in data/ (e.g. by `j105-logger add-user`)
+# automatically get group rw regardless of the creating user's umask.
+sudo setfacl -R -d -m g::rw "$PROJECT_DIR/data"
+info "data/ owned by $CURRENT_USER, group-writable + default ACL (j105logger is a member)."
 
 # ---------------------------------------------------------------------------
 # i) netdev group (allows non-root SocketCAN access)
