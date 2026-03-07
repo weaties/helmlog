@@ -82,6 +82,12 @@ boat owner, but the same information is independently published by the **organiz
 authority** (yacht club, class association, or regatta committee) as part of the
 official event record.
 
+For the purposes of this policy, "race results" means **officially scored rank,
+finishing time, and corrected time** as published by the organizing authority — not
+high-resolution GPS tracks, instrument telemetry, or other session data from that
+race. The full instrument data for a race session is governed by the instrument
+data rules above.
+
 Because race results are **publicly available data** published by third parties:
 
 - Race results entered into the logger are owned by the boat, but the boat owner
@@ -109,8 +115,12 @@ When a coach accesses multiple boats' data for analysis, the coach holds a
 - When a coaching engagement ends — whether by expiration, revocation, or mutual
   agreement — the coach must **delete all data** from that boat. This is mandatory,
   not optional
+- **Derivative works** — any reports, summaries, screenshots, spreadsheets, or
+  other materials the coach creates using co-op or boat data are subject to the
+  same recall and deletion obligations. The coach may not retain derivative works
+  after access ends
 - The boat owner can revoke a coach's access at any time, which triggers immediate
-  deletion obligations
+  deletion obligations (including derivative works)
 
 ---
 
@@ -293,6 +303,20 @@ stored sessions become available to the co-op again.
 
 During expulsion, the boat **cannot contribute new data** to the co-op. Any
 sessions recorded during this period remain local until re-admission.
+
+### Inactive co-ops
+
+If a co-op has **no governance activity** (no votes, no admin actions, no new
+members) for **2 consecutive years**, it enters **dormant status**:
+
+- The co-op's data is **frozen** — preserved as-is but no new data is accepted
+- Member access to co-op data continues in read-only mode
+- Any member may **reactivate** the co-op by proposing a governance action (e.g.,
+  electing an admin), which triggers a 30-day response window
+- If no member acts to reactivate within 30 days of a reactivation proposal, the
+  co-op is **dissolved**: all data is anonymized, identity mappings are deleted,
+  and the co-op ceases to exist
+- Individual boats retain their own local data regardless of co-op dissolution
 
 ### Re-entry after expulsion
 
@@ -494,9 +518,41 @@ The co-op makes **no guarantee** that its dataset is representative, balanced, o
 free from systematic bias. Members and any approved ML projects should account for
 this when drawing conclusions from co-op data.
 
+### Anonymization limitations in small datasets
+
+In small co-ops (fewer than ~10 boats), anonymization (replacing a boat's name
+with "Boat X") **does not guarantee de-identification**. GPS tracks, wind data,
+and racing patterns may be unique enough that knowledgeable fleet members can
+deduce a boat's identity from the data alone. Members should be aware that
+anonymization provides identity protection against casual inspection, not against
+determined analysis by someone with fleet knowledge.
+
 ---
 
-## 10. Technical Requirements
+## 10. Liability and Warranty
+
+### No warranty
+
+All data shared through the co-op is provided **"as-is" without warranty of any
+kind**, express or implied, including but not limited to warranties of accuracy,
+completeness, reliability, or fitness for a particular purpose.
+
+### No liability for use
+
+Neither the co-op, nor individual members, nor the Helm Log platform are liable
+for any tactical errors, navigational decisions, groundings, equipment failures,
+collisions, personal injury, or any other consequence resulting from the use of
+shared data. Members use co-op data **at their own risk**.
+
+### No guarantee of availability
+
+The co-op does not guarantee continuous access to shared data. Data may become
+unavailable due to member departures, deletions, technical failures, or co-op
+dissolution.
+
+---
+
+## 11. Technical Requirements
 
 This policy requires the following technical capabilities in the Helm Log
 codebase:
@@ -513,8 +569,8 @@ codebase:
 | Reversible anonymization | Replace boat identity with "Boat X" in co-op comparisons; retain mapping for 30-day reversal window, then permanently delete mapping |
 | Audio anonymization | Voice scrambling / redaction as an alternative to full deletion |
 | Photo PII handling | Deletion or anonymization of identifiable photos on request |
-| Data suppression | Hide (but preserve) a boat's data during 30-day grace periods |
-| Deletion pipeline | 30-day delayed deletion with cancellation support |
+| Data suppression (soft delete) | Hide (but preserve) a boat's data during 30-day grace periods; data remains in DB but is excluded from all queries and views |
+| Permanent deletion (hard delete) | Irreversibly purge data from the database after grace period expiration; no recovery possible |
 | Audio PII deletion | Ability to delete or anonymize specific audio segments by speaker (requires diarization) |
 | Admin election tracking | Record admin elections, terms, and removal votes |
 | Expulsion vote tracking | Record votes (by boat representative), notice periods, and appeal outcomes |
@@ -523,10 +579,12 @@ codebase:
 | ML opt-out flag | Per-boat flag to exclude data from approved ML training projects |
 | ML project governance | Record ML project proposals, votes, model ownership, and opt-outs |
 | Commercial use tracking | Record commercial agreements, votes, and revenue distribution |
+| Audit logging | Log all co-op data access (who viewed which session, when) to detect extraction patterns (e.g., a member viewing hundreds of sessions in a short period) |
+| Co-op dormancy tracking | Track last governance activity date; trigger dormant status after 2 years of inactivity |
 
 ---
 
-## 11. Software License
+## 12. Software License
 
 The Helm Log source code is licensed under the **GNU Affero General Public
 License v3.0 (AGPLv3)**. See the `LICENSE` file in the repository root.
@@ -556,3 +614,4 @@ beyond what the AGPLv3 allows.
 | 2026-03-07 | Rev 3 — single-entity co-op governance, race results as public data, reversible anonymization on departure, post-expulsion data contribution rules |
 | 2026-03-07 | Rev 4 — rebrand from "J105 Logger" to "Helm Log" (helmlog.org) |
 | 2026-03-07 | Rev 5 — data extraction protections (no bulk export), coach access hardening (time-limited, no-aggregation, mandatory deletion), AI/ML governance (co-op-owned models, opt-out, commercial vote), commercial use framework (non-commercial default, revenue sharing), cross-co-op isolation, admin elections and removal, dataset bias disclaimer |
+| 2026-03-07 | Rev 6 — coach derivative works prohibition, race results clarified as scored rank/time only, small-dataset anonymization disclaimer, inactive co-op dormancy/dissolution, liability shield and no-warranty clause, soft delete vs hard delete distinction, audit logging requirement |
