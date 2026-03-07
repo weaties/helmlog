@@ -344,6 +344,11 @@ Before joining, the co-op must disclose to the prospective member all active:
 - **Cross-co-op data sharing agreements** (Section 6) — which other co-ops
   have access to this co-op's data
 
+Each co-op should maintain a **co-op charter** (see `docs/co-op-charter-template.md`)
+that summarizes its specific rules, active agreements, and admin roster in a
+human-readable format. The charter is presented to prospective members as part of
+the join flow.
+
 By joining, the new member **accepts all active agreements as disclosed**. Their
 contributed data becomes subject to those agreements from the moment it enters
 the co-op. There is no grace period or retroactive carve-out — the member had
@@ -847,3 +852,4 @@ beyond what the AGPLv3 allows.
 | 2026-03-07 | Rev 10 — dual co-op membership rules, per-event exclusivity (same session cannot go to multiple co-ops), dual membership disclosure and co-op-level opt-out |
 | 2026-03-07 | Rev 11 — OA result import liability on co-op not platform, minimum viable co-op (3 boats) triggers dormancy |
 | 2026-03-07 | Rev 12 — plain English summary at top of document, rate-limiting auto-freeze on anomalous access patterns |
+| 2026-03-07 | Rev 13 — co-op charter template, charter reference in pre-join disclosure |
