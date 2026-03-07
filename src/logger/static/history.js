@@ -118,7 +118,8 @@ function render(data) {
         + '</audio></div>'
       : '';
 
-    return '<div class="card"><div class="session-name">' + s.name + badge + videoLink + '</div>'
+    const nameLink = '<a href="/session/' + s.id + '" style="color:inherit;text-decoration:none">' + s.name + '</a>';
+    return '<div class="card"><div class="session-name">' + nameLink + badge + videoLink + '</div>'
       + '<div class="session-meta">' + s.date + ' &nbsp;·&nbsp; ' + start + ' → ' + end + dur + '</div>'
       + parent
       + togglesHtml + trackPanel + resultsPanel + crewPanel + sailsPanel + notesPanel + videosPanel + transcriptPanel

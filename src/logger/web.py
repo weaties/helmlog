@@ -544,6 +544,26 @@ def create_app(
             ),
         )
 
+    @app.get("/session/{session_id}", response_class=HTMLResponse, include_in_schema=False)
+    async def session_detail_page(request: Request, session_id: int) -> Response:
+        cur = await storage._conn().execute(
+            "SELECT name FROM races WHERE id = ?", (session_id,)
+        )
+        row = await cur.fetchone()
+        session_name = row["name"] if row else f"Session {session_id}"
+        return _templates.TemplateResponse(
+            request,
+            "session.html",
+            _tpl_ctx(
+                request,
+                "/history",
+                session_id=session_id,
+                session_name=session_name,
+                grafana_port=cfg.grafana_port,
+                grafana_uid=cfg.grafana_uid,
+            ),
+        )
+
     @app.get("/admin/boats", response_class=HTMLResponse, include_in_schema=False)
     async def admin_boats_page(request: Request) -> Response:
         return _templates.TemplateResponse(
@@ -1541,6 +1561,56 @@ def create_app(
             },
         }
         return JSONResponse({"type": "FeatureCollection", "features": [feature]})
+
+    # ------------------------------------------------------------------
+    # /api/sessions/{id}  (single session detail)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/sessions/{session_id}/detail")
+    async def api_session_detail(session_id: int) -> JSONResponse:
+        """Return full metadata for a single session."""
+        db = storage._conn()
+        cur = await db.execute(
+            "SELECT r.id, r.name, r.event, r.race_num, r.date,"
+            " r.start_utc, r.end_utc, r.session_type,"
+            " (SELECT COUNT(*) > 0 FROM positions p"
+            "   WHERE p.ts >= r.start_utc AND p.ts <= COALESCE(r.end_utc, r.start_utc)"
+            " ) AS has_track,"
+            " (SELECT rv.youtube_url FROM race_videos rv"
+            "   WHERE rv.race_id = r.id LIMIT 1) AS first_video_url"
+            " FROM races r WHERE r.id = ?",
+            (session_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        start_utc = datetime.fromisoformat(row["start_utc"])
+        end_utc = datetime.fromisoformat(row["end_utc"]) if row["end_utc"] else None
+        duration_s = (end_utc - start_utc).total_seconds() if end_utc else None
+
+        # Check for audio
+        acur = await db.execute(
+            "SELECT id FROM audio_sessions WHERE race_id = ? AND session_type IN ('race','practice')",
+            (session_id,),
+        )
+        arow = await acur.fetchone()
+
+        return JSONResponse({
+            "id": row["id"],
+            "type": row["session_type"],
+            "name": row["name"],
+            "event": row["event"],
+            "race_num": row["race_num"],
+            "date": row["date"],
+            "start_utc": start_utc.isoformat(),
+            "end_utc": end_utc.isoformat() if end_utc else None,
+            "duration_s": round(duration_s, 1) if duration_s is not None else None,
+            "has_track": bool(row["has_track"]),
+            "first_video_url": row["first_video_url"],
+            "has_audio": arow is not None,
+            "audio_session_id": arow["id"] if arow else None,
+        })
 
     # ------------------------------------------------------------------
     # /api/sessions  (history browser)
