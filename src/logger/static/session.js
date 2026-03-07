@@ -79,7 +79,7 @@ async function loadTrack() {
   const coords = feature.geometry.coordinates;
   const rawTimestamps = feature.properties.timestamps || [];
   const latLngs = coords.map(c => [c[1], c[0]]);
-  const timestamps = rawTimestamps.map(t => new Date(t));
+  const timestamps = rawTimestamps.map(t => new Date(t.endsWith('Z') || t.includes('+') ? t : t + 'Z'));
   const line = L.polyline(latLngs, {color: '#2563eb', weight: 4}).addTo(_map);
 
   L.circleMarker(latLngs[0], {radius: 6, color: '#22c55e', fillColor: '#22c55e', fillOpacity: 1})

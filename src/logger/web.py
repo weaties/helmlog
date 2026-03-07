@@ -1550,7 +1550,11 @@ def create_app(
             return JSONResponse({"type": "FeatureCollection", "features": []})
 
         coords = [[r["longitude_deg"], r["latitude_deg"]] for r in positions]
-        timestamps = [r["ts"] for r in positions]
+        timestamps = [
+            t if "+" in t or t.endswith("Z") else t + "Z"
+            for r in positions
+            if (t := r["ts"])
+        ]
         feature = {
             "type": "Feature",
             "geometry": {"type": "LineString", "coordinates": coords},
