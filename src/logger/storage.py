@@ -71,7 +71,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 24
+_CURRENT_VERSION: int = 25
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -455,6 +455,12 @@ _MIGRATIONS: dict[int, str] = {
             value       TEXT NOT NULL,
             updated_at  TEXT NOT NULL
         );
+    """,
+    25: """
+        -- Gaia GPS backfill (#101): track provenance metadata on races
+        ALTER TABLE races ADD COLUMN source TEXT NOT NULL DEFAULT 'live';
+        ALTER TABLE races ADD COLUMN source_id TEXT;
+        ALTER TABLE races ADD COLUMN imported_at TEXT;
     """,
 }
 
@@ -1072,6 +1078,89 @@ class Storage:
         await db.commit()
         self._session_active = False
         logger.info("Race {} ended at {}", race_id, end_utc.isoformat())
+
+    async def has_source_id(self, source: str, source_id: str) -> bool:
+        """Check if a race with this source/source_id already exists (dedup)."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT 1 FROM races WHERE source = ? AND source_id = ?",
+            (source, source_id),
+        )
+        return await cur.fetchone() is not None
+
+    async def import_race(
+        self,
+        *,
+        name: str,
+        event: str,
+        race_num: int,
+        date_str: str,
+        start_utc: datetime,
+        end_utc: datetime,
+        session_type: str,
+        source: str,
+        source_id: str,
+    ) -> int:
+        """Insert a backfilled race row with provenance metadata. Returns race_id."""
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        now = _datetime.now(_UTC).isoformat()
+        cur = await db.execute(
+            "INSERT INTO races"
+            " (name, event, race_num, date, start_utc, end_utc,"
+            "  session_type, source, source_id, imported_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                name,
+                event,
+                race_num,
+                date_str,
+                start_utc.isoformat(),
+                end_utc.isoformat(),
+                session_type,
+                source,
+                source_id,
+                now,
+            ),
+        )
+        await db.commit()
+        race_id = cur.lastrowid
+        assert race_id is not None
+        logger.info("Imported race {} (source={}, source_id={})", race_id, source, source_id)
+        return race_id
+
+    async def import_track_points(
+        self,
+        points: list[tuple[str, float, float, float | None, float | None]],
+    ) -> int:
+        """Bulk-insert GPS points from a backfill source.
+
+        Each tuple: (ts_iso, latitude_deg, longitude_deg, cog_deg | None, sog_kts | None).
+        Inserts into both positions and cogsog tables.
+        Returns number of points written.
+        """
+        db = self._conn()
+        pos_rows = [(ts, 0, lat, lon) for ts, lat, lon, _, _ in points]
+        await db.executemany(
+            "INSERT INTO positions (ts, source_addr, latitude_deg, longitude_deg)"
+            " VALUES (?, ?, ?, ?)",
+            pos_rows,
+        )
+
+        cs_rows = [
+            (ts, 0, cog, sog)
+            for ts, _, _, cog, sog in points
+            if cog is not None and sog is not None
+        ]
+        if cs_rows:
+            await db.executemany(
+                "INSERT INTO cogsog (ts, source_addr, cog_deg, sog_kts) VALUES (?, ?, ?, ?)",
+                cs_rows,
+            )
+        await db.commit()
+        return len(pos_rows)
 
     async def get_race(self, race_id: int) -> Race | None:
         """Return the race with the given id, or None if not found."""

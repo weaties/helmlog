@@ -411,6 +411,268 @@ async def _list_cameras() -> None:
 
 
 # ---------------------------------------------------------------------------
+# link-channel-videos
+# ---------------------------------------------------------------------------
+
+
+async def _link_channel_videos(channel_id: str, *, auto_confirm: bool, dry_run: bool) -> None:
+    """Match YouTube channel videos to Gaia GPS-imported races by date + title keywords."""
+    import re
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    from logger.storage import Storage, StorageConfig
+
+    pacific = ZoneInfo("America/Los_Angeles")
+
+    storage = Storage(StorageConfig())
+    await storage.connect()
+    try:
+        # 1. Fetch all races imported from Gaia GPS
+        db = storage._conn()
+        cur = await db.execute(
+            "SELECT id, name, event, date, start_utc, end_utc"
+            " FROM races WHERE source = 'gaiagps' ORDER BY date",
+        )
+        races = [dict(r) for r in await cur.fetchall()]
+        if not races:
+            print("No Gaia GPS races found in the database.")
+            return
+
+        # 2. Fetch all videos from the YouTube channel
+        print(f"Fetching videos from channel {channel_id}...")
+        yt_videos = await asyncio.to_thread(_fetch_all_channel_videos, channel_id)
+        if not yt_videos:
+            print("No videos found on channel.")
+            return
+        print(f"Found {len(yt_videos)} videos on channel.")
+
+        # 3. Check which video_ids are already linked
+        cur2 = await db.execute("SELECT video_id FROM race_videos")
+        already_linked = {r["video_id"] for r in await cur2.fetchall()}
+
+        # 4. Parse date/time from each video title and match to races
+        # Title patterns: "VID YYYYMMDD HHMMSS ...", "YYYYMMDD HHMMSS ...",
+        #                  "YYYYMMDD ...", "YYMMDD ..."
+        date_time_re = re.compile(r"(?:VID\s+)?(\d{8})\s+(\d{6})\b", re.IGNORECASE)
+        date_only_re = re.compile(r"(?:VID\s+)?(\d{8})\b", re.IGNORECASE)
+        short_date_re = re.compile(r"^(\d{6})\b")  # YYMMDD
+
+        matches: list[tuple[dict[str, object], dict[str, object], str]] = []
+        unmatched_videos: list[dict[str, object]] = []
+
+        for vid in yt_videos:
+            vid_id = str(vid.get("id", ""))
+            if vid_id in already_linked:
+                continue
+
+            title = str(vid.get("title", ""))
+            duration = float(str(vid.get("duration") or 0))
+            if duration < 60:
+                continue  # skip short clips/trailers
+
+            # Parse date and optional time from title
+            vid_date_str: str | None = None
+            vid_utc: datetime | None = None
+
+            m = date_time_re.search(title)
+            if m:
+                vid_date_str = m.group(1)
+                # Convert local recording time to UTC
+                try:
+                    local_dt = datetime.strptime(
+                        f"{m.group(1)} {m.group(2)}", "%Y%m%d %H%M%S"
+                    ).replace(tzinfo=pacific)
+                    vid_utc = local_dt.astimezone(UTC)
+                except ValueError:
+                    pass
+            else:
+                m2 = date_only_re.search(title)
+                if m2:
+                    vid_date_str = m2.group(1)
+                else:
+                    m3 = short_date_re.search(title)
+                    if m3:
+                        vid_date_str = "20" + m3.group(1)
+
+            if not vid_date_str:
+                unmatched_videos.append(vid)
+                continue
+
+            # Find races on the same date
+            # The video date might be the local date (PDT), while race date is
+            # based on UTC. A race at 7pm PDT = 2am UTC next day. So check
+            # both the video date and the day before.
+            try:
+                vd = datetime.strptime(vid_date_str, "%Y%m%d").date()
+            except ValueError:
+                unmatched_videos.append(vid)
+                continue
+
+            from datetime import date as _date
+
+            candidates = [
+                r for r in races if _date.fromisoformat(r["date"]) in (vd, vd + timedelta(days=1))
+            ]
+
+            if not candidates:
+                unmatched_videos.append(vid)
+                continue
+
+            # Score candidates by keyword overlap with video title
+            best_race = _best_race_match(title, candidates, vid_utc)
+            if best_race:
+                reason = "date+time" if vid_utc else "date+keywords"
+                matches.append((vid, best_race, reason))
+            else:
+                unmatched_videos.append(vid)
+
+        # 5. Print report
+        if matches:
+            print(f"\n{'Video Title':<55} {'Race Event':<35} {'Match'}")
+            print("-" * 100)
+            for vid, race, reason in matches:
+                vt = str(vid.get("title", ""))[:55]
+                re_ = str(race["event"])[:35]
+                print(f"{vt:<55} {re_:<35} {reason}")
+
+        if unmatched_videos:
+            print(f"\n--- {len(unmatched_videos)} unmatched video(s) ---")
+            for vid in unmatched_videos[:10]:
+                print(f"  {vid.get('title')}")
+            if len(unmatched_videos) > 10:
+                print(f"  ... and {len(unmatched_videos) - 10} more")
+
+        print(
+            f"\n{len(matches)} match(es), {len(unmatched_videos)} unmatched,"
+            f" {len(already_linked)} already linked."
+        )
+
+        if dry_run:
+            print("\nDry run — no changes written.")
+            return
+
+        if not matches:
+            return
+
+        if not auto_confirm:
+            print("\nUse --yes to write these links to the database.")
+            return
+
+        # 6. Write matches to DB
+        linked = 0
+        for vid, race, _reason in matches:
+            vid_id = str(vid.get("id", ""))
+            vid_url = f"https://www.youtube.com/watch?v={vid_id}"
+            title = str(vid.get("title", ""))
+            duration = float(str(vid.get("duration") or 0))
+            race_id = int(str(race["id"]))
+
+            # Use race start_utc as sync point
+            sync_utc = datetime.fromisoformat(str(race["start_utc"]))
+            if sync_utc.tzinfo is None:
+                sync_utc = sync_utc.replace(tzinfo=UTC)
+
+            await storage.add_race_video(
+                race_id=race_id,
+                youtube_url=vid_url,
+                video_id=vid_id,
+                title=title,
+                label="youtube",
+                sync_utc=sync_utc,
+                sync_offset_s=0.0,
+                duration_s=duration,
+            )
+            linked += 1
+
+        print(f"\n{linked} video(s) linked to races.")
+    finally:
+        await storage.close()
+
+
+def _fetch_all_channel_videos(channel_id: str) -> list[dict[str, object]]:
+    """Fetch all videos from a YouTube channel using yt-dlp (runs in thread)."""
+    import json
+    import subprocess
+
+    result = subprocess.run(
+        [
+            "yt-dlp",
+            "--flat-playlist",
+            "--dump-json",
+            f"https://www.youtube.com/channel/{channel_id}/videos",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    videos: list[dict[str, object]] = []
+    for line in result.stdout.strip().split("\n"):
+        if line.strip():
+            videos.append(json.loads(line))
+    return videos
+
+
+def _best_race_match(
+    video_title: str,
+    candidates: list[dict[str, object]],
+    vid_utc: datetime | None,
+) -> dict[str, object] | None:
+    """Pick the best matching race from candidates using keyword overlap + time proximity."""
+    import re
+
+    # Normalize title for keyword matching
+    title_lower = video_title.lower()
+
+    # Extract race/round indicators from title: r1, r2, d1, d2, pt1, pt2
+    round_re = re.compile(r"\b[rd](\d+)\b", re.IGNORECASE)
+    title_rounds = set(round_re.findall(title_lower))
+
+    # Common keyword stems to check
+    title_words = set(re.findall(r"[a-z]{3,}", title_lower))
+
+    best: dict[str, object] | None = None
+    best_score = -1.0
+
+    for race in candidates:
+        event_lower = str(race["event"]).lower()
+        event_words = set(re.findall(r"[a-z]{3,}", event_lower))
+        event_rounds = set(round_re.findall(event_lower))
+
+        # Keyword overlap score
+        common = title_words & event_words
+        score = len(common) * 2.0
+
+        # Bonus for matching round numbers
+        if title_rounds and event_rounds and title_rounds & event_rounds:
+            score += 5.0
+
+        # Time proximity bonus (if we have a parsed video UTC time)
+        if vid_utc:
+            race_start = datetime.fromisoformat(str(race["start_utc"]))
+            if race_start.tzinfo is None:
+                race_start = race_start.replace(tzinfo=UTC)
+            diff_s = abs((vid_utc - race_start).total_seconds())
+            # Strong bonus if within 30 min, moderate if within 2 hours
+            if diff_s < 1800:
+                score += 10.0
+            elif diff_s < 7200:
+                score += 5.0
+            elif diff_s < 14400:
+                score += 2.0
+
+        if score > best_score:
+            best_score = score
+            best = race
+
+    # Require at least some signal to match
+    if best_score < 2.0:
+        return None
+
+    return best
+
+
+# ---------------------------------------------------------------------------
 # sync-videos
 # ---------------------------------------------------------------------------
 
@@ -772,6 +1034,20 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list-cameras", help="Show configured cameras and their status")
 
+    lcv = sub.add_parser(
+        "link-channel-videos",
+        help="Match YouTube channel videos to Gaia GPS-imported races by date",
+    )
+    lcv.add_argument(
+        "--channel-id",
+        metavar="ID",
+        help="YouTube channel ID (or set YOUTUBE_CHANNEL_ID)",
+    )
+    lcv.add_argument("--yes", action="store_true", help="Write matches to DB (otherwise dry run)")
+    lcv.add_argument(
+        "--dry-run", action="store_true", help="Show matches without writing (default behaviour)"
+    )
+
     sv = sub.add_parser("sync-videos", help="Auto-associate YouTube uploads with camera sessions")
     sv.add_argument(
         "--channel-id", metavar="ID", help="YouTube channel ID (or set YOUTUBE_CHANNEL_ID)"
@@ -837,6 +1113,12 @@ def main() -> None:
                 asyncio.run(_list_videos())
             case "list-cameras":
                 asyncio.run(_list_cameras())
+            case "link-channel-videos":
+                ch = args.channel_id or os.environ.get("YOUTUBE_CHANNEL_ID", "")
+                if not ch:
+                    print("No channel ID. Use --channel-id or set YOUTUBE_CHANNEL_ID.")
+                    sys.exit(1)
+                asyncio.run(_link_channel_videos(ch, auto_confirm=args.yes, dry_run=not args.yes))
             case "sync-videos":
                 asyncio.run(_sync_videos(args.channel_id, args.tolerance, args.yes))
             case "list-audio":
