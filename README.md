@@ -1,9 +1,10 @@
-# J105 Logger
+# HelmLog
 
-NMEA 2000 data logger for J105 sailboat racing performance analysis. Runs on a
-Raspberry Pi with a CAN bus HAT connected to the B&G instrument network. Signal K
-Server decodes the NMEA 2000 bus and feeds both InfluxDB → Grafana (real-time
-dashboards) and j105-logger (SQLite → CSV/GPX/JSON for regatta analysis tools).
+Open-source sailing data platform — instrument logging, race debrief, fleet performance.
+
+Runs on a Raspberry Pi with a CAN bus HAT connected to the B&G instrument network.
+Signal K Server decodes the NMEA 2000 bus and feeds both InfluxDB → Grafana
+(real-time dashboards) and helmlog (SQLite → CSV/GPX/JSON for regatta analysis tools).
 
 Two Signal K plugins are required:
 - **signalk-to-influxdb2** — forwards all SK data to InfluxDB for Grafana dashboards
@@ -23,7 +24,7 @@ Signal K Server          ← owns can0, decodes NMEA 2000 via canboatjs
     └──► WebSocket ws://localhost:3000/signalk/v1/stream
               │
               ▼
-         j105-logger (sk_reader.py)
+         helmlog (sk_reader.py)
               │
               ▼
          SQLite (storage.py)
@@ -34,7 +35,7 @@ Signal K Server          ← owns can0, decodes NMEA 2000 via canboatjs
 
 Service dependency chain:
 ```
-can-interface.service  →  signalk.service  →  j105-logger.service
+can-interface.service  →  signalk.service  →  helmlog.service
 influxd.service        (independent, starts at boot)
 grafana-server.service (independent, starts at boot)
 ```
@@ -72,7 +73,7 @@ grafana-server.service (independent, starts at boot)
 ### Check what's in the database
 
 ```bash
-j105-logger status
+helmlog status
 ```
 
 ```
@@ -87,7 +88,7 @@ winds                    1820  2025-08-10T14:32:04.997+00:00
 ### Start logging (manual / foreground)
 
 ```bash
-j105-logger run
+helmlog run
 ```
 
 Press `Ctrl-C` to stop. All buffered data is flushed before exit.
@@ -95,7 +96,7 @@ Press `Ctrl-C` to stop. All buffered data is flushed before exit.
 ### Export to CSV, GPX, or JSON
 
 ```bash
-j105-logger export \
+helmlog export \
   --start "2025-08-10T13:00:00" \
   --end   "2025-08-10T15:30:00" \
   --out   data/race1.csv
@@ -111,11 +112,11 @@ The format is inferred from the file extension:
 
 ```bash
 # GPX — only seconds with GPS position produce a <trkpt>
-j105-logger export --start "2025-08-10T13:00:00" --end "2025-08-10T15:30:00" \
+helmlog export --start "2025-08-10T13:00:00" --end "2025-08-10T15:30:00" \
   --out data/race1.gpx
 
 # JSON — numeric values are typed (null instead of empty string for missing data)
-j105-logger export --start "2025-08-10T13:00:00" --end "2025-08-10T15:30:00" \
+helmlog export --start "2025-08-10T13:00:00" --end "2025-08-10T15:30:00" \
   --out data/race1.json
 ```
 
@@ -148,15 +149,15 @@ The logger runs automatically as a systemd service when the Pi boots on the boat
 
 ```bash
 # Check status
-sudo systemctl status j105-logger
+sudo systemctl status helmlog
 
 # View live logs
-sudo journalctl -fu j105-logger
+sudo journalctl -fu helmlog
 
 # Stop / start / restart
-sudo systemctl stop    j105-logger
-sudo systemctl start   j105-logger
-sudo systemctl restart j105-logger
+sudo systemctl stop    helmlog
+sudo systemctl start   helmlog
+sudo systemctl restart helmlog
 ```
 
 The service depends on `signalk.service`, which in turn depends on
@@ -180,7 +181,7 @@ An nginx reverse proxy on port 80 provides single-URL access to all services:
 
 | Path | Backend | Purpose |
 |---|---|---|
-| `/` | j105-logger | Race marker, history, exports |
+| `/` | helmlog | Race marker, history, exports |
 | `/grafana/` | Grafana | Real-time sailing dashboards |
 | `/signalk/` | Signal K | NMEA 2000 data API + WebSocket |
 | `/sk/` | Signal K | Admin UI, plugin management |
@@ -191,7 +192,7 @@ Direct-port access is still available for debugging:
 
 | Interface | URL |
 |---|---|
-| j105-logger | `http://<pi-hostname>:3002` |
+| helmlog | `http://<pi-hostname>:3002` |
 | Grafana | `http://<pi-hostname>:3001` |
 | Signal K | `http://<pi-hostname>:3000` |
 | InfluxDB | `http://<pi-hostname>:8086` |
@@ -250,10 +251,10 @@ must create user accounts from the Pi's command line:
 
 ```bash
 # Create an admin account (first time — run from the Pi)
-j105-logger add-user --email you@example.com --name "Your Name" --role admin
+helmlog add-user --email you@example.com --name "Your Name" --role admin
 
 # Create crew accounts (viewer role — can mark races, can't manage users)
-j105-logger add-user --email crew@example.com --name "Crew Member" --role viewer
+helmlog add-user --email crew@example.com --name "Crew Member" --role viewer
 ```
 
 Roles: `admin` (full access + user management), `crew` (race ops), `viewer` (read-only).
@@ -296,7 +297,7 @@ to that moment in the video.
 If you use an Insta360 X4, the video pipeline handles everything automatically:
 insert the SD card into your Mac, confirm the dialog, and recordings are
 stitched (360° `.insv`) or copied (single-lens `.mp4`), uploaded to YouTube,
-matched to sessions by timestamp, and linked in J105 Logger.
+matched to sessions by timestamp, and linked in HelmLog.
 
 One-time setup:
 
@@ -325,7 +326,7 @@ find it in the log by looking for a sudden change in boatspeed or heading.
 If you noted the time when you started the camera, use `--start`:
 
 ```bash
-j105-logger link-video \
+helmlog link-video \
   --url "https://youtu.be/YOUR_VIDEO_ID" \
   --start "2025-08-10T13:45:00"
 ```
@@ -341,11 +342,11 @@ well — and note:
 1. **Where it is in the video** — scrub to the moment in YouTube and read
    the time off the progress bar (e.g. `5:30` = 330 seconds)
 2. **What UTC time it was** — look at your exported CSV for that event, or
-   check `j105-logger status` to see timestamps and cross-reference with the
+   check `helmlog status` to see timestamps and cross-reference with the
    log
 
 ```bash
-j105-logger link-video \
+helmlog link-video \
   --url "https://youtu.be/YOUR_VIDEO_ID" \
   --sync-utc  "2025-08-10T14:05:30" \
   --sync-offset 330
@@ -358,13 +359,13 @@ confirm the alignment is correct.
 ### List linked videos
 
 ```bash
-j105-logger list-videos
+helmlog list-videos
 ```
 
 ```
 Title                                      Duration  Sync UTC
 --------------------------------------------------------------------------------
-J105 Race — August 2025                      2:03:14  2025-08-10T14:05:30+00:00
+HelmLog Race — August 2025                      2:03:14  2025-08-10T14:05:30+00:00
   https://youtu.be/YOUR_VIDEO_ID
 ```
 
@@ -373,7 +374,7 @@ J105 Race — August 2025                      2:03:14  2025-08-10T14:05:30+00:0
 Once a video is linked, run `export` as normal:
 
 ```bash
-j105-logger export \
+helmlog export \
   --start "2025-08-10T13:00:00" \
   --end   "2025-08-10T15:30:00" \
   --out   data/race1.csv
@@ -387,7 +388,7 @@ range. In Excel or Numbers, click the cell to jump directly to that moment.
 
 ## External data — weather and tides
 
-When `j105-logger run` is active, two background tasks automatically fetch
+When `helmlog run` is active, two background tasks automatically fetch
 external data and store it in the same SQLite database:
 
 | Source | Data | Coverage |
@@ -413,7 +414,7 @@ The data appears automatically as extra columns in the CSV export (`WX_TWS`,
 
 ## Recording audio commentary
 
-When `j105-logger run` is active, it automatically records audio from the
+When `helmlog run` is active, it automatically records audio from the
 first available USB input device (or the one matching `AUDIO_DEVICE` in `.env`).
 This is designed for the **Gordik 2T1R** wireless lavalier system, whose USB
 receiver appears as a standard UAC device — no drivers needed.
@@ -427,7 +428,7 @@ start timestamp so it lines up directly with the instrument log.
 2. Find its device name:
 
    ```bash
-   j105-logger list-devices
+   helmlog list-devices
    ```
 
    ```
@@ -440,7 +441,7 @@ start timestamp so it lines up directly with the instrument log.
 3. Set `AUDIO_DEVICE` in `.env` to a substring of the name (case-insensitive):
 
    ```bash
-   # In ~/j105-logger/.env:
+   # In ~/helmlog/.env:
    AUDIO_DEVICE=Gordik
    ```
 
@@ -450,19 +451,19 @@ start timestamp so it lines up directly with the instrument log.
 4. Restart the logger service:
 
    ```bash
-   sudo systemctl restart j105-logger
+   sudo systemctl restart helmlog
    ```
 
    Confirm with:
    ```bash
-   sudo journalctl -fu j105-logger | grep -i audio
+   sudo journalctl -fu helmlog | grep -i audio
    # Audio recording started: data/audio/audio_20250810_140530.wav
    ```
 
 ### List recorded audio sessions
 
 ```bash
-j105-logger list-audio
+helmlog list-audio
 ```
 
 ```
@@ -525,7 +526,7 @@ model for better accuracy by setting `WHISPER_MODEL` in `.env`:
 | `medium` | ~4× real-time | Best practical |
 
 ```bash
-# In ~/j105-logger/.env:
+# In ~/helmlog/.env:
 WHISPER_MODEL=small
 ```
 
@@ -570,7 +571,7 @@ your account has accepted terms for.
 
 ```bash
 ssh <pi-user>@<pi-hostname>
-nano ~/j105-logger/.env
+nano ~/helmlog/.env
 ```
 
 Add this line (replace with your actual token):
@@ -582,7 +583,7 @@ HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx
 Then restart the logger:
 
 ```bash
-sudo systemctl restart j105-logger
+sudo systemctl restart helmlog
 ```
 
 The model weights (~1 GB) are downloaded and cached on the first transcription
@@ -611,8 +612,8 @@ of 30+ minutes on the Pi.
 uv run python scripts/transcribe_worker.py
 
 # On the Pi — point to the Mac:
-echo 'TRANSCRIBE_URL=http://<mac-tailscale-hostname>:8321' >> ~/j105-logger/.env
-sudo systemctl restart j105-logger
+echo 'TRANSCRIBE_URL=http://<mac-tailscale-hostname>:8321' >> ~/helmlog/.env
+sudo systemctl restart helmlog
 ```
 
 If the Mac is unreachable, the Pi falls back to local transcription automatically.
@@ -660,7 +661,7 @@ All five variables must be set for email to activate. `SMTP_USER` and
    Verification).
 2. Go to **App passwords** (Security > 2-Step Verification > App passwords, or
    navigate directly to `myaccount.google.com/apppasswords`).
-3. Create an app password — name it anything (e.g. "j105"). Google gives you a
+3. Create an app password — name it anything (e.g. "helmlog"). Google gives you a
    16-character password.
 4. Use that password as `SMTP_PASSWORD` in `.env`. Do **not** use your regular
    Gmail password.
@@ -669,7 +670,7 @@ All five variables must be set for email to activate. `SMTP_USER` and
 
 ```bash
 # Quick test — creates a user and sends the welcome email
-j105-logger add-user --email you@example.com --name "Test" --role viewer
+helmlog add-user --email you@example.com --name "Test" --role viewer
 ```
 
 Check your inbox. If the email doesn't arrive, check the logger output for
@@ -688,7 +689,7 @@ By default all timestamps in the web UI display in UTC. Set the `TIMEZONE`
 environment variable to display times in your local timezone instead:
 
 ```bash
-# In ~/j105-logger/.env:
+# In ~/helmlog/.env:
 TIMEZONE=America/Los_Angeles
 ```
 
@@ -897,8 +898,8 @@ ip link show can0
 
 ```bash
 cd ~
-git clone https://github.com/weaties/j105-logger.git
-cd j105-logger
+git clone https://github.com/weaties/helmlog.git
+cd helmlog
 ```
 
 ### 7. Run the setup script
@@ -917,12 +918,12 @@ configures:
 5. `uv` and all Python dependencies
 6. System audio libraries (`libportaudio2`, `libsndfile1`) for USB audio recording
 7. `.env` config file from the template (chmod 600)
-8. `data/` directory for SQLite, audio, and notes — owned by the `j105logger` service account
-9. `j105logger` dedicated service account (UID ≈ 997; `nologin`; in `audio` + `netdev` groups)
+8. `data/` directory for SQLite, audio, and notes — owned by the `helmlog` service account
+9. `helmlog` dedicated service account (UID ≈ 997; `nologin`; in `audio` + `netdev` groups)
 10. `netdev` group membership for non-root CAN bus access
 11. `can-interface.service` — brings up `can0` at boot
 12. `signalk.service` — starts Signal K after CAN is up
-13. `j105-logger.service` — starts logger as `j105logger` after Signal K is up
+13. `helmlog.service` — starts logger as `helmlog` after Signal K is up
 14. Signal K bcrypt admin password (saved to `~/.signalk-admin-pass.txt`)
 15. Automatic security updates (`unattended-upgrades`)
 16. Unused services masked (cups, avahi-daemon, bluetooth, etc.)
@@ -950,7 +951,7 @@ source ~/.bashrc
 Before rebooting, create the first admin account for the race-marker web app:
 
 ```bash
-j105-logger add-user --email you@example.com --name "Your Name" --role admin
+helmlog add-user --email you@example.com --name "Your Name" --role admin
 ```
 
 This uses the SQLite DB directly — no running service needed. After this you can
@@ -974,10 +975,10 @@ After rebooting:
 
 ```bash
 # All five should be active
-sudo systemctl status can-interface signalk influxd grafana-server j105-logger
+sudo systemctl status can-interface signalk influxd grafana-server helmlog
 
 # Logger rows accumulating
-j105-logger status
+helmlog status
 
 # Signal K dashboard (login with admin password from ~/.signalk-admin-pass.txt)
 # Open http://<pi-hostname>:3000 in a browser
@@ -999,15 +1000,15 @@ After a PR merges to `main`, SSH into the Pi and run:
 
 ```bash
 ssh <pi-user>@<pi-hostname>
-cd ~/j105-logger
+cd ~/helmlog
 ./scripts/deploy.sh
 ```
 
 This pulls `main`, syncs Python dependencies, provisions Grafana, and restarts
-the `j105-logger` service. Service
+the `helmlog` service. Service
 status is printed at the end for a quick sanity check.
 
-All `sudo` commands in `deploy.sh` are in the scoped `/etc/sudoers.d/j105-logger-allowed`
+All `sudo` commands in `deploy.sh` are in the scoped `/etc/sudoers.d/helmlog-allowed`
 file (configured by `setup.sh`), so no password prompt is needed during a normal deploy.
 
 ### Full update (new deps, systemd service file changes, or Signal K updates)
@@ -1015,19 +1016,19 @@ file (configured by `setup.sh`), so no password prompt is needed during a normal
 If systemd service files or apt packages changed, run the full idempotent setup instead:
 
 ```bash
-cd ~/j105-logger
+cd ~/helmlog
 git pull
 ./scripts/setup.sh
 sudo npm update -g signalk-server
 sudo systemctl daemon-reload
-sudo systemctl restart signalk j105-logger
+sudo systemctl restart signalk helmlog
 ```
 
 ---
 
 ## Configuration
 
-Settings live in `~/j105-logger/.env`:
+Settings live in `~/helmlog/.env`:
 
 ```bash
 CAN_INTERFACE=can0      # SocketCAN interface name
@@ -1053,7 +1054,7 @@ WEB_PORT=3002           # http://<pi-hostname>:3002 on Tailscale
 # WEB_PIN=             # optional PIN (reserved, not yet implemented)
 # Grafana deep-link buttons in the web UI
 GRAFANA_PORT=3001
-GRAFANA_DASHBOARD_UID=j105-sailing
+GRAFANA_DASHBOARD_UID=helmlog-sailing
 # Timezone — controls weekday event naming and UI timestamp display (default: UTC)
 # TIMEZONE=America/Los_Angeles
 # Email notifications (optional — welcome emails + new-device alerts)
@@ -1061,7 +1062,7 @@ GRAFANA_DASHBOARD_UID=j105-sailing
 # SMTP_PORT=587              # SMTP port (587 for STARTTLS)
 # SMTP_USER=                 # SMTP login username
 # SMTP_PASSWORD=             # SMTP password or app password
-# SMTP_FROM=j105@example.com # sender address
+# SMTP_FROM=helmlog@example.com # sender address
 # Authentication
 # AUTH_DISABLED=true          # bypass auth entirely — local/LAN dev only
 AUTH_SESSION_TTL_DAYS=90      # session cookie lifetime in days
@@ -1069,18 +1070,18 @@ AUTH_SESSION_TTL_DAYS=90      # session cookie lifetime in days
 # InfluxDB — required only for system health metrics; omit if not using InfluxDB
 # INFLUX_URL=http://localhost:8086
 # INFLUX_TOKEN=<token from ~/influx-token.txt>
-# INFLUX_ORG=j105
+# INFLUX_ORG=helmlog
 # INFLUX_BUCKET=signalk
 ```
 
-Edit with `nano ~/j105-logger/.env`. Changes take effect on the next
-`sudo systemctl restart j105-logger`.
+Edit with `nano ~/helmlog/.env`. Changes take effect on the next
+`sudo systemctl restart helmlog`.
 
 ---
 
 ## Troubleshooting
 
-### `j105-logger: command not found`
+### `helmlog: command not found`
 
 `uv` isn't in your PATH. Either:
 ```bash
@@ -1090,10 +1091,10 @@ export PATH="$HOME/.local/bin:$PATH"   # temporary
 
 Or use the full invocation:
 ```bash
-~/.local/bin/uv run --project ~/j105-logger j105-logger status
+~/.local/bin/uv run --project ~/helmlog helmlog status
 ```
 
-### j105-logger can't connect to Signal K
+### helmlog can't connect to Signal K
 
 The logger connects to Signal K's WebSocket at `ws://${SK_HOST}:${SK_PORT}/signalk/v1/stream`.
 
@@ -1176,7 +1177,7 @@ clear to `ERROR-ACTIVE` within seconds of the bus powering up.
 ### Logger service fails to start
 
 ```bash
-sudo journalctl -u j105-logger --no-pager
+sudo journalctl -u helmlog --no-pager
 ```
 
 Common causes:
@@ -1186,6 +1187,6 @@ Common causes:
 
 ### Permission denied on `can0`
 
-Signal K owns the CAN bus — j105-logger never touches it directly (it reads
+Signal K owns the CAN bus — helmlog never touches it directly (it reads
 from the Signal K WebSocket). If you see this error, check that `DATA_SOURCE`
 in `.env` is set to `signalk` (the default), not `can`.

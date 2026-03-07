@@ -1,4 +1,4 @@
-# Promtail configuration for j105-logger
+# Promtail configuration for helmlog
 # Scrapes journald for the services we care about.
 # Deployed by setup.sh to /etc/promtail/promtail-config.yaml
 #
@@ -25,7 +25,7 @@ scrape_configs:
     relabel_configs:
       # Keep only our services
       - source_labels: [__journal__systemd_unit]
-        regex: "(j105-logger|signalk|grafana-server|influxdb|loki|promtail|can-interface)\\.service"
+        regex: "(helmlog|signalk|grafana-server|influxdb|loki|promtail|can-interface)\\.service"
         action: keep
       # Extract a clean service label from the unit name
       - source_labels: [__journal__systemd_unit]

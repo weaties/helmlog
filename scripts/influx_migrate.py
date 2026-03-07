@@ -24,12 +24,12 @@ OLD_TOKEN = (  # noqa: S105
     "SS4dyfN7qrsCLKE5ng5xaFrobZvSdeXYXPPFJjn-uVk39ImChHV-7YbJzqcPKuIB6-WTNEXriRstwAAXsmhh6g=="
 )
 OLD_URL = "http://localhost:8087"
-OLD_ORG = "j105"
+OLD_ORG = "j105"  # historical — old InfluxDB instance used this org name
 OLD_BUCKET = "signalk"
 
 NEW_URL = os.environ.get("INFLUX_URL", "http://localhost:8086")
 NEW_TOKEN = os.environ.get("INFLUX_TOKEN", "")
-NEW_ORG = os.environ.get("INFLUX_ORG", "j105")
+NEW_ORG = os.environ.get("INFLUX_ORG", "helmlog")
 NEW_BUCKET = os.environ.get("INFLUX_BUCKET", "signalk")
 
 BATCH_SIZE = 5000

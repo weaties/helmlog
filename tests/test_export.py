@@ -8,8 +8,8 @@ import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from logger.export import export_csv, export_gpx, export_json, export_to_file
-from logger.nmea2000 import (
+from helmlog.export import export_csv, export_gpx, export_json, export_to_file
+from helmlog.nmea2000 import (
     PGN_COG_SOG_RAPID,
     PGN_ENVIRONMENTAL,
     PGN_POSITION_RAPID,
@@ -29,7 +29,7 @@ from logger.nmea2000 import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
 _TS = datetime(2024, 6, 15, 12, 0, 0, tzinfo=UTC)
 _END = _TS + timedelta(seconds=2)  # 3-second window → 3 rows
@@ -198,7 +198,7 @@ class TestExportCSV:
 # ---------------------------------------------------------------------------
 
 _GPX_NS = "http://www.topografix.com/GPX/1/1"
-_SAIL_NS = "http://github.com/weaties/j105-logger"
+_SAIL_NS = "http://github.com/weaties/helmlog"
 
 
 class TestExportGPX:

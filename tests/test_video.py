@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from logger.video import VideoSession
+from helmlog.video import VideoSession
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -138,7 +138,7 @@ class TestUrlAt:
 
 class TestVideoSessionStorage:
     async def test_write_and_list(self, storage: object) -> None:
-        from logger.storage import Storage
+        from helmlog.storage import Storage
 
         assert isinstance(storage, Storage)
         session = _make_session()
@@ -155,7 +155,7 @@ class TestVideoSessionStorage:
         assert s.sync_offset_s == pytest.approx(session.sync_offset_s)
 
     async def test_list_ordered_by_sync_utc(self, storage: object) -> None:
-        from logger.storage import Storage
+        from helmlog.storage import Storage
 
         assert isinstance(storage, Storage)
         s1 = _make_session(sync_utc=datetime(2025, 8, 10, 14, 0, 0, tzinfo=UTC))
@@ -168,7 +168,7 @@ class TestVideoSessionStorage:
         assert sessions[0].sync_utc < sessions[1].sync_utc
 
     async def test_list_empty(self, storage: object) -> None:
-        from logger.storage import Storage
+        from helmlog.storage import Storage
 
         assert isinstance(storage, Storage)
         sessions = await storage.list_video_sessions()

@@ -28,7 +28,7 @@ the current time window as a coloured route on a map.
 ## Data source
 
 All data comes from InfluxDB (`signalk` bucket) via the Signal K →
-`signalk-to-influxdb2` plugin. No additional j105-logger endpoints are used.
+`signalk-to-influxdb2` plugin. No additional helmlog endpoints are used.
 
 The Flux query joins six Signal K paths using `pivot`:
 
@@ -51,7 +51,7 @@ Rows without a GPS position are filtered out.
 Clicking a track point opens the linked video at that moment using the existing
 `/api/videos/redirect?at=<ISO 8601>` endpoint (same as the time-series panels).
 The link is only functional when a video has been linked to the race via the
-History page or `j105-logger link-video`.
+History page or `helmlog link-video`.
 
 ---
 
@@ -70,7 +70,7 @@ After a deploy, re-run the provision script on the Pi:
 
 ```bash
 ssh <pi-user>@<pi-host>
-cd ~/j105-logger
+cd ~/helmlog
 ./scripts/provision-grafana.sh
 ```
 

@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from logger.audio import AudioConfig, AudioDeviceNotFoundError, AudioSession
-from logger.nmea2000 import (
+from helmlog.audio import AudioConfig, AudioDeviceNotFoundError, AudioSession
+from helmlog.nmea2000 import (
     PGN_COG_SOG_RAPID,
     PGN_SPEED_THROUGH_WATER,
     PGN_VESSEL_HEADING,
@@ -21,10 +21,10 @@ from logger.nmea2000 import (
     SpeedRecord,
     WindRecord,
 )
-from logger.web import create_app
+from helmlog.web import create_app
 
 if TYPE_CHECKING:
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -92,7 +92,7 @@ async def test_start_race_no_event_returns_422(storage: Storage) -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        with patch("logger.races.default_event_for_date", return_value=None):
+        with patch("helmlog.races.default_event_for_date", return_value=None):
             resp = await client.post("/api/races/start")
 
     assert resp.status_code == 422
@@ -332,7 +332,7 @@ async def test_index_substitutes_grafana_port(storage: Storage) -> None:
     assert "__SK_PORT__" not in html
     # Default ports and UID are injected as data- attributes
     assert 'data-grafana-port="3001"' in html
-    assert "j105-sailing" in html
+    assert "helmlog-sailing" in html
     assert 'data-sk-port="3000"' in html
 
 
@@ -1995,7 +1995,7 @@ async def test_download_audio_404_unknown_session(storage: Storage) -> None:
 @pytest.mark.asyncio
 async def test_download_audio_404_missing_file(storage: Storage, tmp_path: Path) -> None:
     """GET /api/audio/{id}/download returns 404 when DB row exists but file is gone."""
-    from logger.audio import AudioSession
+    from helmlog.audio import AudioSession
 
     session = AudioSession(
         file_path=str(tmp_path / "missing.wav"),
@@ -2017,7 +2017,7 @@ async def test_download_audio_404_missing_file(storage: Storage, tmp_path: Path)
 @pytest.mark.asyncio
 async def test_download_audio_200(storage: Storage, tmp_path: Path) -> None:
     """GET /api/audio/{id}/download returns 200 with Content-Disposition attachment."""
-    from logger.audio import AudioSession
+    from helmlog.audio import AudioSession
 
     wav_file = tmp_path / "test.wav"
     wav_file.write_bytes(b"RIFF")  # minimal stub
@@ -2043,7 +2043,7 @@ async def test_download_audio_200(storage: Storage, tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_stream_audio_200(storage: Storage, tmp_path: Path) -> None:
     """GET /api/audio/{id}/stream returns 200 with audio/wav media type."""
-    from logger.audio import AudioSession
+    from helmlog.audio import AudioSession
 
     wav_file = tmp_path / "stream.wav"
     wav_file.write_bytes(b"RIFF")
@@ -2174,7 +2174,7 @@ async def test_system_health_returns_200(storage: Storage) -> None:
 
 async def _create_audio_session(storage: Storage, tmp_path: Path) -> int:
     """Helper: insert a real audio session row with a stub WAV file; return session_id."""
-    from logger.audio import AudioSession
+    from helmlog.audio import AudioSession
 
     wav_file = tmp_path / "test.wav"
     wav_file.write_bytes(b"RIFF")
@@ -2210,7 +2210,7 @@ async def test_create_transcript_job_202(storage: Storage, tmp_path: Path) -> No
     app = create_app(storage)
 
     # Mock transcribe_session so it doesn't actually run faster-whisper
-    with patch("logger.web.asyncio.create_task") as mock_create_task:
+    with patch("helmlog.web.asyncio.create_task") as mock_create_task:
         mock_create_task.return_value = AsyncMock()
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -2238,8 +2238,8 @@ async def test_transcript_done(storage: Storage, tmp_path: Path) -> None:
     session_id = await _create_audio_session(storage, tmp_path)
 
     # Directly exercise the storage + transcribe_session with mocked WhisperModel
-    with patch("logger.transcribe._run_whisper", return_value="Hello world"):
-        from logger.transcribe import transcribe_session
+    with patch("helmlog.transcribe._run_whisper", return_value="Hello world"):
+        from helmlog.transcribe import transcribe_session
 
         transcript_id = await storage.create_transcript_job(session_id, "base")
         await transcribe_session(storage, session_id, transcript_id, model_size="base")
@@ -2272,11 +2272,11 @@ async def test_transcript_done_with_segments(
     session_id = await _create_audio_session(storage, tmp_path)
 
     with (
-        patch("logger.transcribe._run_whisper_segments", return_value=_whisper_segs),
-        patch("logger.transcribe._run_diarizer", return_value=_diar_segs),
-        patch("logger.transcribe._pyannote_available", return_value=True),
+        patch("helmlog.transcribe._run_whisper_segments", return_value=_whisper_segs),
+        patch("helmlog.transcribe._run_diarizer", return_value=_diar_segs),
+        patch("helmlog.transcribe._pyannote_available", return_value=True),
     ):
-        from logger.transcribe import transcribe_session
+        from helmlog.transcribe import transcribe_session
 
         transcript_id = await storage.create_transcript_job(session_id, "base")
         await transcribe_session(
@@ -2328,7 +2328,7 @@ async def test_polar_current_with_baseline(storage: Storage) -> None:
     """GET /api/polar/current with baseline seeded → sufficient_data=True, correct delta."""
     from datetime import timedelta
 
-    from logger.polar import build_polar_baseline
+    from helmlog.polar import build_polar_baseline
 
     base_ts = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC)
 

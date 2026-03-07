@@ -25,7 +25,7 @@ from fastapi import FastAPI, Query, UploadFile
 from fastapi.responses import JSONResponse
 from loguru import logger
 
-app = FastAPI(title="J105 Transcription Worker", docs_url=None, redoc_url=None)
+app = FastAPI(title="HelmLog Transcription Worker", docs_url=None, redoc_url=None)
 
 
 @app.post("/transcribe")
@@ -53,7 +53,7 @@ async def transcribe(
             want_diarize,
         )
 
-        from logger.transcribe import (
+        from helmlog.transcribe import (
             _pyannote_available,
             _run_whisper,
             _run_with_diarization,
@@ -85,7 +85,7 @@ async def healthz() -> dict[str, str]:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="J105 Transcription Worker")
+    parser = argparse.ArgumentParser(description="HelmLog Transcription Worker")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8321, help="Port (default: 8321)")
     args = parser.parse_args()

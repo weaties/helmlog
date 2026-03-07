@@ -41,14 +41,14 @@ Pyannote speaker diarisation now works on the Pi 5 (aarch64):
 - Bypassed `torchcodec` `AudioDecoder` which fails on aarch64 — uses
   `soundfile` fallback instead
 - Set `HOME` env var in systemd unit so `faster-whisper` can cache models
-  under the `j105logger` service account
+  under the `helmlog` service account
 
 ### Security hardening (#117, #118)
 
 Comprehensive security hardening of the Pi deployment, baked into `setup.sh`
 so all future SD card builds inherit the same posture:
 
-- Dedicated `j105logger` service account (nologin, UID ≈ 997)
+- Dedicated `helmlog` service account (nologin, UID ≈ 997)
 - Scoped `NOPASSWD` sudo replacing the blanket Pi OS default
 - SSH hardening (X11Forwarding disabled, permissions tightened)
 - InfluxDB bound to loopback only; Grafana loopback + login required
@@ -150,7 +150,7 @@ over the boat's Wi-Fi hotspot.
 ### Grafana InfluxDB datasource and dashboards (#earlier)
 
 - Boatspeed, wind, heading, depth, position — all provisioned at setup time
-- `can-interface.service` → `signalk.service` → `j105-logger.service` dependency chain
+- `can-interface.service` → `signalk.service` → `helmlog.service` dependency chain
 
 ### External data: weather and tides
 

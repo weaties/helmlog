@@ -1,6 +1,6 @@
 # HTTPS Deployment Guide
 
-The J105 Logger web interface (`WEB_PORT=3002` by default) must be served over
+The HelmLog web interface (`WEB_PORT=3002` by default) must be served over
 HTTPS before exposing it to the public internet.  The application itself does
 not terminate TLS — choose one of the three approaches below.
 
@@ -64,11 +64,11 @@ sudo apt update && sudo apt install cloudflared
 cloudflared tunnel login
 
 # Create tunnel
-cloudflared tunnel create j105-logger
+cloudflared tunnel create helmlog
 
 # Create config at ~/.cloudflared/config.yml
 cat > ~/.cloudflared/config.yml << 'EOF'
-tunnel: j105-logger
+tunnel: helmlog
 credentials-file: /home/pi/.cloudflared/<tunnel-id>.json
 protocol: http2
 
@@ -79,7 +79,7 @@ ingress:
 EOF
 
 # Add DNS record
-cloudflared tunnel route dns j105-logger logger.yourboat.com
+cloudflared tunnel route dns helmlog logger.yourboat.com
 
 # Run as a service
 sudo cloudflared service install
@@ -106,7 +106,7 @@ is already authenticated on the Pi. The three public routes are:
 
 | Path | Local service | Purpose |
 |---|---|---|
-| `/` | port 3002 | j105-logger race marker |
+| `/` | port 3002 | helmlog race marker |
 | `/grafana/` | port 3001 | Grafana dashboards |
 | `/signalk/` | port 3000 | Signal K explorer |
 
@@ -146,7 +146,7 @@ Your logger is then accessible at `https://<pi-hostname>.<tailnet>.ts.net`. Run
 After deploying, create the first admin account with the CLI:
 
 ```bash
-j105-logger create-admin --email you@example.com
+helmlog create-admin --email you@example.com
 ```
 
 Or set `ADMIN_EMAIL=you@example.com` in `.env` — on startup the logger will

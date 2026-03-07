@@ -1,7 +1,7 @@
 {
   "uid": "service-logs",
   "title": "Service Logs",
-  "tags": ["j105-logger", "logs"],
+  "tags": ["helmlog", "logs"],
   "timezone": "browser",
   "editable": true,
   "refresh": "30s",

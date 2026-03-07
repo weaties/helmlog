@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from logger.transcribe import _merge, _try_remote_transcribe
+from helmlog.transcribe import _merge, _try_remote_transcribe
 
 # ---------------------------------------------------------------------------
 # _merge tests (existing)

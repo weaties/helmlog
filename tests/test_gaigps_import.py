@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 import pytest_asyncio
 
-from logger.storage import Storage, StorageConfig
+from helmlog.storage import Storage, StorageConfig
 
 
 @pytest_asyncio.fixture

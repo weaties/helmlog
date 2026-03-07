@@ -10,15 +10,15 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from logger.auth import (
+from helmlog.auth import (
     generate_token,
     invite_expires_at,
     session_expires_at,
 )
-from logger.web import create_app
+from helmlog.web import create_app
 
 if TYPE_CHECKING:
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -444,8 +444,8 @@ async def test_create_invite_token_null_created_by(storage: Storage) -> None:
 @pytest.mark.asyncio
 async def test_send_login_link_email() -> None:
     """send_login_link_email calls send_email with correct subject."""
-    with patch("logger.email.send_email", return_value=True) as mock_send:
-        from logger.email import send_login_link_email
+    with patch("helmlog.email.send_email", return_value=True) as mock_send:
+        from helmlog.email import send_login_link_email
 
         result = await send_login_link_email("Alice", "a@x.com", "http://test/login?token=abc")
     assert result is True
@@ -464,7 +464,7 @@ async def test_request_link_sends_email(storage: Storage) -> None:
     env = {"AUTH_DISABLED": "false", **_SMTP_ENV}
     with (
         patch.dict(os.environ, env),
-        patch("logger.email._send_sync") as mock_smtp,
+        patch("helmlog.email._send_sync") as mock_smtp,
     ):
         app = create_app(storage)
         async with httpx.AsyncClient(
@@ -495,7 +495,7 @@ async def test_request_link_unknown_email(storage: Storage) -> None:
     env = {"AUTH_DISABLED": "false", **_SMTP_ENV}
     with (
         patch.dict(os.environ, env),
-        patch("logger.email._send_sync") as mock_smtp,
+        patch("helmlog.email._send_sync") as mock_smtp,
     ):
         app = create_app(storage)
         async with httpx.AsyncClient(
@@ -536,7 +536,7 @@ async def test_request_link_rate_limited_by_ip(storage: Storage) -> None:
     env = {"AUTH_DISABLED": "false", **_SMTP_ENV}
     with (
         patch.dict(os.environ, env),
-        patch("logger.email._send_sync"),
+        patch("helmlog.email._send_sync"),
     ):
         app = create_app(storage)
         async with httpx.AsyncClient(
@@ -561,7 +561,7 @@ async def test_request_link_rate_limited_by_email(storage: Storage) -> None:
     env = {"AUTH_DISABLED": "false", **_SMTP_ENV}
     with (
         patch.dict(os.environ, env),
-        patch("logger.email._send_sync") as mock_smtp,
+        patch("helmlog.email._send_sync") as mock_smtp,
     ):
         app = create_app(storage)
         async with httpx.AsyncClient(
@@ -632,7 +632,7 @@ async def test_request_link_token_redeemable(storage: Storage) -> None:
     env = {"AUTH_DISABLED": "false", **_SMTP_ENV}
     with (
         patch.dict(os.environ, env),
-        patch("logger.email._send_sync"),
+        patch("helmlog.email._send_sync"),
     ):
         app = create_app(storage)
         async with httpx.AsyncClient(

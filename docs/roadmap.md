@@ -20,7 +20,7 @@ Checked items are complete.
 
 - [ ] **Boatspeed vs historical baseline** (#40) — query SQLite for `(TWS, TWA, BSP)` tuples,
       bucket by wind condition, surface a "are we fast or slow?" delta on the race page and in
-      CSV exports. CLI: `j105-logger build-polar`.
+      CSV exports. CLI: `helmlog build-polar`.
 
 - [ ] **Public web access / auth** (#25) — magic-link invite tokens, role-based access
       (`admin` / `crew` / `viewer`), session cookies in SQLite, HTTPS deployment guide
@@ -107,7 +107,7 @@ Checked items are complete.
 ### Infrastructure
 - [x] Raspberry Pi setup script (`scripts/setup.sh`) — idempotent, installs full stack
 - [x] Deploy script (`scripts/deploy.sh`) — pull + sync deps + restart service
-- [x] `can-interface.service` → `signalk.service` → `j105-logger.service` dependency chain
+- [x] `can-interface.service` → `signalk.service` → `helmlog.service` dependency chain
 - [x] Grafana provisioning (datasource + dashboards) via `scripts/provision-grafana.sh`
 - [x] CAN HAT hardware setup & loopback testing on Pi (all 7 PGNs verified in loopback)
 - [x] Full test suite (330+ tests — all modules covered)

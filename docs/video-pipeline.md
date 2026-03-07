@@ -1,7 +1,7 @@
 # Insta360 X4 Video Pipeline
 
 Automated pipeline that processes Insta360 X4 recordings into 360° YouTube
-videos linked to J105 Logger race/practice sessions.
+videos linked to HelmLog race/practice sessions.
 
 ## Overview
 
@@ -31,7 +31,7 @@ SD card inserted into Mac
   Match to race/practice session (Pi API)
         │
         ▼
-  Link video in J105 Logger
+  Link video in HelmLog
 ```
 
 ## Prerequisites
@@ -42,7 +42,7 @@ Install on your Mac:
 # Docker Desktop (for stitching)
 # Download from https://docker.com/get-started
 
-# uv (Python package manager — already installed if you develop j105-logger)
+# uv (Python package manager — already installed if you develop helmlog)
 
 # exiftool is optional on the host (bundled in the Docker image)
 # brew install exiftool
@@ -54,7 +54,7 @@ Install on your Mac:
 2. Create a project (or use an existing one)
 3. Enable the **YouTube Data API v3**
 4. Create an **OAuth 2.0 Client ID** (type: Desktop app)
-5. Download the JSON and save as `~/.j105-youtube-client-secrets.json`
+5. Download the JSON and save as `~/.helmlog-youtube-client-secrets.json`
 6. **Important**: Set the OAuth consent screen to **Production** mode so refresh
    tokens don't expire after 7 days
 
@@ -96,13 +96,13 @@ When your Insta360 SDK application is approved:
 ## Installation
 
 ```bash
-cd ~/src/j105-logger  # or wherever your clone is
+cd ~/src/helmlog  # or wherever your clone is
 ./scripts/setup-video-mac.sh
 ```
 
 This will:
 - Verify Docker, exiftool, and uv are available
-- Create `~/Videos/j105/` for output files
+- Create `~/Videos/helmlog/` for output files
 - Check YouTube credentials
 - Install the launchd agent to watch for SD card mounts
 
@@ -129,19 +129,19 @@ All via environment variables (or set in `~/.zshrc`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VIDEO_OUTPUT_DIR` | `~/Videos/j105` | Where stitched MP4s are saved |
+| `VIDEO_OUTPUT_DIR` | `~/Videos/helmlog` | Where stitched MP4s are saved |
 | `VIDEO_RESOLUTION` | `3840x1920` | Output resolution (4K) |
 | `DOCKER_IMAGE` | `insta360-cli-utils` | Docker image for stitching |
-| `PI_API_URL` | `http://corvopi:3002` | J105 Logger API on the Pi |
+| `PI_API_URL` | `http://corvopi:3002` | HelmLog API on the Pi |
 | `VIDEO_PRIVACY` | `unlisted` | YouTube privacy (private/unlisted/public) |
 | `TIMEZONE` | `America/Los_Angeles` | Camera's local timezone |
-| `YOUTUBE_CLIENT_SECRETS` | `~/.j105-youtube-client-secrets.json` | OAuth2 client secrets |
-| `YOUTUBE_TOKEN_FILE` | `~/.j105-youtube-token.json` | Cached OAuth2 token |
+| `YOUTUBE_CLIENT_SECRETS` | `~/.helmlog-youtube-client-secrets.json` | OAuth2 client secrets |
+| `YOUTUBE_TOKEN_FILE` | `~/.helmlog-youtube-token.json` | Cached OAuth2 token |
 | `PI_SESSION_COOKIE` | *(none)* | Session cookie for auto-linking videos (see below) |
 
 ## How Videos Get Linked to Sessions
 
-After uploading to YouTube, the pipeline connects back to the J105 Logger on
+After uploading to YouTube, the pipeline connects back to the HelmLog on
 the Pi to automatically link each video to the matching race or practice session:
 
 1. **Fetch sessions** — `GET /api/sessions` retrieves recent sessions from the Pi
@@ -159,7 +159,7 @@ the Pi to automatically link each video to the matching race or practice session
 The video linking endpoint requires `crew`-level authentication. To enable
 auto-linking, you need to provide a session cookie:
 
-1. Log into J105 Logger in your browser at `http://corvopi:3002`
+1. Log into HelmLog in your browser at `http://corvopi:3002`
 2. Open developer tools → Application → Cookies
 3. Copy the value of the `session` cookie
 4. Set the environment variable:
@@ -202,20 +202,20 @@ for `.insv`.
 
 ```bash
 # View pipeline logs
-tail -f ~/Videos/j105/video-pipeline.log
+tail -f ~/Videos/helmlog/video-pipeline.log
 
 # Trigger manually via launchd
-launchctl start com.j105.video
+launchctl start com.helmlog.video
 
 # Check agent status
-launchctl list com.j105.video
+launchctl list com.helmlog.video
 ```
 
 ## Uninstall
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.j105.video.plist
-rm ~/Library/LaunchAgents/com.j105.video.plist
+launchctl unload ~/Library/LaunchAgents/com.helmlog.video.plist
+rm ~/Library/LaunchAgents/com.helmlog.video.plist
 ```
 
 ## Troubleshooting
@@ -245,7 +245,7 @@ to YouTube but couldn't link the video to a session. Set `PI_SESSION_COOKIE`
 (see "Setting up the session cookie" above).
 
 **"Warning: link failed (HTTP 401)"** — Your session cookie has expired. Log
-into J105 Logger again and copy a fresh cookie.
+into HelmLog again and copy a fresh cookie.
 
 **"No matching session found"** — The recording timestamps didn't overlap with
 any session. The video is still uploaded; link it manually from the history page.

@@ -4,7 +4,7 @@
 # Run manually:  ./scripts/backup.sh
 # Or let setup-backup-mac.sh schedule it daily via launchd.
 #
-# Creates a timestamped snapshot under $BACKUP_DEST (default ~/backups/j105-logger/).
+# Creates a timestamped snapshot under $BACKUP_DEST (default ~/backups/helmlog/).
 # Keeps the most recent $KEEP_SNAPSHOTS snapshots; older ones are deleted.
 #
 # Prerequisites on the Mac:
@@ -14,14 +14,14 @@
 #
 # Environment overrides:
 #   PI                 SSH target           (default: weaties@corvopi)
-#   BACKUP_DEST        local snapshot root  (default: ~/backups/j105-logger)
+#   BACKUP_DEST        local snapshot root  (default: ~/backups/helmlog)
 #   KEEP_SNAPSHOTS     how many to retain   (default: 10)
 #   INFLUX_TOKEN_FILE  path on the Pi       (default: ~/influx-token.txt)
 
 set -euo pipefail
 
 PI="${PI:-weaties@corvopi}"
-BACKUP_DEST="${BACKUP_DEST:-$HOME/backups/j105-logger}"
+BACKUP_DEST="${BACKUP_DEST:-$HOME/backups/helmlog}"
 KEEP_SNAPSHOTS="${KEEP_SNAPSHOTS:-10}"
 INFLUX_TOKEN_FILE="${INFLUX_TOKEN_FILE:-~/influx-token.txt}"
 
@@ -62,12 +62,12 @@ log "Source: $PI"
 
 # ── 1. SQLite — WAL checkpoint then rsync ────────────────────────────────────
 log "Step 1/4: SQLite WAL checkpoint + rsync"
-ssh "$PI" "sqlite3 ~/j105-logger/data/logger.db 'PRAGMA wal_checkpoint(TRUNCATE);'" 2>/dev/null || \
+ssh "$PI" "sqlite3 ~/helmlog/data/logger.db 'PRAGMA wal_checkpoint(TRUNCATE);'" 2>/dev/null || \
   log "  WARNING: WAL checkpoint failed (DB may not exist yet); continuing"
 
 # shellcheck disable=SC2086  # LINK_DATA is intentionally unquoted (empty or single flag)
 rsync -az $RSYNC_PROGRESS $LINK_DATA \
-  "$PI:~/j105-logger/data/" \
+  "$PI:~/helmlog/data/" \
   "$SNAP/data/"
 log "  SQLite + file data done"
 

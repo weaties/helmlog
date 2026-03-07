@@ -12,7 +12,7 @@ new keys directly to the ext4 filesystem.
 **Duration:** ~2 hours from lockout to restored access.
 
 **Impact:** No data loss. The Pi continued running all services (Signal K,
-InfluxDB, Grafana, j105-logger) throughout the incident — only SSH access was
+InfluxDB, Grafana, helmlog) throughout the incident — only SSH access was
 affected.
 
 ---
@@ -21,7 +21,7 @@ affected.
 
 ### What triggered the lockout
 
-Issue [#116](https://github.com/weaties/j105-logger/issues/116) defined a
+Issue [#116](https://github.com/weaties/helmlog/issues/116) defined a
 multi-phase security hardening plan for the Pi deployment. The operator ran
 Claude Code in autonomous ("yolo") mode on the Pi to execute Phases 1 and 2.
 
@@ -67,7 +67,7 @@ The Pi was online on Tailscale (`tailscale status` showed it active). However:
 
 **3. Checked the web app**
 
-The j105-logger web app on port 3002 was responding, but the hardening session
+The helmlog web app on port 3002 was responding, but the hardening session
 had also enabled authentication:
 
 ```

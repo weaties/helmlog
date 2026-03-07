@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Event Rules — HelmLog{% endblock %}
+{% block extra_css %}
+<style>
+.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:12px}
+.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#8892a4;margin-bottom:8px}
+table{width:100%;border-collapse:collapse;font-size:.87rem}
+th{text-align:left;color:#8892a4;font-size:.75rem;text-transform:uppercase;padding:6px 8px}
+td{padding:7px 8px;border-bottom:1px solid #0d1a2e}
+.btn-sm{padding:6px 12px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.78rem;cursor:pointer}
+.btn-add{color:#4ade80;border-color:#16a34a}
+.btn-del{color:#ef4444;border-color:#7f1d1d}
+.form-row{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.form-row input,.form-row select{padding:6px 10px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.85rem}
+.form-row input::placeholder{color:#586578}
+#add-err{color:#ef4444;font-size:.8rem;margin-top:4px}
+</style>
+{% endblock %}
+{% block content %}
+<h1>Event Rules</h1>
+<div class="card">
+<div class="label">Day-of-Week Rules</div>
+<p style="color:#8892a4;font-size:.85rem;margin-top:0">
+Auto-fill the event name when starting a race. A custom event set on the home page overrides these.
+</p>
+<div id="rules-table">Loading...</div>
+<div class="form-row" style="margin-top:16px">
+<select id="add-weekday">
+<option value="0">Monday</option><option value="1">Tuesday</option>
+<option value="2">Wednesday</option><option value="3">Thursday</option>
+<option value="4">Friday</option><option value="5">Saturday</option>
+<option value="6">Sunday</option>
+</select>
+<input id="add-event" placeholder="Event name" maxlength="40"/>
+<button class="btn-sm btn-add" onclick="addRule()">+ Add Rule</button>
+</div>
+<div id="add-err"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const DAYS=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+async function loadRules(){
+  const r=await fetch('/api/event-rules');
+  if(!r.ok){document.getElementById('rules-table').textContent='Failed to load';return}
+  const rules=await r.json();
+  if(!rules.length){document.getElementById('rules-table').innerHTML='<p style="color:#8892a4">No rules configured. Races will require a manual event name.</p>';return}
+  let h='<table><thead><tr><th>Day</th><th>Event Name</th><th></th></tr></thead><tbody>';
+  for(const rule of rules){
+    h+=`<tr><td>${DAYS[rule.weekday]}</td><td>${rule.event_name}</td>`;
+    h+=`<td><button class="btn-sm btn-del" onclick="delRule(${rule.weekday})">Delete</button></td></tr>`;
+  }
+  h+='</tbody></table>';
+  document.getElementById('rules-table').innerHTML=h;
+}
+async function addRule(){
+  const weekday=parseInt(document.getElementById('add-weekday').value);
+  const event_name=document.getElementById('add-event').value.trim();
+  if(!event_name){document.getElementById('add-err').textContent='Event name is required';return}
+  const r=await fetch('/api/event-rules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({weekday,event_name})});
+  if(!r.ok){const d=await r.json();document.getElementById('add-err').textContent=d.detail||'Failed';return}
+  document.getElementById('add-event').value='';
+  document.getElementById('add-err').textContent='';
+  loadRules();
+}
+async function delRule(weekday){
+  if(!confirm('Delete rule for '+DAYS[weekday]+'?'))return;
+  await fetch('/api/event-rules/'+weekday,{method:'DELETE'});
+  loadRules();
+}
+loadRules();
+</script>
+{% endblock %}

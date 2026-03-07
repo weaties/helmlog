@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from logger.gaigps import GaiaTrack, TrackPoint
-from logger.race_classifier import ClassificationResult, ClassifierConfig, classify
+from helmlog.gaigps import GaiaTrack, TrackPoint
+from helmlog.race_classifier import ClassificationResult, ClassifierConfig, classify
 
 
 def _make_track(

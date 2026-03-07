@@ -10,36 +10,36 @@ disable-model-invocation: true
 
 ```bash
 ssh <pi-user>@<pi-host>
-cd ~/j105-logger
+cd ~/helmlog
 ./scripts/deploy.sh
 ```
 
 The script: pulls `main`, syncs Python deps, re-applies Tailscale Funnel
-routes, updates `PUBLIC_URL` in `.env`, restarts `j105-logger`, prints status.
+routes, updates `PUBLIC_URL` in `.env`, restarts `helmlog`, prints status.
 
 ## Full Setup (if systemd units or apt packages changed)
 
 ```bash
 ssh <pi-user>@<pi-host>
-cd ~/j105-logger
-./scripts/setup.sh && sudo systemctl daemon-reload && sudo systemctl restart j105-logger
+cd ~/helmlog
+./scripts/setup.sh && sudo systemctl daemon-reload && sudo systemctl restart helmlog
 ```
 
 ## Service Architecture
 
-The service runs as a dedicated `j105logger` system account (not the login user):
+The service runs as a dedicated `helmlog` system account (not the login user):
 
-- **systemd unit**: `User=j105logger`, `UV_CACHE_DIR=/var/cache/j105-logger`, `--no-sync`
-- **data/**: owned by `j105logger:j105logger`; rest of project tree is read-only
+- **systemd unit**: `User=helmlog`, `UV_CACHE_DIR=/var/cache/helmlog`, `--no-sync`
+- **data/**: owned by `helmlog:helmlog`; rest of project tree is read-only
 - **.env**: `chmod 600 <pi-user>:<pi-user>`; systemd reads as root before dropping privileges
-- **sudo**: `<pi-user>` has scoped access via `/etc/sudoers.d/j105-logger-allowed`
+- **sudo**: `<pi-user>` has scoped access via `/etc/sudoers.d/helmlog-allowed`
 
 ## Networking
 
 - **Signal K**: `127.0.0.1:3000` — exposed publicly via Tailscale Funnel at `/signalk/`
 - **InfluxDB**: `127.0.0.1:8086` only
 - **Grafana**: `127.0.0.1:3001` only
-- **j105-logger web**: `0.0.0.0:3002`
+- **helmlog web**: `0.0.0.0:3002`
 - **Public ingress**: Tailscale Funnel (path stripping built-in)
 
 ## Auth
@@ -51,13 +51,13 @@ The service runs as a dedicated `j105logger` system account (not the login user)
 
 ```bash
 # Check status
-sudo systemctl status j105-logger
+sudo systemctl status helmlog
 
 # View logs
-sudo journalctl -u j105-logger -f
+sudo journalctl -u helmlog -f
 
 # Restart
-sudo systemctl restart j105-logger
+sudo systemctl restart helmlog
 
 # Rollback to previous commit
 git log --oneline -5
@@ -69,8 +69,8 @@ git checkout <previous-commit>
 
 | Symptom | Fix |
 |---------|-----|
-| Service won't start | Check `journalctl -u j105-logger -n 50` for errors |
+| Service won't start | Check `journalctl -u helmlog -n 50` for errors |
 | `uv` not found | Ensure `UV_CACHE_DIR` is set in systemd unit |
-| Permission denied on `data/` | Run `sudo chown -R j105logger:j105logger data/` |
+| Permission denied on `data/` | Run `sudo chown -R helmlog:helmlog data/` |
 | Signal K unreachable | Check `systemctl status signalk-server` |
-| Web UI 502 | Service crashed — `sudo systemctl restart j105-logger` |
+| Web UI 502 | Service crashed — `sudo systemctl restart helmlog` |

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from logger.cameras import (
+from helmlog.cameras import (
     Camera,
     get_status,
     parse_cameras_config,
@@ -237,7 +237,7 @@ async def test_get_status_connection_error() -> None:
 @pytest.mark.asyncio
 async def test_start_all_parallel(storage: object) -> None:
     """Two cameras, both succeed → two camera_sessions rows."""
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
     assert isinstance(storage, Storage)
     # Create a race first
@@ -274,7 +274,7 @@ async def test_start_all_parallel(storage: object) -> None:
 @pytest.mark.asyncio
 async def test_start_all_one_fails(storage: object) -> None:
     """First camera times out, second succeeds → partial success."""
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
     assert isinstance(storage, Storage)
     from datetime import datetime as _dt
@@ -322,7 +322,7 @@ async def test_start_all_one_fails(storage: object) -> None:
 @pytest.mark.asyncio
 async def test_stop_all_updates_rows(storage: object) -> None:
     """stop_all updates camera_sessions with stopped_utc."""
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
     assert isinstance(storage, Storage)
     from datetime import datetime as _dt
@@ -358,7 +358,7 @@ async def test_stop_all_updates_rows(storage: object) -> None:
 
 @pytest.mark.asyncio
 async def test_camera_session_roundtrip(storage: object) -> None:
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
     assert isinstance(storage, Storage)
     from datetime import datetime as _dt
@@ -386,7 +386,7 @@ async def test_camera_session_roundtrip(storage: object) -> None:
 
 @pytest.mark.asyncio
 async def test_update_camera_session_stop(storage: object) -> None:
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
     assert isinstance(storage, Storage)
     from datetime import datetime as _dt
@@ -418,7 +418,7 @@ async def test_update_camera_session_stop(storage: object) -> None:
 
 @pytest.mark.asyncio
 async def test_list_unlinked_camera_sessions(storage: object) -> None:
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
     assert isinstance(storage, Storage)
     from datetime import datetime as _dt
@@ -449,7 +449,7 @@ async def test_list_unlinked_camera_sessions(storage: object) -> None:
 @pytest.mark.asyncio
 async def test_camera_crud(storage: object) -> None:
     """Add, list, update, rename, and delete cameras in the DB."""
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
     assert isinstance(storage, Storage)
 
@@ -499,7 +499,7 @@ async def test_camera_crud(storage: object) -> None:
 @pytest.mark.asyncio
 async def test_seed_cameras_from_env(storage: object) -> None:
     """Seed from CAMERAS env var string, but only when table is empty."""
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
     assert isinstance(storage, Storage)
 

@@ -7,13 +7,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from logger.nmea2000 import (
+from helmlog.nmea2000 import (
     PGN_SPEED_THROUGH_WATER,
     PGN_WIND_DATA,
     SpeedRecord,
     WindRecord,
 )
-from logger.polar import (
+from helmlog.polar import (
     _compute_twa,
     _twa_bin,
     _tws_bin,
@@ -22,7 +22,7 @@ from logger.polar import (
 )
 
 if TYPE_CHECKING:
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
 # ---------------------------------------------------------------------------
 # Pure function tests

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The j105-logger can record voice commentary (crew calls, tactical notes) in sync with instrument data. Audio is captured from a USB audio input device and saved as a WAV file per session, anchored to UTC time for later correlation with instrument logs and video.
+The helmlog can record voice commentary (crew calls, tactical notes) in sync with instrument data. Audio is captured from a USB audio input device and saved as a WAV file per session, anchored to UTC time for later correlation with instrument logs and video.
 
 ---
 
@@ -30,7 +30,7 @@ sudo apt install libportaudio2 libsndfile1
 Run:
 
 ```bash
-j105-logger list-devices
+helmlog list-devices
 ```
 
 Example output:
@@ -76,7 +76,7 @@ If `AUDIO_DEVICE` is not set, the first available input device is used automatic
 Audio recording starts automatically with the logger:
 
 ```bash
-j105-logger run
+helmlog run
 ```
 
 Look for this log line on startup:
@@ -96,7 +96,7 @@ Audio recording saved: data/audio/audio_20250810_140530.wav
 ## Listing Recorded Sessions
 
 ```bash
-j105-logger list-audio
+helmlog list-audio
 ```
 
 Example output:
@@ -135,7 +135,7 @@ Or open the file in any audio editor (Audacity, etc.).
 
 | Symptom | Fix |
 |---|---|
-| `No audio input device found` in logs | Check `j105-logger list-devices`; verify USB receiver is plugged in |
+| `No audio input device found` in logs | Check `helmlog list-devices`; verify USB receiver is plugged in |
 | Wrong device selected | Set `AUDIO_DEVICE=<name or index>` in `.env` |
 | Distorted or noisy audio | Check `AUDIO_SAMPLE_RATE` matches receiver's default rate |
 | libportaudio errors on startup | `sudo apt install libportaudio2` |

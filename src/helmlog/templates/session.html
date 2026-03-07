@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}{{ session_name }} — HelmLog{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+.field{background:#0a1628;border:1px solid #2563eb;border-radius:6px;color:#e8eaf0}
+.track-map{height:350px;border-radius:8px}
+.section{margin-top:16px}
+.section-title{font-size:.82rem;text-transform:uppercase;letter-spacing:.07em;color:#8892a4;margin-bottom:6px;cursor:pointer;user-select:none}
+.section-title:hover{color:#7eb8f7}
+.section-body{font-size:.82rem}
+.meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:.82rem}
+.meta-label{color:#8892a4}
+.meta-value{color:#e8eaf0}
+.video-link{display:inline-flex;align-items:center;gap:4px;color:#ef4444;text-decoration:none;font-size:.85rem;font-weight:600}
+.video-link:hover{text-decoration:underline}
+.back-link{font-size:.82rem;color:#8892a4;text-decoration:none;margin-bottom:8px;display:inline-block}
+.back-link:hover{color:#7eb8f7}
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="app-config"
+  data-session-id="{{ session_id }}"
+  data-grafana-port="{{ grafana_port }}"
+  data-grafana-uid="{{ grafana_uid }}"
+  style="display:none"></div>
+
+<a href="/history" class="back-link">&larr; History</a>
+
+<div class="card">
+  <div id="session-header">
+    <div class="session-name" id="session-name"></div>
+    <div class="session-meta" id="session-meta"></div>
+  </div>
+</div>
+
+<div id="track-container" class="card" style="display:none">
+  <div class="section-title">Track</div>
+  <div id="track-map" class="track-map"></div>
+  <div id="track-hint" style="font-size:.72rem;color:#8892a4;margin-top:4px"></div>
+</div>
+
+<div id="video-container" class="card" style="display:none">
+  <div id="video-switcher" style="display:flex;gap:6px;margin-bottom:8px"></div>
+  <div id="yt-player" style="aspect-ratio:16/9;border-radius:8px;overflow:hidden"></div>
+</div>
+
+<div class="card" id="videos-card" style="display:none">
+  <div class="section-title" onclick="toggleSection('videos')">Videos <span id="videos-toggle">&#9660;</span></div>
+  <div class="section-body" id="videos-body"></div>
+</div>
+
+<div class="card" id="results-card" style="display:none">
+  <div class="section-title" onclick="toggleSection('results')">Results <span id="results-toggle">&#9660;</span></div>
+  <div class="section-body" id="results-body"></div>
+</div>
+
+<div class="card" id="crew-card" style="display:none">
+  <div class="section-title" onclick="toggleSection('crew')">Crew <span id="crew-toggle">&#9660;</span></div>
+  <div class="section-body" id="crew-body"></div>
+</div>
+
+<div class="card" id="sails-card" style="display:none">
+  <div class="section-title" onclick="toggleSection('sails')">Sails <span id="sails-toggle">&#9660;</span></div>
+  <div class="section-body" id="sails-body"></div>
+</div>
+
+<div class="card" id="notes-card" style="display:none">
+  <div class="section-title" onclick="toggleSection('notes')">Notes <span id="notes-toggle">&#9660;</span></div>
+  <div class="section-body" id="notes-body"></div>
+</div>
+
+<div class="card" id="transcript-card" style="display:none">
+  <div class="section-title" onclick="toggleSection('transcript')">Transcript <span id="transcript-toggle">&#9660;</span></div>
+  <div class="section-body" id="transcript-body"></div>
+</div>
+
+<div class="card" id="exports-card" style="display:none">
+  <div class="section-title">Exports</div>
+  <div class="session-exports" id="exports-body"></div>
+</div>
+
+<div id="audio-card" class="card" style="display:none">
+  <div class="section-title">Audio</div>
+  <div id="audio-body"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/session.js"></script>
+{% endblock %}

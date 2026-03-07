@@ -1,4 +1,4 @@
-# J105 Logger — Database Schema (v22)
+# HelmLog — Database Schema (v22)
 
 SQLite database storing time-series sailing instrument data, race sessions,
 audio recordings, transcripts, video links, weather/tide data, and user auth.

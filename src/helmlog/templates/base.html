@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>{% block title %}HelmLog{% endblock %}</title>
+<link rel="stylesheet" href="/static/base.css"/>
+{% block extra_css %}{% endblock %}
+</head>
+<body>
+{% block body_wrapper %}
+<div class="page">
+{% block pre_nav %}{% endblock %}
+<nav class="site-nav" id="site-nav">
+  <a href="/"{% if active_page == "/" %} class="active"{% endif %}>Home</a>
+  <a href="/history"{% if active_page == "/history" %} class="active"{% endif %}>History</a>
+  <a href="/admin/boats"{% if active_page == "/admin/boats" %} class="active"{% endif %}>Boats</a>
+  <a href="/admin/users" class="admin-link{% if active_page == "/admin/users" %} active{% endif %}">Users</a>
+  <a href="/admin/audit" class="admin-link{% if active_page == "/admin/audit" %} active{% endif %}">Audit</a>
+  <a href="/admin/cameras" class="admin-link{% if active_page == "/admin/cameras" %} active{% endif %}">Cameras</a>
+  <a href="/admin/events" class="admin-link{% if active_page == "/admin/events" %} active{% endif %}">Events</a>
+  <a href="/admin/settings" class="admin-link{% if active_page == "/admin/settings" %} active{% endif %}">Settings</a>
+  <span class="spacer"></span>
+  <a href="/profile" class="profile-link" id="nav-profile"{% if active_page == "/profile" %} class="active"{% endif %}><img id="nav-avatar" src="" alt="" style="width:18px;height:18px;border-radius:50%;vertical-align:middle;margin-right:3px"><span id="nav-profile-name">Profile</span></a>
+</nav>
+{% block content %}{% endblock %}
+<footer>{{ git_info }}</footer>
+</div>
+{% endblock %}
+<script src="/static/shared.js"></script>
+<script>initNav();</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

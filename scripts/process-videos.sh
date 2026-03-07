@@ -3,24 +3,24 @@
 #
 # Discovers .insv files on a mounted SD card, stitches them into
 # equirectangular 360° MP4 via Docker + insta360-cli-utils, injects
-# spatial metadata, uploads to YouTube, and links to J105 Logger sessions.
+# spatial metadata, uploads to YouTube, and links to HelmLog sessions.
 #
 # Usage:
 #   ./scripts/process-videos.sh                    # auto-detect SD card
 #   ./scripts/process-videos.sh /Volumes/MyCard    # explicit mount point
 #
-# Called by com.j105.video.plist (launchd) when a volume is mounted,
+# Called by com.helmlog.video.plist (launchd) when a volume is mounted,
 # or run manually after inserting the SD card.
 #
 # Environment overrides:
-#   VIDEO_OUTPUT_DIR          where stitched MP4s go  (default: ~/Videos/j105)
+#   VIDEO_OUTPUT_DIR          where stitched MP4s go  (default: ~/Videos/helmlog)
 #   VIDEO_RESOLUTION          output resolution       (default: 3840x1920)
 #   DOCKER_IMAGE              stitcher image           (default: insta360-cli-utils)
-#   PI_API_URL                J105 Logger API          (default: http://corvopi:3002)
+#   PI_API_URL                HelmLog API          (default: http://corvopi:3002)
 #   VIDEO_PRIVACY             YouTube privacy          (default: unlisted)
 #   TIMEZONE                  camera local timezone    (default: America/Los_Angeles)
-#   YOUTUBE_CLIENT_SECRETS    OAuth2 client secrets    (default: ~/.j105-youtube-client-secrets.json)
-#   YOUTUBE_TOKEN_FILE        OAuth2 token cache       (default: ~/.j105-youtube-token.json)
+#   YOUTUBE_CLIENT_SECRETS    OAuth2 client secrets    (default: ~/.helmlog-youtube-client-secrets.json)
+#   YOUTUBE_TOKEN_FILE        OAuth2 token cache       (default: ~/.helmlog-youtube-token.json)
 #   PI_SESSION_COOKIE         session cookie for Pi API (enables auto-linking videos to sessions)
 
 set -euo pipefail
@@ -30,7 +30,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-OUTPUT_DIR="${VIDEO_OUTPUT_DIR:-$HOME/Videos/j105}"
+OUTPUT_DIR="${VIDEO_OUTPUT_DIR:-$HOME/Videos/helmlog}"
 RESOLUTION="${VIDEO_RESOLUTION:-3840x1920}"
 IMAGE="${DOCKER_IMAGE:-insta360-cli-utils}"
 PI_API="${PI_API_URL:-http://corvopi:3002}"
@@ -77,7 +77,7 @@ if ! [ -t 0 ]; then
     display dialog \"Insta360 X4 detected at $SD_MOUNT.\" & return & return & \
     \"Process and upload race videos?\" \
     buttons {\"Cancel\", \"Process\"} default button \"Process\" \
-    with title \"J105 Video Pipeline\"
+    with title \"HelmLog Video Pipeline\"
   " 2>/dev/null) || {
     log "User cancelled — exiting."
     exit 0
@@ -90,7 +90,7 @@ log "Discovering recordings..."
 RECORDINGS=$(cd "$PROJECT_DIR" && uv run python -c "
 import json
 from pathlib import Path
-from logger.insta360 import discover_recordings
+from helmlog.insta360 import discover_recordings
 recs = discover_recordings(Path('$SD_MOUNT'))
 print(json.dumps([
     {
@@ -210,8 +210,8 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from logger.insta360 import InstaRecording
-from logger.pipeline import PipelineConfig, fetch_sessions_from_pi, process_recording
+from helmlog.insta360 import InstaRecording
+from helmlog.pipeline import PipelineConfig, fetch_sessions_from_pi, process_recording
 
 async def main():
     cfg = PipelineConfig(
@@ -283,7 +283,7 @@ if [ -f "$OUTPUT_DIR/.upload_results.json" ]; then
 
   # Show a macOS notification if not running in a terminal
   if ! [ -t 0 ]; then
-    osascript -e "display notification \"$UPLOAD_COUNT video(s) uploaded to YouTube\" with title \"J105 Video Pipeline\" sound name \"Glass\"" 2>/dev/null || true
+    osascript -e "display notification \"$UPLOAD_COUNT video(s) uploaded to YouTube\" with title \"HelmLog Video Pipeline\" sound name \"Glass\"" 2>/dev/null || true
   fi
 else
   log "Pipeline complete — no videos uploaded"

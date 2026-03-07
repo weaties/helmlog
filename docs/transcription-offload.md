@@ -34,8 +34,8 @@ transcription automatically.
    able to reach each other by Tailscale IP or hostname.
 2. **The Mac has the project cloned** with dependencies installed:
    ```bash
-   git clone https://github.com/weaties/j105-logger.git
-   cd j105-logger
+   git clone https://github.com/weaties/helmlog.git
+   cd helmlog
    uv sync
    ```
 3. **For speaker diarisation** (optional): a Hugging Face token with accepted
@@ -114,7 +114,7 @@ TRANSCRIBE_URL=http://100.x.x.x:8321
 ### 2. Restart the logger
 
 ```bash
-sudo systemctl restart j105-logger
+sudo systemctl restart helmlog
 ```
 
 ### 3. Verify connectivity

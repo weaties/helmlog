@@ -1,4 +1,4 @@
-# CLAUDE.md — J105 Sailboat Data Logger
+# CLAUDE.md — HelmLog
 
 ## Project Overview
 
@@ -34,7 +34,7 @@ Data can be exported as CSV, GPX, or JSON for use in Sailmon and other regatta a
 ## Project Structure
 
 ```
-j105-logger/
+helmlog/
 ├── CLAUDE.md
 ├── README.md
 ├── pyproject.toml          # uv-managed; single source of truth for deps & config
@@ -42,7 +42,7 @@ j105-logger/
 ├── .env.example            # canonical env var reference
 │
 ├── src/
-│   └── logger/
+│   └── helmlog/
 │       ├── __init__.py
 │       ├── main.py         # CLI entry point; wires modules together, starts async loop
 │       ├── audio.py        # USB audio recording (Gordik / any UAC device)
@@ -95,10 +95,10 @@ uv run ruff format --check .  # format check
 uv run mypy src/            # type check
 uv run ruff check --fix . && uv run ruff format .  # auto-fix
 
-j105-logger run             # start the logger
-j105-logger status          # show database row counts
-j105-logger list-cameras    # show configured cameras and ping status
-j105-logger --help          # full subcommand list
+helmlog run             # start the logger
+helmlog status          # show database row counts
+helmlog list-cameras    # show configured cameras and ping status
+helmlog --help          # full subcommand list
 ```
 
 ---

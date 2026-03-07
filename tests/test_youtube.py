@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 import pytest
 
-from logger.youtube import (
+from helmlog.youtube import (
     UploadResult,
     build_description,
     build_title,
@@ -62,7 +62,7 @@ class TestBuildDescription:
         )
         assert "https://corvopi:3002/history/42" in desc
         assert "14:05:30" in desc
-        assert "360" in desc.lower() or "J105" in desc
+        assert "360" in desc.lower() or "HelmLog" in desc
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ class TestLoadCredentials:
         secrets_file = tmp_path / "client_secrets.json"
         secrets_file.write_text("{}")  # not used when token exists
 
-        with patch("logger.youtube.Credentials") as mock_creds_cls:
+        with patch("helmlog.youtube.Credentials") as mock_creds_cls:
             mock_creds = MagicMock()
             mock_creds.valid = True
             mock_creds.expired = False
@@ -105,8 +105,8 @@ class TestLoadCredentials:
         token_file = tmp_path / "token.json"
 
         with (
-            patch("logger.youtube.InstalledAppFlow") as mock_flow_cls,
-            patch("logger.youtube.Credentials") as mock_creds_cls,
+            patch("helmlog.youtube.InstalledAppFlow") as mock_flow_cls,
+            patch("helmlog.youtube.Credentials") as mock_creds_cls,
         ):
             mock_creds_cls.from_authorized_user_file.side_effect = FileNotFoundError
             mock_flow = MagicMock()
@@ -147,8 +147,8 @@ class TestUploadVideo:
         mock_service.videos.return_value = mock_videos
 
         with (
-            patch("logger.youtube.load_credentials") as mock_load,
-            patch("logger.youtube.build_service") as mock_build,
+            patch("helmlog.youtube.load_credentials") as mock_load,
+            patch("helmlog.youtube.build_service") as mock_build,
         ):
             mock_load.return_value = MagicMock()
             mock_build.return_value = mock_service
@@ -184,8 +184,8 @@ class TestUploadVideo:
         mock_service.videos.return_value = mock_videos
 
         with (
-            patch("logger.youtube.load_credentials") as mock_load,
-            patch("logger.youtube.build_service") as mock_build,
+            patch("helmlog.youtube.load_credentials") as mock_load,
+            patch("helmlog.youtube.build_service") as mock_build,
         ):
             mock_load.return_value = MagicMock()
             mock_build.return_value = mock_service
