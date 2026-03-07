@@ -6,6 +6,10 @@ initGrafana(cfg.dataset.grafanaPort, cfg.dataset.grafanaUid);
 
 let _session = null;
 let _map = null;
+let _trackData = null; // {latLngs, timestamps (as Date), line, cursor}
+let _videoSync = null; // {syncUtc (Date), syncOffsetS, durationS, player}
+let _ytReady = false;
+let _syncTimer = null;
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -22,7 +26,8 @@ async function init() {
   _session = await r.json();
 
   renderHeader();
-  loadTrack();
+  // Load track and videos in parallel, then wire up sync
+  await Promise.all([loadTrack(), loadVideoPlayer()]);
   loadVideos();
   if (_session.type !== 'debrief') {
     loadResults();
@@ -45,12 +50,7 @@ function renderHeader() {
   const s = _session;
   const typeClass = s.type === 'race' ? 'badge-race' : s.type === 'practice' ? 'badge-practice' : 'badge-debrief';
   const badge = '<span class="badge ' + typeClass + '">' + s.type.toUpperCase() + '</span>';
-
-  const videoHtml = s.first_video_url
-    ? ' <a class="video-link" href="' + esc(s.first_video_url) + '" target="_blank">&#9654; Video</a>'
-    : '';
-
-  document.getElementById('session-name').innerHTML = esc(s.name) + badge + videoHtml;
+  document.getElementById('session-name').innerHTML = esc(s.name) + badge;
 
   const start = fmtTime(s.start_utc);
   const end = s.end_utc ? fmtTime(s.end_utc) : 'in progress';
@@ -77,8 +77,9 @@ async function loadTrack() {
 
   const feature = geojson.features[0];
   const coords = feature.geometry.coordinates;
-  const timestamps = feature.properties.timestamps || [];
+  const rawTimestamps = feature.properties.timestamps || [];
   const latLngs = coords.map(c => [c[1], c[0]]);
+  const timestamps = rawTimestamps.map(t => new Date(t.endsWith('Z') || t.includes('+') ? t : t + 'Z'));
   const line = L.polyline(latLngs, {color: '#2563eb', weight: 4}).addTo(_map);
 
   L.circleMarker(latLngs[0], {radius: 6, color: '#22c55e', fillColor: '#22c55e', fillOpacity: 1})
@@ -86,37 +87,201 @@ async function loadTrack() {
   L.circleMarker(latLngs[latLngs.length - 1], {radius: 6, color: '#ef4444', fillColor: '#ef4444', fillOpacity: 1})
     .addTo(_map).bindPopup('Finish');
 
-  // Click track to jump to video
-  if (timestamps.length) {
-    const cursor = L.circleMarker([0, 0], {radius: 5, color: '#facc15', fillColor: '#facc15', fillOpacity: 1});
-    const hint = document.getElementById('track-hint');
-    hint.textContent = 'Click the track to jump to that moment in the video';
+  const cursor = L.circleMarker([0, 0], {
+    radius: 7, color: '#facc15', fillColor: '#facc15', fillOpacity: 1, weight: 2,
+  });
 
-    line.on('click', async function(e) {
-      let minDist = Infinity, nearIdx = 0;
-      for (let i = 0; i < latLngs.length; i++) {
-        const d = _map.latLngToLayerPoint(latLngs[i]).distanceTo(_map.latLngToLayerPoint(e.latlng));
-        if (d < minDist) { minDist = d; nearIdx = i; }
-      }
-      const ts = timestamps[nearIdx];
-      if (!ts) return;
+  _trackData = {latLngs, timestamps, line, cursor};
 
-      cursor.setLatLng(latLngs[nearIdx]).addTo(_map);
-
-      const vr = await fetch('/api/sessions/' + SESSION_ID + '/videos?at=' + encodeURIComponent(ts));
-      const videos = await vr.json();
-      const linked = videos.find(v => v.deep_link);
-      if (linked) {
-        window.open(linked.deep_link, '_blank');
-      } else if (videos.length) {
-        window.open(videos[0].youtube_url, '_blank');
-      } else {
-        cursor.bindPopup('No video linked').openPopup();
-      }
-    });
-  }
+  // Click track → seek video
+  line.on('click', function(e) {
+    const idx = _nearestIndex(e.latlng);
+    _moveCursorToIndex(idx);
+    _seekVideoToIndex(idx);
+  });
 
   _map.fitBounds(line.getBounds(), {padding: [20, 20]});
+}
+
+function _nearestIndex(latlng) {
+  if (!_trackData) return 0;
+  let minDist = Infinity, nearIdx = 0;
+  for (let i = 0; i < _trackData.latLngs.length; i++) {
+    const d = _map.latLngToLayerPoint(_trackData.latLngs[i])
+      .distanceTo(_map.latLngToLayerPoint(latlng));
+    if (d < minDist) { minDist = d; nearIdx = i; }
+  }
+  return nearIdx;
+}
+
+function _moveCursorToIndex(idx) {
+  if (!_trackData) return;
+  _trackData.cursor.setLatLng(_trackData.latLngs[idx]).addTo(_map);
+}
+
+function _indexForUtc(utcDate) {
+  if (!_trackData || !_trackData.timestamps.length) return 0;
+  const t = utcDate.getTime();
+  // Binary-ish search for nearest timestamp
+  let best = 0, bestDiff = Math.abs(_trackData.timestamps[0].getTime() - t);
+  for (let i = 1; i < _trackData.timestamps.length; i++) {
+    const diff = Math.abs(_trackData.timestamps[i].getTime() - t);
+    if (diff < bestDiff) { bestDiff = diff; best = i; }
+    if (_trackData.timestamps[i].getTime() > t) break; // timestamps are sorted
+  }
+  return best;
+}
+
+function _utcForIndex(idx) {
+  if (!_trackData || !_trackData.timestamps.length) return null;
+  return _trackData.timestamps[Math.min(idx, _trackData.timestamps.length - 1)];
+}
+
+// ---------------------------------------------------------------------------
+// YouTube IFrame Player
+// ---------------------------------------------------------------------------
+
+async function loadVideoPlayer() {
+  const vr = await fetch('/api/sessions/' + SESSION_ID + '/videos');
+  const videos = await vr.json();
+  if (!videos.length) return;
+
+  // Use first video with a video_id
+  const vid = videos.find(v => v.video_id) || videos[0];
+  if (!vid || !vid.video_id) return;
+
+  _videoSync = {
+    syncUtc: new Date(vid.sync_utc),
+    syncOffsetS: vid.sync_offset_s || 0,
+    durationS: vid.duration_s || 0,
+    player: null,
+    videoId: vid.video_id,
+    allVideos: videos,
+    activeIdx: videos.indexOf(vid),
+  };
+
+  const container = document.getElementById('video-container');
+  container.style.display = '';
+
+  // Render video switcher if multiple videos
+  if (videos.length > 1) {
+    const switcher = document.getElementById('video-switcher');
+    switcher.innerHTML = videos.map((v, i) => {
+      const label = v.label || v.title || ('Video ' + (i + 1));
+      const cls = i === _videoSync.activeIdx ? 'filter-btn active' : 'filter-btn';
+      return '<button class="' + cls + '" onclick="switchVideo(' + i + ')">' + esc(label) + '</button>';
+    }).join('');
+  }
+
+  // Load YouTube IFrame API
+  const tag = document.createElement('script');
+  tag.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(tag);
+}
+
+// YouTube API calls this global function when ready
+function onYouTubeIframeAPIReady() {
+  _ytReady = true;
+  if (_videoSync) _createPlayer(_videoSync.videoId);
+}
+
+function _createPlayer(videoId) {
+  if (_videoSync.player) {
+    _videoSync.player.loadVideoById(videoId);
+    return;
+  }
+  _videoSync.player = new YT.Player('yt-player', {
+    height: '100%',
+    width: '100%',
+    videoId: videoId,
+    playerVars: {
+      modestbranding: 1,
+      rel: 0,
+      enablejsapi: 1,
+      origin: location.origin,
+    },
+    events: {
+      onStateChange: _onPlayerStateChange,
+    },
+  });
+}
+
+function switchVideo(idx) {
+  const videos = _videoSync.allVideos;
+  if (idx < 0 || idx >= videos.length) return;
+  _videoSync.activeIdx = idx;
+  const vid = videos[idx];
+  _videoSync.syncUtc = new Date(vid.sync_utc);
+  _videoSync.syncOffsetS = vid.sync_offset_s || 0;
+  _videoSync.durationS = vid.duration_s || 0;
+  _videoSync.videoId = vid.video_id;
+
+  // Update switcher buttons
+  document.querySelectorAll('#video-switcher .filter-btn').forEach((btn, i) => {
+    btn.classList.toggle('active', i === idx);
+  });
+
+  if (_videoSync.player && _videoSync.player.loadVideoById) {
+    _videoSync.player.loadVideoById(vid.video_id);
+  }
+}
+
+function _onPlayerStateChange(event) {
+  // YT.PlayerState.PLAYING = 1
+  if (event.data === 1) {
+    _startSyncTimer();
+  } else {
+    _stopSyncTimer();
+    // Update cursor on pause too
+    _syncMapToVideo();
+  }
+}
+
+function _startSyncTimer() {
+  _stopSyncTimer();
+  _syncTimer = setInterval(_syncMapToVideo, 500);
+}
+
+function _stopSyncTimer() {
+  if (_syncTimer) { clearInterval(_syncTimer); _syncTimer = null; }
+}
+
+function _syncMapToVideo() {
+  if (!_videoSync || !_videoSync.player || !_trackData) return;
+  if (typeof _videoSync.player.getCurrentTime !== 'function') return;
+
+  const videoTime = _videoSync.player.getCurrentTime();
+  const utc = _videoOffsetToUtc(videoTime);
+  if (!utc) return;
+
+  const idx = _indexForUtc(utc);
+  _moveCursorToIndex(idx);
+}
+
+// Convert video playback seconds → UTC
+function _videoOffsetToUtc(videoSeconds) {
+  if (!_videoSync) return null;
+  // videoSeconds = syncOffsetS + (utc - syncUtc) in seconds
+  // so utc = syncUtc + (videoSeconds - syncOffsetS) * 1000
+  const ms = _videoSync.syncUtc.getTime() + (videoSeconds - _videoSync.syncOffsetS) * 1000;
+  return new Date(ms);
+}
+
+// Convert UTC → video playback seconds
+function _utcToVideoOffset(utcDate) {
+  if (!_videoSync) return null;
+  return _videoSync.syncOffsetS + (utcDate.getTime() - _videoSync.syncUtc.getTime()) / 1000;
+}
+
+// Seek video to the timestamp at track index
+function _seekVideoToIndex(idx) {
+  const utc = _utcForIndex(idx);
+  if (!utc || !_videoSync || !_videoSync.player) return;
+  const offset = _utcToVideoOffset(utc);
+  if (offset === null || offset < 0) return;
+  if (typeof _videoSync.player.seekTo === 'function') {
+    _videoSync.player.seekTo(offset, true);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -135,7 +300,7 @@ function toggleSection(name) {
 }
 
 // ---------------------------------------------------------------------------
-// Videos
+// Videos (list/add/delete — below the player)
 // ---------------------------------------------------------------------------
 
 async function loadVideos() {
@@ -190,13 +355,14 @@ async function submitAddVideo() {
     body: JSON.stringify({youtube_url: url, label, sync_utc: syncUtc, sync_offset_s: syncOffsetS})
   });
   if (!resp.ok) { alert('Failed: ' + resp.status); return; }
-  loadVideos();
+  // Reload everything to pick up new video in player
+  location.reload();
 }
 
 async function deleteVideo(videoId) {
   if (!confirm('Remove this video link?')) return;
   await fetch('/api/videos/' + videoId, {method: 'DELETE'});
-  loadVideos();
+  location.reload();
 }
 
 // ---------------------------------------------------------------------------
@@ -229,7 +395,6 @@ async function loadResults() {
   }).join('');
   html += '</div>';
 
-  // Add boat picker
   const nextPlace = results.length + 1;
   html += '<div class="results-row" style="border-bottom:none;margin-top:4px">'
     + '<span class="results-place">' + nextPlace + '.</span>'
