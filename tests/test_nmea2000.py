@@ -6,8 +6,8 @@ import math
 import struct
 from datetime import UTC, datetime
 
-from logger.can_reader import extract_pgn
-from logger.nmea2000 import (
+from helmlog.can_reader import extract_pgn
+from helmlog.nmea2000 import (
     PGN_COG_SOG_RAPID,
     PGN_ENVIRONMENTAL,
     PGN_POSITION_RAPID,

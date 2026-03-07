@@ -6,21 +6,21 @@
 #
 # What it does:
 #   1. Verifies SSH connectivity to the Pi (set PI=user@host to override)
-#   2. Creates ~/backups/j105-logger/
-#   3. Copies com.j105.backup.plist → ~/Library/LaunchAgents/ (with real paths)
+#   2. Creates ~/backups/helmlog/
+#   3. Copies com.helmlog.backup.plist → ~/Library/LaunchAgents/ (with real paths)
 #   4. Loads (enables) the agent — runs daily at 03:00
 #
 # To uninstall:
-#   launchctl unload ~/Library/LaunchAgents/com.j105.backup.plist
-#   rm ~/Library/LaunchAgents/com.j105.backup.plist
+#   launchctl unload ~/Library/LaunchAgents/com.helmlog.backup.plist
+#   rm ~/Library/LaunchAgents/com.helmlog.backup.plist
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP_SCRIPT="$SCRIPT_DIR/backup.sh"
-PLIST_SRC="$SCRIPT_DIR/com.j105.backup.plist"
-PLIST_DEST="$HOME/Library/LaunchAgents/com.j105.backup.plist"
-BACKUP_DEST="${BACKUP_DEST:-$HOME/backups/j105-logger}"
+PLIST_SRC="$SCRIPT_DIR/com.helmlog.backup.plist"
+PLIST_DEST="$HOME/Library/LaunchAgents/com.helmlog.backup.plist"
+BACKUP_DEST="${BACKUP_DEST:-$HOME/backups/helmlog}"
 LOG_FILE="$BACKUP_DEST/backup.log"
 PI="${PI:-weaties@corvopi}"
 
@@ -87,4 +87,4 @@ echo "Run a backup now:"
 echo "  $BACKUP_SCRIPT"
 echo ""
 echo "Or trigger via launchd:"
-echo "  launchctl start com.j105.backup"
+echo "  launchctl start com.helmlog.backup"

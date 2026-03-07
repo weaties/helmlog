@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.helmlog.video</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>PROCESS_SCRIPT_PATH</string>
+    </array>
+
+    <!-- Trigger when volumes are mounted/unmounted -->
+    <key>WatchPaths</key>
+    <array>
+        <string>/Volumes</string>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>VIDEO_LOG_PATH</string>
+    <key>StandardErrorPath</key>
+    <string>VIDEO_LOG_PATH</string>
+
+    <!-- Don't run on login — only when a volume changes -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Pass through user's env (for TIMEZONE, YOUTUBE_* etc.) -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>HOME_PATH</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>PI_API_URL</key>
+        <string>PI_API_URL_VALUE</string>
+        <key>PI_SESSION_COOKIE</key>
+        <string>PI_SESSION_COOKIE_VALUE</string>
+    </dict>
+</dict>
+</plist>

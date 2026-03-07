@@ -8,11 +8,11 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from logger.storage import get_effective_setting
-from logger.web import create_app
+from helmlog.storage import get_effective_setting
+from helmlog.web import create_app
 
 if TYPE_CHECKING:
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
 
 # ---------------------------------------------------------------------------

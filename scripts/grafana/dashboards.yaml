@@ -1,6 +1,6 @@
 apiVersion: 1
 providers:
-  - name: J105 Logger
+  - name: HelmLog
     type: file
     disableDeletion: false
     updateIntervalSeconds: 30

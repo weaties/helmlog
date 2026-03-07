@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 import pytest
 import pytest_asyncio
 
-from logger.can_reader import CANFrame
-from logger.nmea2000 import (
+from helmlog.can_reader import CANFrame
+from helmlog.nmea2000 import (
     PGN_COG_SOG_RAPID,
     PGN_ENVIRONMENTAL,
     PGN_POSITION_RAPID,
@@ -26,7 +26,7 @@ from logger.nmea2000 import (
     SpeedRecord,
     WindRecord,
 )
-from logger.storage import Storage, StorageConfig
+from helmlog.storage import Storage, StorageConfig
 
 # ---------------------------------------------------------------------------
 # Timestamps

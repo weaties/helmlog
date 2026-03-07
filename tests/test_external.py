@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from logger.external import ExternalFetcher, TideReading, WeatherReading
+from helmlog.external import ExternalFetcher, TideReading, WeatherReading
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -171,7 +171,7 @@ class TestFetchWeather:
 class TestWeatherStorageRoundTrip:
     async def test_write_and_query(self, storage: object) -> None:
         """WeatherReadings persist and are retrievable by time range."""
-        from logger.storage import Storage
+        from helmlog.storage import Storage
 
         assert isinstance(storage, Storage)
 
@@ -199,7 +199,7 @@ class TestWeatherStorageRoundTrip:
 
     async def test_query_outside_range_returns_empty(self, storage: object) -> None:
         """Query with a range that doesn't cover the reading returns empty."""
-        from logger.storage import Storage
+        from helmlog.storage import Storage
 
         assert isinstance(storage, Storage)
 
@@ -223,15 +223,15 @@ class TestWeatherStorageRoundTrip:
 
 class TestLatestPosition:
     async def test_returns_none_when_empty(self, storage: object) -> None:
-        from logger.storage import Storage
+        from helmlog.storage import Storage
 
         assert isinstance(storage, Storage)
         result = await storage.latest_position()
         assert result is None
 
     async def test_returns_most_recent(self, storage: object) -> None:
-        from logger.nmea2000 import PGN_POSITION_RAPID, PositionRecord
-        from logger.storage import Storage
+        from helmlog.nmea2000 import PGN_POSITION_RAPID, PositionRecord
+        from helmlog.storage import Storage
 
         assert isinstance(storage, Storage)
         early = datetime(2025, 8, 10, 13, 0, 0, tzinfo=UTC)
@@ -483,7 +483,7 @@ class TestFetchTides:
 class TestTideStorageRoundTrip:
     async def test_write_and_query(self, storage: object) -> None:
         """TideReadings persist and are retrievable by time range."""
-        from logger.storage import Storage
+        from helmlog.storage import Storage
 
         assert isinstance(storage, Storage)
 
@@ -509,7 +509,7 @@ class TestTideStorageRoundTrip:
 
     async def test_write_is_idempotent(self, storage: object) -> None:
         """Writing the same reading twice produces only one row (INSERT OR IGNORE)."""
-        from logger.storage import Storage
+        from helmlog.storage import Storage
 
         assert isinstance(storage, Storage)
 
@@ -531,7 +531,7 @@ class TestTideStorageRoundTrip:
 
     async def test_query_outside_range_returns_empty(self, storage: object) -> None:
         """Query with a range that doesn't cover the reading returns empty."""
-        from logger.storage import Storage
+        from helmlog.storage import Storage
 
         assert isinstance(storage, Storage)
 

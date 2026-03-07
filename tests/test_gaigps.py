@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from logger.gaigps import GaiaTrack, TrackPoint, parse_track_detail, parse_track_list
+from helmlog.gaigps import GaiaTrack, TrackPoint, parse_track_detail, parse_track_list
 
 # ---------------------------------------------------------------------------
 # Sample API responses (trimmed from real HAR capture)

@@ -8,7 +8,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from logger.storage import Storage, StorageConfig
+from helmlog.storage import Storage, StorageConfig
 
 
 @pytest_asyncio.fixture
@@ -154,7 +154,7 @@ async def test_tag_usage_counts(storage: Storage) -> None:
 
 @pytest.mark.asyncio
 async def test_trigger_scan_creates_notes(storage: Storage) -> None:
-    from logger.triggers import TriggerRule, scan_transcript
+    from helmlog.triggers import TriggerRule, scan_transcript
 
     now = datetime.now(UTC)
     race = await storage.start_race("T", now, now.date().isoformat(), 1, "T R1", "race")
@@ -193,7 +193,7 @@ async def test_trigger_scan_creates_notes(storage: Storage) -> None:
 
 @pytest.mark.asyncio
 async def test_trigger_dedup(storage: Storage) -> None:
-    from logger.triggers import TriggerRule, scan_transcript
+    from helmlog.triggers import TriggerRule, scan_transcript
 
     now = datetime.now(UTC)
     race = await storage.start_race("T", now, now.date().isoformat(), 1, "T R1", "race")
@@ -220,7 +220,7 @@ async def test_trigger_dedup(storage: Storage) -> None:
 
 @pytest.mark.asyncio
 async def test_trigger_idempotent_rescan(storage: Storage) -> None:
-    from logger.triggers import TriggerRule, scan_transcript
+    from helmlog.triggers import TriggerRule, scan_transcript
 
     now = datetime.now(UTC)
     race = await storage.start_race("T", now, now.date().isoformat(), 1, "T R1", "race")
@@ -247,7 +247,7 @@ async def test_trigger_idempotent_rescan(storage: Storage) -> None:
 
 
 def test_load_trigger_rules_defaults() -> None:
-    from logger.triggers import load_trigger_rules
+    from helmlog.triggers import load_trigger_rules
 
     rules = load_trigger_rules()
     assert len(rules) >= 3
@@ -276,7 +276,7 @@ async def test_avatar_path(storage: Storage) -> None:
 async def client(storage: Storage, monkeypatch: pytest.MonkeyPatch) -> AsyncClient:  # type: ignore[misc]
     """Authenticated async client for the web app."""
     monkeypatch.setenv("AUTH_DISABLED", "true")
-    from logger.web import create_app
+    from helmlog.web import create_app
 
     app = create_app(storage)
     transport = ASGITransport(app=app)
@@ -396,7 +396,7 @@ async def test_nav_has_users_link(client: AsyncClient) -> None:
 
 
 def test_smtp_configured_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    from logger.email import smtp_configured
+    from helmlog.email import smtp_configured
 
     monkeypatch.delenv("SMTP_HOST", raising=False)
     monkeypatch.delenv("SMTP_PORT", raising=False)
@@ -405,7 +405,7 @@ def test_smtp_configured_false(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_smtp_configured_true(monkeypatch: pytest.MonkeyPatch) -> None:
-    from logger.email import smtp_configured
+    from helmlog.email import smtp_configured
 
     monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
     monkeypatch.setenv("SMTP_PORT", "587")
@@ -417,14 +417,14 @@ def test_smtp_configured_true(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_send_email_success(monkeypatch: pytest.MonkeyPatch) -> None:
     from unittest.mock import MagicMock, patch
 
-    from logger.email import send_email
+    from helmlog.email import send_email
 
     monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
     monkeypatch.setenv("SMTP_PORT", "587")
     monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
 
     mock_smtp = MagicMock()
-    with patch("logger.email.smtplib.SMTP", return_value=mock_smtp):
+    with patch("helmlog.email.smtplib.SMTP", return_value=mock_smtp):
         mock_smtp.__enter__ = MagicMock(return_value=mock_smtp)
         mock_smtp.__exit__ = MagicMock(return_value=False)
         result = await send_email("user@example.com", "Test", "Hello")
@@ -436,13 +436,13 @@ async def test_send_email_success(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_send_email_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     from unittest.mock import patch
 
-    from logger.email import send_email
+    from helmlog.email import send_email
 
     monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
     monkeypatch.setenv("SMTP_PORT", "587")
     monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
 
-    with patch("logger.email.smtplib.SMTP", side_effect=ConnectionRefusedError("nope")):
+    with patch("helmlog.email.smtplib.SMTP", side_effect=ConnectionRefusedError("nope")):
         result = await send_email("user@example.com", "Test", "Hello")
     assert result is False
 
@@ -451,9 +451,9 @@ async def test_send_email_failure(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_send_welcome_email(monkeypatch: pytest.MonkeyPatch) -> None:
     from unittest.mock import AsyncMock, patch
 
-    from logger.email import send_welcome_email
+    from helmlog.email import send_welcome_email
 
-    with patch("logger.email.send_email", new_callable=AsyncMock, return_value=True) as mock:
+    with patch("helmlog.email.send_email", new_callable=AsyncMock, return_value=True) as mock:
         result = await send_welcome_email(
             "Alice", "alice@example.com", "crew", "http://x/login?token=abc"
         )
@@ -469,9 +469,9 @@ async def test_send_welcome_email(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_send_device_alert(monkeypatch: pytest.MonkeyPatch) -> None:
     from unittest.mock import AsyncMock, patch
 
-    from logger.email import send_device_alert
+    from helmlog.email import send_device_alert
 
-    with patch("logger.email.send_email", new_callable=AsyncMock, return_value=True) as mock:
+    with patch("helmlog.email.send_email", new_callable=AsyncMock, return_value=True) as mock:
         result = await send_device_alert("alice@example.com", "1.2.3.4", "Mozilla/5.0")
     assert result is True
     mock.assert_called_once()
@@ -486,14 +486,14 @@ async def test_send_device_alert(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_configured_tz_default() -> None:
-    from logger.races import configured_tz
+    from helmlog.races import configured_tz
 
     tz = configured_tz()
     assert str(tz) == "UTC"
 
 
 def test_configured_tz_custom(monkeypatch: pytest.MonkeyPatch) -> None:
-    from logger.races import configured_tz
+    from helmlog.races import configured_tz
 
     monkeypatch.setenv("TIMEZONE", "America/Los_Angeles")
     tz = configured_tz()
@@ -501,7 +501,7 @@ def test_configured_tz_custom(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_local_today_uses_tz(monkeypatch: pytest.MonkeyPatch) -> None:
-    from logger.races import local_today
+    from helmlog.races import local_today
 
     monkeypatch.setenv("TIMEZONE", "Pacific/Auckland")  # UTC+12/+13
     today = local_today()
@@ -514,7 +514,7 @@ def test_weekday_event_uses_local_date() -> None:
     """Verify default_event_for_date works with rules dict."""
     from datetime import date
 
-    from logger.races import default_event_for_date
+    from helmlog.races import default_event_for_date
 
     rules = {0: "BallardCup", 2: "CYC"}
 

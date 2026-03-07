@@ -50,7 +50,7 @@
       }
     ]
   },
-  "description": "J105 sailboat performance data from Signal K via InfluxDB",
+  "description": "Sailing performance data from Signal K via InfluxDB",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -701,7 +701,7 @@
   "schemaVersion": 41,
   "tags": [
     "sailing",
-    "j105"
+    "helmlog"
   ],
   "templating": {
     "list": [
@@ -743,6 +743,6 @@
   "timepicker": {},
   "timezone": "browser",
   "title": "Sailing Data",
-  "uid": "j105-sailing",
+  "uid": "helmlog-sailing",
   "version": 2
 }

@@ -99,7 +99,7 @@ CAMERA_START_TIMEOUT=10
 ### 4. Test with the CLI
 
 ```bash
-j105-logger list-cameras
+helmlog list-cameras
 ```
 
 This pings each configured camera and shows its recording status.

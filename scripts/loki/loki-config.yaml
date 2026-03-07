@@ -1,4 +1,4 @@
-# Loki configuration for j105-logger
+# Loki configuration for helmlog
 # Single-tenant, filesystem storage, loopback-only binding.
 # Deployed by setup.sh to /etc/loki/loki-config.yaml
 

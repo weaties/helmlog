@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from logger.nmea2000 import (
+from helmlog.nmea2000 import (
     PGN_COG_SOG_RAPID,
     PGN_ENVIRONMENTAL,
     PGN_POSITION_RAPID,
@@ -25,7 +25,7 @@ from logger.nmea2000 import (
 )
 
 if TYPE_CHECKING:
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
 _TS = datetime(2024, 6, 15, 12, 0, 0, tzinfo=UTC)
 
@@ -60,7 +60,7 @@ class TestMigration:
             assert expected in names, f"Table {expected!r} not found"
 
     async def test_migration_version_recorded(self, storage: Storage) -> None:
-        from logger.storage import _CURRENT_VERSION
+        from helmlog.storage import _CURRENT_VERSION
 
         db = storage._conn()
         cur = await db.execute("SELECT MAX(version) FROM schema_version")
@@ -70,7 +70,7 @@ class TestMigration:
 
     async def test_migration_idempotent(self, storage: Storage) -> None:
         """Running migrate() a second time must not error or add duplicate rows."""
-        from logger.storage import _MIGRATIONS
+        from helmlog.storage import _MIGRATIONS
 
         await storage.migrate()
         await storage.migrate()
@@ -895,7 +895,7 @@ class TestRaceVideos:
 
 def test_video_offset_at_sync_point() -> None:
     """At the sync point itself, video_offset_at == sync_offset_s."""
-    from logger.video import VideoSession
+    from helmlog.video import VideoSession
 
     sync = datetime(2026, 2, 27, 18, 5, 0, tzinfo=UTC)
     vs = VideoSession(
@@ -913,7 +913,7 @@ def test_video_offset_at_30s_after_sync() -> None:
     """30 seconds after sync, the video position is sync_offset_s + 30."""
     from datetime import timedelta
 
-    from logger.video import VideoSession
+    from helmlog.video import VideoSession
 
     sync = datetime(2026, 2, 27, 18, 5, 0, tzinfo=UTC)
     vs = VideoSession(
@@ -929,7 +929,7 @@ def test_video_offset_at_30s_after_sync() -> None:
 
 def test_url_at_returns_none_outside_duration() -> None:
     """url_at returns None when the computed position is outside [0, duration_s]."""
-    from logger.video import VideoSession
+    from helmlog.video import VideoSession
 
     sync = datetime(2026, 2, 27, 18, 5, 0, tzinfo=UTC)
     vs = VideoSession(
@@ -948,7 +948,7 @@ def test_url_at_returns_none_outside_duration() -> None:
 
 def test_url_at_generates_correct_link() -> None:
     """url_at embeds floor(offset) as ?t= parameter."""
-    from logger.video import VideoSession
+    from helmlog.video import VideoSession
 
     sync = datetime(2026, 2, 27, 18, 0, 0, tzinfo=UTC)
     vs = VideoSession(

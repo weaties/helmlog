@@ -1,5 +1,5 @@
 {
-  "name": "j105-logger Dev Container",
+  "name": "helmlog Dev Container",
   "image": "mcr.microsoft.com/devcontainers/python:3.12-bullseye",
 
   "features": {
@@ -23,7 +23,7 @@
         "github.copilot"
       ],
       "settings": {
-        "python.defaultInterpreterPath": "/workspaces/j105-logger/.venv/bin/python",
+        "python.defaultInterpreterPath": "/workspaces/helmlog/.venv/bin/python",
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "charliermarsh.ruff",
         "[python]": {
@@ -37,7 +37,7 @@
   "forwardPorts": [],
 
   "remoteEnv": {
-    "UV_PROJECT_ENVIRONMENT": "/workspaces/j105-logger/.venv"
+    "UV_PROJECT_ENVIRONMENT": "/workspaces/helmlog/.venv"
   },
 
   "remoteUser": "vscode"

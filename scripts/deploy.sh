@@ -8,7 +8,7 @@
 #
 # provision-grafana.sh is called every time and is fully idempotent.
 #
-# All sudo commands used here are in /etc/sudoers.d/j105-logger-allowed
+# All sudo commands used here are in /etc/sudoers.d/helmlog-allowed
 # so they run without a password prompt (set up by setup.sh).
 #
 # If systemd service files or apt packages changed, also run:
@@ -164,9 +164,9 @@ fi
 $LOKI_CHANGED || $PROMTAIL_CHANGED || echo "    Loki + Promtail configs unchanged."
 
 echo "==> Updating nginx config..."
-if [[ -f /etc/nginx/sites-available/j105-logger ]]; then
-    if ! diff -q "$SCRIPT_DIR/nginx/j105-logger.conf" /etc/nginx/sites-available/j105-logger &>/dev/null; then
-        sudo cp "$SCRIPT_DIR/nginx/j105-logger.conf" /etc/nginx/sites-available/j105-logger
+if [[ -f /etc/nginx/sites-available/helmlog ]]; then
+    if ! diff -q "$SCRIPT_DIR/nginx/helmlog.conf" /etc/nginx/sites-available/helmlog &>/dev/null; then
+        sudo cp "$SCRIPT_DIR/nginx/helmlog.conf" /etc/nginx/sites-available/helmlog
         if sudo nginx -t 2>&1; then
             sudo systemctl reload nginx
             echo "    nginx config updated and reloaded."
@@ -183,9 +183,9 @@ fi
 echo "==> Fixing data directory permissions..."
 chmod -R g+w "$PROJECT_DIR/data" 2>/dev/null || true
 
-echo "==> Restarting j105-logger service..."
-sudo systemctl restart j105-logger
+echo "==> Restarting helmlog service..."
+sudo systemctl restart helmlog
 
 echo ""
 echo "==> Deploy complete."
-systemctl is-active j105-logger && echo "    j105-logger is running." || echo "    WARNING: j105-logger is NOT running."
+systemctl is-active helmlog && echo "    helmlog is running." || echo "    WARNING: helmlog is NOT running."

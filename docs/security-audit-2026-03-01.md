@@ -1,4 +1,4 @@
-# Security Audit — corvopi (J105 Logger Raspberry Pi)
+# Security Audit — corvopi (HelmLog Raspberry Pi)
 **Date:** 2026-03-01
 **Auditor:** Internal self-audit (Claude Code)
 **Scope:** All software running on `corvopi` (Raspberry Pi 5, Debian 13 Trixie, kernel 6.12.47)
@@ -22,19 +22,19 @@ remain problematic even after authentication is restored.
 
 | ID | Severity | Title | Issue |
 |----|----------|-------|-------|
-| F-01 | **CRITICAL** | Public internet exposure with `AUTH_DISABLED=true` | [#102](https://github.com/weaties/j105-logger/issues/102) |
-| F-02 | **HIGH** | `weaties` has passwordless sudo for all commands | [#103](https://github.com/weaties/j105-logger/issues/103) |
-| F-03 | **HIGH** | `.env` file is world-readable and contains live credentials | [#104](https://github.com/weaties/j105-logger/issues/104) |
-| F-04 | **HIGH** | WiFi PSK stored in plaintext in NetworkManager config | [#105](https://github.com/weaties/j105-logger/issues/105) |
-| F-05 | **HIGH** | Signal K has no authentication configured | [#106](https://github.com/weaties/j105-logger/issues/106) |
-| F-06 | **HIGH** | Grafana anonymous access enabled; publicly exposed | [#107](https://github.com/weaties/j105-logger/issues/107) |
-| F-07 | **MEDIUM** | InfluxDB / Grafana / Signal K bind to all interfaces | [#108](https://github.com/weaties/j105-logger/issues/108) |
-| F-08 | **MEDIUM** | `/notes/` photo endpoint always public (auth bypass) | [#109](https://github.com/weaties/j105-logger/issues/109) |
-| F-09 | **MEDIUM** | No rate limiting or brute-force protection | [#110](https://github.com/weaties/j105-logger/issues/110) |
-| F-10 | **MEDIUM** | SSH: X11 forwarding enabled, legacy RSA key accepted | [#111](https://github.com/weaties/j105-logger/issues/111) |
-| F-11 | **MEDIUM** | `~/.ssh/config` permissions too permissive | [#112](https://github.com/weaties/j105-logger/issues/112) |
-| F-12 | **MEDIUM** | No automatic security updates; kernel and libnss3 outdated | [#113](https://github.com/weaties/j105-logger/issues/113) |
-| F-13 | **MEDIUM** | Multiple unnecessary services running and exposed | [#114](https://github.com/weaties/j105-logger/issues/114) |
+| F-01 | **CRITICAL** | Public internet exposure with `AUTH_DISABLED=true` | [#102](https://github.com/weaties/helmlog/issues/102) |
+| F-02 | **HIGH** | `weaties` has passwordless sudo for all commands | [#103](https://github.com/weaties/helmlog/issues/103) |
+| F-03 | **HIGH** | `.env` file is world-readable and contains live credentials | [#104](https://github.com/weaties/helmlog/issues/104) |
+| F-04 | **HIGH** | WiFi PSK stored in plaintext in NetworkManager config | [#105](https://github.com/weaties/helmlog/issues/105) |
+| F-05 | **HIGH** | Signal K has no authentication configured | [#106](https://github.com/weaties/helmlog/issues/106) |
+| F-06 | **HIGH** | Grafana anonymous access enabled; publicly exposed | [#107](https://github.com/weaties/helmlog/issues/107) |
+| F-07 | **MEDIUM** | InfluxDB / Grafana / Signal K bind to all interfaces | [#108](https://github.com/weaties/helmlog/issues/108) |
+| F-08 | **MEDIUM** | `/notes/` photo endpoint always public (auth bypass) | [#109](https://github.com/weaties/helmlog/issues/109) |
+| F-09 | **MEDIUM** | No rate limiting or brute-force protection | [#110](https://github.com/weaties/helmlog/issues/110) |
+| F-10 | **MEDIUM** | SSH: X11 forwarding enabled, legacy RSA key accepted | [#111](https://github.com/weaties/helmlog/issues/111) |
+| F-11 | **MEDIUM** | `~/.ssh/config` permissions too permissive | [#112](https://github.com/weaties/helmlog/issues/112) |
+| F-12 | **MEDIUM** | No automatic security updates; kernel and libnss3 outdated | [#113](https://github.com/weaties/helmlog/issues/113) |
+| F-13 | **MEDIUM** | Multiple unnecessary services running and exposed | [#114](https://github.com/weaties/helmlog/issues/114) |
 | F-14 | **LOW** | LightDM auto-login: physical access = immediate desktop | — |
 | F-15 | **LOW** | NMEA TCP (10110) and SK WebSocket (8375) on all interfaces | — |
 | F-16 | **INFO** | Signal K server-side error exposed in HTTP response body | — |
@@ -43,7 +43,7 @@ remain problematic even after authentication is restored.
 
 ## Detailed Findings
 
-### F-01 — CRITICAL: Public internet exposure with AUTH_DISABLED=true · [#102](https://github.com/weaties/j105-logger/issues/102)
+### F-01 — CRITICAL: Public internet exposure with AUTH_DISABLED=true · [#102](https://github.com/weaties/helmlog/issues/102)
 
 **Evidence:**
 ```
@@ -53,7 +53,7 @@ PUBLIC_URL=https://corvopi.taileb1513.ts.net
 
 # Tailscale Funnel (confirmed active)
 https://corvopi.taileb1513.ts.net (Funnel on)
-|-- /         proxy http://127.0.0.1:3002   ← j105-logger (auth disabled)
+|-- /         proxy http://127.0.0.1:3002   ← helmlog (auth disabled)
 |-- /grafana/ proxy http://127.0.0.1:3001   ← Grafana (anon Viewer)
 |-- /signalk/ proxy http://127.0.0.1:3000   ← Signal K (no auth configured)
 
@@ -78,7 +78,7 @@ $ curl https://corvopi.taileb1513.ts.net/api/sessions?limit=1
 
 ---
 
-### F-02 — HIGH: Passwordless sudo for all commands · [#103](https://github.com/weaties/j105-logger/issues/103)
+### F-02 — HIGH: Passwordless sudo for all commands · [#103](https://github.com/weaties/helmlog/issues/103)
 
 **Evidence:**
 ```
@@ -87,7 +87,7 @@ weaties  ALL=(ALL) NOPASSWD: ALL   ← appears twice
 weaties  ALL=(ALL) NOPASSWD: /usr/bin/rsync
 ```
 
-**Impact:** Any process running as `weaties` (e.g., a compromised j105-logger, Signal K plugin,
+**Impact:** Any process running as `weaties` (e.g., a compromised helmlog, Signal K plugin,
 or SSH session obtained via stolen key) can gain full root without a password. This is a
 Raspberry Pi default that should be hardened in production.
 
@@ -96,34 +96,34 @@ Raspberry Pi default that should be hardened in production.
 - If passwordless sudo is required for specific operations (deploy script, CAN interface
   setup), scope it to those specific commands only:
   ```
-  weaties ALL=(root) NOPASSWD: /bin/systemctl restart j105-logger, /sbin/ip link set can0 up
+  weaties ALL=(root) NOPASSWD: /bin/systemctl restart helmlog, /sbin/ip link set can0 up
   ```
 
 ---
 
-### F-03 — HIGH: `.env` file is world-readable and contains live credentials · [#104](https://github.com/weaties/j105-logger/issues/104)
+### F-03 — HIGH: `.env` file is world-readable and contains live credentials · [#104](https://github.com/weaties/helmlog/issues/104)
 
 **Evidence:**
 ```
--rw-rw-r-- 1 weaties weaties 293 Mar  1 02:19 /home/weaties/j105-logger/.env
+-rw-rw-r-- 1 weaties weaties 293 Mar  1 02:19 /home/weaties/helmlog/.env
 
 # Contents include:
 INFLUX_TOKEN=95VqjUa38SeBwURyK1XsVB5_MfSq8dE3dDuWIW-2EC9zoiQuwhcTFFnPE_b4YZApejxsE1TaHktcfgRxXhYLXw==
 AUTH_DISABLED=true
 ```
 
-**Impact:** Any local user or process that can read `/home/weaties/j105-logger/.env` gets the
+**Impact:** Any local user or process that can read `/home/weaties/helmlog/.env` gets the
 InfluxDB admin token, which grants full read/write access to all time-series data.
 
 **Remediation:**
 ```bash
-chmod 600 /home/weaties/j105-logger/.env
+chmod 600 /home/weaties/helmlog/.env
 ```
 Consider rotating the InfluxDB token since it has been exposed.
 
 ---
 
-### F-04 — HIGH: WiFi PSK stored in plaintext · [#105](https://github.com/weaties/j105-logger/issues/105)
+### F-04 — HIGH: WiFi PSK stored in plaintext · [#105](https://github.com/weaties/helmlog/issues/105)
 
 **Evidence:**
 ```
@@ -145,7 +145,7 @@ pre-shared key. This is the hotspot password for the iPhone being used as a data
 
 ---
 
-### F-05 — HIGH: Signal K has no authentication configured · [#106](https://github.com/weaties/j105-logger/issues/106)
+### F-05 — HIGH: Signal K has no authentication configured · [#106](https://github.com/weaties/helmlog/issues/106)
 
 **Evidence:**
 ```bash
@@ -168,7 +168,7 @@ actor on the local network could potentially request time-setting via Signal K r
 
 ---
 
-### F-06 — HIGH: Grafana anonymous access enabled and publicly exposed · [#107](https://github.com/weaties/j105-logger/issues/107)
+### F-06 — HIGH: Grafana anonymous access enabled and publicly exposed · [#107](https://github.com/weaties/helmlog/issues/107)
 
 **Evidence:**
 ```ini
@@ -196,7 +196,7 @@ disable_login_form = true   ← cannot log in as admin via web UI
 
 ---
 
-### F-07 — MEDIUM: Data services bind to all network interfaces · [#108](https://github.com/weaties/j105-logger/issues/108)
+### F-07 — MEDIUM: Data services bind to all network interfaces · [#108](https://github.com/weaties/helmlog/issues/108)
 
 **Evidence:**
 ```
@@ -204,7 +204,7 @@ disable_login_form = true   ← cannot log in as admin via web UI
 *:8086    ← InfluxDB  (all interfaces — local WiFi reachable)
 *:3001    ← Grafana   (all interfaces — local WiFi reachable)
 *:3000    ← Signal K  (all interfaces — local WiFi + Tailscale Funnel)
-0.0.0.0:3002  ← j105-logger (all interfaces)
+0.0.0.0:3002  ← helmlog (all interfaces)
 *:10110   ← NMEA TCP  (all interfaces)
 *:8375    ← SK WebSocket (all interfaces)
 ```
@@ -223,7 +223,7 @@ has no auth.
 
 ---
 
-### F-08 — MEDIUM: `/notes/` photo endpoint always bypasses authentication · [#109](https://github.com/weaties/j105-logger/issues/109)
+### F-08 — MEDIUM: `/notes/` photo endpoint always bypasses authentication · [#109](https://github.com/weaties/helmlog/issues/109)
 
 **Evidence:**
 ```python
@@ -258,7 +258,7 @@ async def serve_note_photo(
 
 ---
 
-### F-09 — MEDIUM: No rate limiting or brute-force protection · [#110](https://github.com/weaties/j105-logger/issues/110)
+### F-09 — MEDIUM: No rate limiting or brute-force protection · [#110](https://github.com/weaties/helmlog/issues/110)
 
 **Evidence:**
 - `fail2ban` is not installed.
@@ -268,19 +268,19 @@ async def serve_note_photo(
 
 **Impact:** An attacker can make unlimited requests to:
 - The SSH port (brute-force key type attacks, protocol fingerprinting)
-- The j105 login endpoint (brute-force invite tokens)
+- The HelmLog login endpoint (brute-force invite tokens)
 - All API endpoints (scraping, DoS)
 
 **Remediation:**
 ```bash
 sudo apt install fail2ban
-# Configure jails for sshd and the j105-logger uvicorn log
+# Configure jails for sshd and the helmlog uvicorn log
 ```
 Add rate limiting to the login endpoint in `web.py` using `slowapi`.
 
 ---
 
-### F-10 — MEDIUM: SSH X11 forwarding enabled; legacy RSA key in authorized_keys · [#111](https://github.com/weaties/j105-logger/issues/111)
+### F-10 — MEDIUM: SSH X11 forwarding enabled; legacy RSA key in authorized_keys · [#111](https://github.com/weaties/helmlog/issues/111)
 
 **Evidence:**
 ```
@@ -310,7 +310,7 @@ Remove the RSA key from `authorized_keys` once the Ed25519 key on the MacBook Pr
 
 ---
 
-### F-11 — MEDIUM: `~/.ssh/config` has incorrect permissions · [#112](https://github.com/weaties/j105-logger/issues/112)
+### F-11 — MEDIUM: `~/.ssh/config` has incorrect permissions · [#112](https://github.com/weaties/helmlog/issues/112)
 
 **Evidence:**
 ```
@@ -326,7 +326,7 @@ chmod 600 ~/.ssh/config
 
 ---
 
-### F-12 — MEDIUM: No automatic security updates; kernel and security packages outdated · [#113](https://github.com/weaties/j105-logger/issues/113)
+### F-12 — MEDIUM: No automatic security updates; kernel and security packages outdated · [#113](https://github.com/weaties/helmlog/issues/113)
 
 **Evidence:**
 ```
@@ -350,7 +350,7 @@ sudo apt upgrade linux-image-rpi-2712 libnss3
 
 ---
 
-### F-13 — MEDIUM: Unnecessary services running and network-exposed · [#114](https://github.com/weaties/j105-logger/issues/114)
+### F-13 — MEDIUM: Unnecessary services running and network-exposed · [#114](https://github.com/weaties/helmlog/issues/114)
 
 **Evidence (running services not required for sailing logger function):**
 | Service | Port | Risk |
@@ -449,7 +449,7 @@ INFO      ██          F-16: SK stack traces in responses
 
 ## Immediate Action Items
 
-1. **Remove `AUTH_DISABLED=true` from `.env` → restart j105-logger** (F-01)
+1. **Remove `AUTH_DISABLED=true` from `.env` → restart helmlog** (F-01)
 2. **`chmod 600 ~/.env ~/.ssh/config`** (F-03, F-11)
 3. **Enable Signal K security** (F-05)
 4. **Set a Grafana admin password; re-enable login form; set secret_key** (F-06)

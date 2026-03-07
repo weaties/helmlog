@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from logger.races import RaceConfig, build_grafana_url, build_race_name, default_event_for_date
+from helmlog.races import RaceConfig, build_grafana_url, build_race_name, default_event_for_date
 
 if TYPE_CHECKING:
-    from logger.storage import Storage
+    from helmlog.storage import Storage
 
 
 # ---------------------------------------------------------------------------
@@ -22,7 +22,7 @@ def test_race_config_grafana_defaults() -> None:
     """RaceConfig has sensible defaults for Grafana and Signal K fields."""
     cfg = RaceConfig()
     assert cfg.grafana_port == "3001"
-    assert cfg.grafana_uid == "j105-sailing"
+    assert cfg.grafana_uid == "helmlog-sailing"
     assert cfg.sk_port == "3000"
     assert cfg.public_url == ""
 
@@ -81,7 +81,7 @@ def test_build_race_name_practice() -> None:
 # ---------------------------------------------------------------------------
 
 _BASE = "http://corvopi:3001"
-_UID = "j105-sailing"
+_UID = "helmlog-sailing"
 _START_MS = 1700000000000
 _END_MS = 1700003600000
 

@@ -1,4 +1,4 @@
-# J105 Logger — Crew Operations Guide
+# HelmLog — Crew Operations Guide
 
 _Last reviewed: 2026-03-01 · App version: schema v16_
 
@@ -9,7 +9,7 @@ No technical knowledge required. Print double-sided, laminate, keep in the nav s
 
 ## What the system does
 
-The J105 Logger is an always-on Raspberry Pi that collects data from the boat's
+The HelmLog is an always-on Raspberry Pi that collects data from the boat's
 B&G instrument system (via NMEA 2000) and gives the crew tools to:
 
 - **Mark races** — one tap to start and stop race sessions; every instrument
@@ -174,11 +174,11 @@ Each session card has buttons for:
 **"The page won't load"**
 → Check you're on the Tailscale network. Try refreshing.
 → If it still won't load, the Pi may have restarted — ask the navigator to check
-  `sudo systemctl status j105-logger`.
+  `sudo systemctl status helmlog`.
 
 **"Instrument numbers are grey or frozen"**
 → The Signal K feed has stalled. Ask the navigator:
-  `sudo systemctl status signalk j105-logger`
+  `sudo systemctl status signalk helmlog`
 
 **"The warning banner says Disk XX% full"**
 → Disk is above 85 %. Old WAV files are the biggest user of space.
@@ -189,7 +189,7 @@ Each session card has buttons for:
 
 **"↓ CSV is empty or very small"**
 → The logger service may not have been running when the race was active.
-  Check `j105-logger status` to confirm rows were written.
+  Check `helmlog status` to confirm rows were written.
 
 **"The START RACE button is missing or greyed out"**
 → A race or debrief is already active. Tap the **■ END** button to close it first.

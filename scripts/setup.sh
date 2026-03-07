@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup.sh — Full automated setup for j105-logger + Signal K + InfluxDB + Grafana.
+# setup.sh — Full automated setup for helmlog + Signal K + InfluxDB + Grafana.
 #
 # Usage:
 #   ./scripts/setup.sh
@@ -15,14 +15,14 @@
 #   c)   Signal K Server + plugins
 #   d)   InfluxDB 2.7.11 (pinned; loopback-only binding)
 #   e)   Grafana OSS (loopback-only; login required; no anonymous access)
-#   e.1) j105logger dedicated service account
+#   e.1) helmlog dedicated service account
 #   f)   Signal K → InfluxDB plugin config
 #   g)   uv + Python dependencies
 #   g.1) Signal K authentication (bcrypt admin password)
 #   h)   .env file (chmod 600) and data directories
 #   i)   netdev group membership
 #   j)   CAN interface systemd service
-#   k)   j105-logger systemd service (runs as j105logger)
+#   k)   helmlog systemd service (runs as helmlog)
 #   k.1) Loki + Promtail (centralized log management)
 #   k.2) nginx reverse proxy (single-port access to all services)
 #   l)   Scoped NOPASSWD sudo (replaces blanket Pi OS default)
@@ -272,7 +272,7 @@ done
 influx setup \
     --username admin \
     --password changeme123 \
-    --org j105 \
+    --org helmlog \
     --bucket signalk \
     --retention 0 \
     --force 2>/dev/null || true
@@ -316,7 +316,7 @@ sudo apt-get update -qq && sudo apt-get install -y grafana
 # /etc/grafana/grafana.ini is root:grafana 640 — changing it risks a permission
 # problem if ownership shifts. Using a separate file avoids that entirely.
 sudo tee /etc/grafana/grafana-custom.ini > /dev/null << 'EOF'
-# j105-logger custom Grafana config
+# helmlog custom Grafana config
 # Auth and network settings are set via systemd Environment= in port.conf below.
 # This file is intentionally minimal — full reference: /usr/share/grafana/conf/defaults.ini
 [paths]
@@ -360,7 +360,7 @@ datasources:
     url: http://127.0.0.1:8086
     jsonData:
       version: Flux
-      organization: j105
+      organization: helmlog
       defaultBucket: signalk
       httpMode: POST
     secureJsonData:
@@ -372,28 +372,28 @@ info "Grafana installed on port 3001 (loopback-only, login required)."
 info "Default Grafana admin credentials: admin / changeme123 — change after first login."
 
 # ---------------------------------------------------------------------------
-# e.1) j105logger dedicated service account
+# e.1) helmlog dedicated service account
 #      The logger runs as this system account rather than as the Pi user.
 #      Only data/ is writable by this account; the rest of the project is read-only.
 # ---------------------------------------------------------------------------
 
-step "Creating j105logger dedicated service account..."
-if ! id j105logger &>/dev/null; then
+step "Creating helmlog dedicated service account..."
+if ! id helmlog &>/dev/null; then
     sudo useradd --system \
         --shell /usr/sbin/nologin \
         --no-create-home \
-        --comment "j105-logger service account" \
-        j105logger
-    info "Created j105logger system account."
+        --comment "helmlog service account" \
+        helmlog
+    info "Created helmlog system account."
 else
-    info "j105logger already exists — skipping useradd."
+    info "helmlog already exists — skipping useradd."
 fi
-sudo usermod -aG "audio,netdev,${CURRENT_USER}" j105logger
+sudo usermod -aG "audio,netdev,${CURRENT_USER}" helmlog
 
 # uv cache directory (service account has no home dir, so uv can't write ~/.cache/uv)
-sudo mkdir -p /var/cache/j105-logger
-sudo chown j105logger:j105logger /var/cache/j105-logger
-info "uv cache: /var/cache/j105-logger"
+sudo mkdir -p /var/cache/helmlog
+sudo chown helmlog:helmlog /var/cache/helmlog
+info "uv cache: /var/cache/helmlog"
 
 # Minimal traversal for $HOME — the full uv/Python chmod is done after
 # "uv sync" (step g) once the directories actually exist.
@@ -412,7 +412,7 @@ cat > "$HOME/.signalk/plugin-config-data/signalk-to-influxdb2.json" << EOF
       {
         "url": "http://127.0.0.1:8086",
         "token": "${INFLUX_TOKEN}",
-        "org": "j105",
+        "org": "helmlog",
         "bucket": "signalk",
         "onlySelf": true
       }
@@ -446,11 +446,11 @@ step "Syncing Python dependencies..."
 "$UV_BIN" sync --project "$PROJECT_DIR"
 
 # Now that uv has installed Python and created .venv, make the entire symlink
-# chain traversable so j105logger can reach .venv/bin/python3 →
+# chain traversable so helmlog can reach .venv/bin/python3 →
 # ~/.local/share/uv/python/cpython-*/bin/python3.12.
 # This MUST run after "uv sync" — on a fresh install the directories don't
 # exist until uv creates them, so doing it earlier fails silently.
-info "Setting traversal permissions for j105logger..."
+info "Setting traversal permissions for helmlog..."
 chmod 711 "$HOME"
 for d in "$HOME/.local" \
          "$HOME/.local/bin" \
@@ -463,15 +463,15 @@ done
 find "$HOME/.local/share/uv/python" -mindepth 1 -maxdepth 2 -type d \
     -exec chmod 711 {} + 2>/dev/null || true
 
-# Install j105-logger wrapper script so the command works directly in the shell
+# Install helmlog wrapper script so the command works directly in the shell
 # (uv console scripts live in the venv, not in ~/.local/bin)
 mkdir -p "$HOME/.local/bin"
-cat > "$HOME/.local/bin/j105-logger" << WRAPPER
+cat > "$HOME/.local/bin/helmlog" << WRAPPER
 #!/usr/bin/env bash
-exec "${UV_BIN}" run --project "${PROJECT_DIR}" j105-logger "\$@"
+exec "${UV_BIN}" run --project "${PROJECT_DIR}" helmlog "\$@"
 WRAPPER
-chmod +x "$HOME/.local/bin/j105-logger"
-info "j105-logger wrapper installed to ~/.local/bin/j105-logger"
+chmod +x "$HOME/.local/bin/helmlog"
+info "helmlog wrapper installed to ~/.local/bin/helmlog"
 
 # Ensure ~/.local/bin is in PATH permanently
 if ! grep -q 'local/bin' "$HOME/.bashrc" 2>/dev/null; then
@@ -545,7 +545,7 @@ if [[ -n "$INFLUX_TOKEN" && "$INFLUX_TOKEN" != "REPLACE_WITH_INFLUX_TOKEN" ]]; t
     if grep -q '^# INFLUX_URL=' "$ENV_FILE" 2>/dev/null; then
         sed -i "s|^# INFLUX_URL=.*|INFLUX_URL=http://localhost:8086|" "$ENV_FILE"
         sed -i "s|^# INFLUX_TOKEN=.*|INFLUX_TOKEN=${INFLUX_TOKEN}|" "$ENV_FILE"
-        sed -i "s|^# INFLUX_ORG=.*|INFLUX_ORG=j105|" "$ENV_FILE"
+        sed -i "s|^# INFLUX_ORG=.*|INFLUX_ORG=helmlog|" "$ENV_FILE"
         sed -i "s|^# INFLUX_BUCKET=.*|INFLUX_BUCKET=signalk|" "$ENV_FILE"
         info "InfluxDB connection configured in .env"
     fi
@@ -572,14 +572,14 @@ info "$PROJECT_DIR/data (SQLite DB)"
 info "$PROJECT_DIR/data/audio (WAV recordings)"
 info "$PROJECT_DIR/data/notes (photo notes)"
 
-# Shared ownership: deploy user owns, deploy user's group is shared with j105logger.
+# Shared ownership: deploy user owns, deploy user's group is shared with helmlog.
 # setgid ensures new files/dirs inherit the group so both users can always read/write.
 sudo chown -R "$CURRENT_USER:$CURRENT_USER" "$PROJECT_DIR/data"
 sudo chmod -R g+ws "$PROJECT_DIR/data"
-# Default POSIX ACL: new files created in data/ (e.g. by `j105-logger add-user`)
+# Default POSIX ACL: new files created in data/ (e.g. by `helmlog add-user`)
 # automatically get group rw regardless of the creating user's umask.
 sudo setfacl -R -d -m g::rw "$PROJECT_DIR/data"
-info "data/ owned by $CURRENT_USER, group-writable + default ACL (j105logger is a member)."
+info "data/ owned by $CURRENT_USER, group-writable + default ACL (helmlog is a member)."
 
 # ---------------------------------------------------------------------------
 # i) netdev group (allows non-root SocketCAN access)
@@ -627,27 +627,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# k) j105-logger systemd service
-#    Runs as the dedicated j105logger account (not as the Pi user).
+# k) helmlog systemd service
+#    Runs as the dedicated helmlog account (not as the Pi user).
 #    --no-sync: use the existing venv without trying to modify it (weaties owns it).
-#    UV_CACHE_DIR: j105logger has no home dir, so point uv cache to /var/cache.
+#    UV_CACHE_DIR: helmlog has no home dir, so point uv cache to /var/cache.
 # ---------------------------------------------------------------------------
 
-step "Installing j105-logger service..."
-sudo tee /etc/systemd/system/j105-logger.service > /dev/null << EOF
+step "Installing helmlog service..."
+sudo tee /etc/systemd/system/helmlog.service > /dev/null << EOF
 [Unit]
-Description=J105 NMEA 2000 Data Logger
+Description=HelmLog sailing data platform
 After=signalk.service
 Wants=signalk.service
 
 [Service]
-User=j105logger
-Group=j105logger
+User=helmlog
+Group=helmlog
 WorkingDirectory=${PROJECT_DIR}
 EnvironmentFile=${ENV_FILE}
-Environment=UV_CACHE_DIR=/var/cache/j105-logger
-Environment=HOME=/var/cache/j105-logger
-ExecStart=${UV_BIN} run --no-sync --project ${PROJECT_DIR} j105-logger run
+Environment=UV_CACHE_DIR=/var/cache/helmlog
+Environment=HOME=/var/cache/helmlog
+ExecStart=${UV_BIN} run --no-sync --project ${PROJECT_DIR} helmlog run
 Restart=on-failure
 RestartSec=5
 SupplementaryGroups=netdev audio
@@ -657,10 +657,10 @@ UMask=0002
 WantedBy=multi-user.target
 EOF
 sudo systemctl daemon-reload
-sudo systemctl enable j105-logger.service
+sudo systemctl enable helmlog.service
 
 if sudo systemctl is-active --quiet signalk.service 2>/dev/null; then
-    sudo systemctl restart j105-logger.service
+    sudo systemctl restart helmlog.service
     info "Logger service started."
 else
     info "Logger service enabled (will start once Signal K is running)."
@@ -713,7 +713,7 @@ info "Loki (port 3100) + Promtail installed and running."
 
 # ---------------------------------------------------------------------------
 # k.2) nginx reverse proxy — single-port access to all services
-#      Proxies j105-logger (/), Grafana (/grafana/), Signal K (/signalk/)
+#      Proxies helmlog (/), Grafana (/grafana/), Signal K (/signalk/)
 #      through port 80 so crew only needs one URL.
 # ---------------------------------------------------------------------------
 
@@ -721,8 +721,8 @@ step "Installing nginx reverse proxy..."
 sudo apt-get install -y nginx
 
 # Deploy our site config
-sudo cp "$SCRIPT_DIR/nginx/j105-logger.conf" /etc/nginx/sites-available/j105-logger
-sudo ln -sf /etc/nginx/sites-available/j105-logger /etc/nginx/sites-enabled/j105-logger
+sudo cp "$SCRIPT_DIR/nginx/helmlog.conf" /etc/nginx/sites-available/helmlog
+sudo ln -sf /etc/nginx/sites-available/helmlog /etc/nginx/sites-enabled/helmlog
 
 # Remove the default site (it conflicts on port 80)
 sudo rm -f /etc/nginx/sites-enabled/default
@@ -732,38 +732,38 @@ if sudo nginx -t 2>&1; then
     sudo systemctl enable --now nginx
     sudo systemctl reload nginx
     info "nginx reverse proxy configured on port 80."
-    info "  /           → j105-logger (port 3002)"
+    info "  /           → helmlog (port 3002)"
     info "  /grafana/   → Grafana (port 3001)"
     info "  /signalk/   → Signal K (port 3000)"
 else
-    warn "nginx config test failed — check /etc/nginx/sites-available/j105-logger"
+    warn "nginx config test failed — check /etc/nginx/sites-available/helmlog"
 fi
 
 # ---------------------------------------------------------------------------
 # l) Scoped NOPASSWD sudo
-#      Creates /etc/sudoers.d/j105-logger-allowed with the specific commands
+#      Creates /etc/sudoers.d/helmlog-allowed with the specific commands
 #      needed for day-to-day operations (deploy.sh, service management).
 #      Then removes the blanket NOPASSWD from the Pi OS default sudoers files.
 #      This is done last so all earlier sudo commands in this script succeed.
 # ---------------------------------------------------------------------------
 
 step "Configuring scoped sudo permissions..."
-SUDOERS_FILE="/etc/sudoers.d/j105-logger-allowed"
+SUDOERS_FILE="/etc/sudoers.d/helmlog-allowed"
 sudo tee "$SUDOERS_FILE" > /dev/null << EOF
-# j105-logger scoped sudo permissions — generated by setup.sh
+# helmlog scoped sudo permissions — generated by setup.sh
 # Only the commands listed here run without a password prompt.
 # For full sudo access (package installs, system config), type your password.
 
 # Service management — used by deploy.sh and daily operations
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl daemon-reload
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start j105-logger
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop j105-logger
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart j105-logger
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status j105-logger
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start j105-logger.service
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop j105-logger.service
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart j105-logger.service
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status j105-logger.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start helmlog
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop helmlog
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart helmlog
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status helmlog
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start helmlog.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop helmlog.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart helmlog.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status helmlog.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start signalk
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop signalk
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart signalk
@@ -804,8 +804,8 @@ ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start promtail.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop promtail.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart promtail.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status promtail.service
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active j105-logger
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active j105-logger.service
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active helmlog
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active helmlog.service
 
 # Log access
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/journalctl
@@ -824,7 +824,7 @@ ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status nginx
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status nginx.service
-${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/cp ${PROJECT_DIR}/scripts/nginx/j105-logger.conf /etc/nginx/sites-available/j105-logger
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/cp ${PROJECT_DIR}/scripts/nginx/helmlog.conf /etc/nginx/sites-available/helmlog
 EOF
 sudo chmod 440 "$SUDOERS_FILE"
 
@@ -856,7 +856,7 @@ echo -e "${GREEN}  Setup complete. Reboot, then verify:${NC}"
 echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
 echo ""
 echo "  All-in-one:  http://${PI_HOSTNAME}/        (nginx reverse proxy — port 80)"
-echo "    /           → j105-logger (race marker, history, exports)"
+echo "    /           → helmlog (race marker, history, exports)"
 echo "    /grafana/   → Grafana dashboards (admin / changeme123 — change after first login)"
 echo "    /signalk/   → Signal K data explorer"
 echo ""
@@ -880,7 +880,7 @@ echo ""
 echo -e "${YELLOW}  NEXT STEPS:${NC}"
 echo ""
 echo "  1. Create your admin user for the race-marker web app:"
-echo "       j105-logger add-user --email you@example.com --name 'Your Name' --role admin"
+echo "       helmlog add-user --email you@example.com --name 'Your Name' --role admin"
 echo ""
 echo "  2. Change the Grafana password:"
 echo "       Open http://${PI_HOSTNAME}:3001 and change the admin password from 'changeme123'."
@@ -892,13 +892,13 @@ echo "  4. Reboot:"
 echo "       sudo reboot"
 echo ""
 echo "  After reboot, check service status:"
-echo "    sudo systemctl status can-interface signalk influxd grafana-server loki promtail j105-logger"
+echo "    sudo systemctl status can-interface signalk influxd grafana-server loki promtail helmlog"
 echo ""
 echo "  View logger output:"
-echo "    sudo journalctl -fu j105-logger"
+echo "    sudo journalctl -fu helmlog"
 echo ""
 echo "  To list available audio input devices (e.g. Gordik USB receiver):"
-echo "    j105-logger list-devices"
+echo "    helmlog list-devices"
 echo "  Then set AUDIO_DEVICE in .env to match the device name or index."
 echo ""
 echo "  To update after a git pull:"

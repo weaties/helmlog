@@ -15,11 +15,11 @@ and how to restore from it if the card fails.
 
 | Source | Destination in snapshot |
 |---|---|
-| `~/j105-logger/data/` — SQLite DB, WAV audio, photo notes, exports | `<snapshot>/data/` |
+| `~/helmlog/data/` — SQLite DB, WAV audio, photo notes, exports | `<snapshot>/data/` |
 | InfluxDB (system health metrics) | `<snapshot>/influxdb/` |
 | Grafana (dashboards, datasources) | `<snapshot>/grafana/` |
 
-Snapshots land in `~/backups/j105-logger/<timestamp>/`.
+Snapshots land in `~/backups/helmlog/<timestamp>/`.
 The 10 most recent are kept; older ones are deleted automatically.
 
 ---
@@ -57,8 +57,8 @@ From the project root:
 
 This:
 - Checks SSH connectivity to the Pi
-- Creates `~/backups/j105-logger/`
-- Installs `~/Library/LaunchAgents/com.j105.backup.plist`
+- Creates `~/backups/helmlog/`
+- Installs `~/Library/LaunchAgents/com.helmlog.backup.plist`
 - Schedules the backup to run every day at **03:00 local time**
 
 ### 4. Run a test backup now
@@ -70,7 +70,7 @@ This:
 Verify the snapshot contains:
 
 ```
-~/backups/j105-logger/20260228T030000Z/
+~/backups/helmlog/20260228T030000Z/
   data/
     logger.db
     audio/
@@ -84,22 +84,22 @@ Verify the snapshot contains:
 
 ## Monitoring backups
 
-Logs are written to `~/backups/j105-logger/backup.log`:
+Logs are written to `~/backups/helmlog/backup.log`:
 
 ```bash
-tail -f ~/backups/j105-logger/backup.log
+tail -f ~/backups/helmlog/backup.log
 ```
 
 To check that the launchd agent is active:
 
 ```bash
-launchctl list com.j105.backup
+launchctl list com.helmlog.backup
 ```
 
 To trigger an immediate run:
 
 ```bash
-launchctl start com.j105.backup
+launchctl start com.helmlog.backup
 ```
 
 ---
@@ -109,22 +109,22 @@ launchctl start com.j105.backup
 Pick the snapshot you want:
 
 ```bash
-ls ~/backups/j105-logger/
+ls ~/backups/helmlog/
 # e.g. 20260228T030000Z
-SNAP=~/backups/j105-logger/20260228T030000Z
+SNAP=~/backups/helmlog/20260228T030000Z
 ```
 
 ### SQLite
 
 ```bash
 # Stop the logger service on the Pi first
-ssh $PI "sudo systemctl stop j105-logger"
+ssh $PI "sudo systemctl stop helmlog"
 
 # Copy the DB back
-rsync -az "$SNAP/data/" $PI:~/j105-logger/data/
+rsync -az "$SNAP/data/" $PI:~/helmlog/data/
 
 # Restart
-ssh $PI "sudo systemctl start j105-logger"
+ssh $PI "sudo systemctl start helmlog"
 ```
 
 ### InfluxDB
@@ -162,7 +162,7 @@ All settings are overridable via environment variables:
 | Variable | Default | Description |
 |---|---|---|
 | `PI` | `weaties@corvopi` | SSH target for the Pi |
-| `BACKUP_DEST` | `~/backups/j105-logger` | Local snapshot root |
+| `BACKUP_DEST` | `~/backups/helmlog` | Local snapshot root |
 | `KEEP_SNAPSHOTS` | `10` | Number of snapshots to retain |
 | `INFLUX_TOKEN_FILE` | `~/influx-token.txt` | Path on the Pi to the InfluxDB token |
 
@@ -176,12 +176,12 @@ KEEP_SNAPSHOTS=30 ./scripts/backup.sh
 
 ## Changing the backup schedule
 
-Edit `~/Library/LaunchAgents/com.j105.backup.plist` and change the
+Edit `~/Library/LaunchAgents/com.helmlog.backup.plist` and change the
 `StartCalendarInterval` hour/minute, then reload:
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.j105.backup.plist
-launchctl load   ~/Library/LaunchAgents/com.j105.backup.plist
+launchctl unload ~/Library/LaunchAgents/com.helmlog.backup.plist
+launchctl load   ~/Library/LaunchAgents/com.helmlog.backup.plist
 ```
 
 ---
@@ -189,6 +189,6 @@ launchctl load   ~/Library/LaunchAgents/com.j105.backup.plist
 ## Disabling the backup
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.j105.backup.plist
-rm ~/Library/LaunchAgents/com.j105.backup.plist
+launchctl unload ~/Library/LaunchAgents/com.helmlog.backup.plist
+rm ~/Library/LaunchAgents/com.helmlog.backup.plist
 ```

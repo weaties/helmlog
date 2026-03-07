@@ -10,7 +10,7 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
-from logger.insta360 import (
+from helmlog.insta360 import (
     InstaRecording,
     discover_recordings,
     match_sessions,

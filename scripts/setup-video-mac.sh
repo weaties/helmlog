@@ -6,26 +6,26 @@
 #
 # What it does:
 #   1. Checks Docker, exiftool, and uv are available
-#   2. Creates ~/Videos/j105/ output directory
+#   2. Creates ~/Videos/helmlog/ output directory
 #   3. Verifies YouTube OAuth2 credentials exist (or prompts setup)
-#   4. Copies com.j105.video.plist → ~/Library/LaunchAgents/ (with real paths)
+#   4. Copies com.helmlog.video.plist → ~/Library/LaunchAgents/ (with real paths)
 #   5. Loads (enables) the agent — triggers on SD card mount
 #
 # To uninstall:
-#   launchctl unload ~/Library/LaunchAgents/com.j105.video.plist
-#   rm ~/Library/LaunchAgents/com.j105.video.plist
+#   launchctl unload ~/Library/LaunchAgents/com.helmlog.video.plist
+#   rm ~/Library/LaunchAgents/com.helmlog.video.plist
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROCESS_SCRIPT="$SCRIPT_DIR/process-videos.sh"
-PLIST_SRC="$SCRIPT_DIR/com.j105.video.plist"
-PLIST_DEST="$HOME/Library/LaunchAgents/com.j105.video.plist"
-OUTPUT_DIR="${VIDEO_OUTPUT_DIR:-$HOME/Videos/j105}"
+PLIST_SRC="$SCRIPT_DIR/com.helmlog.video.plist"
+PLIST_DEST="$HOME/Library/LaunchAgents/com.helmlog.video.plist"
+OUTPUT_DIR="${VIDEO_OUTPUT_DIR:-$HOME/Videos/helmlog}"
 LOG_FILE="$OUTPUT_DIR/video-pipeline.log"
 
-SECRETS="${YOUTUBE_CLIENT_SECRETS:-$HOME/.j105-youtube-client-secrets.json}"
-TOKEN="${YOUTUBE_TOKEN_FILE:-$HOME/.j105-youtube-token.json}"
+SECRETS="${YOUTUBE_CLIENT_SECRETS:-$HOME/.helmlog-youtube-client-secrets.json}"
+TOKEN="${YOUTUBE_TOKEN_FILE:-$HOME/.helmlog-youtube-token.json}"
 
 log() { echo "==> $*"; }
 warn() { echo "    WARNING: $*" >&2; }
@@ -156,4 +156,4 @@ echo "Run manually:"
 echo "  $PROCESS_SCRIPT"
 echo ""
 echo "Or trigger via launchd:"
-echo "  launchctl start com.j105.video"
+echo "  launchctl start com.helmlog.video"

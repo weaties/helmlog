@@ -15,8 +15,8 @@ PROVISION_SRC="$SCRIPT_DIR/grafana/dashboards.yaml"
 DATASOURCE_SRC="$SCRIPT_DIR/grafana/datasources.yaml"
 
 DASHBOARD_DEST_DIR="/var/lib/grafana/dashboards"
-PROVISION_DEST="/etc/grafana/provisioning/dashboards/j105-logger.yaml"
-DATASOURCE_DEST="/etc/grafana/provisioning/datasources/j105-logger.yaml"
+PROVISION_DEST="/etc/grafana/provisioning/dashboards/helmlog.yaml"
+DATASOURCE_DEST="/etc/grafana/provisioning/datasources/helmlog.yaml"
 
 echo "==> Copying dashboard JSONs"
 sudo rsync --mkpath "$DASHBOARD_SRC" "$DASHBOARD_DEST_DIR/sailing-data.json"
@@ -48,6 +48,6 @@ sudo systemctl restart grafana-server
 
 echo ""
 echo "Done."
-echo "  Sailing data:  http://$(hostname):3001/d/j105-sailing/sailing-data"
+echo "  Sailing data:  http://$(hostname):3001/d/helmlog-sailing/sailing-data"
 echo "  Pi health:     http://$(hostname):3001/d/pi-health/pi-health"
 echo "  Service logs:  http://$(hostname):3001/d/service-logs/service-logs"

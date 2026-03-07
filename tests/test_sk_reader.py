@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from logger.nmea2000 import (
+from helmlog.nmea2000 import (
     COGSOGRecord,
     DepthRecord,
     EnvironmentalRecord,
@@ -21,7 +21,7 @@ from logger.nmea2000 import (
     SpeedRecord,
     WindRecord,
 )
-from logger.sk_reader import SK_SOURCE_ADDR, SKReader, SKReaderConfig, process_delta
+from helmlog.sk_reader import SK_SOURCE_ADDR, SKReader, SKReaderConfig, process_delta
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -173,7 +173,7 @@ class TestSKReaderDelta:
 
     def test_malformed_numeric_value_warns_no_record(self) -> None:
         buf: dict[str, float] = {}
-        with patch("logger.sk_reader.logger") as mock_log:
+        with patch("helmlog.sk_reader.logger") as mock_log:
             records = process_delta(_delta("navigation.headingTrue", "not-a-number"), buf)
         assert records == []
         mock_log.warning.assert_called_once()
@@ -181,7 +181,7 @@ class TestSKReaderDelta:
 
     def test_malformed_json_warns_no_record(self) -> None:
         buf: dict[str, float] = {}
-        with patch("logger.sk_reader.logger") as mock_log:
+        with patch("helmlog.sk_reader.logger") as mock_log:
             records = process_delta("{bad json}", buf)
         assert records == []
         mock_log.warning.assert_called_once()
@@ -189,7 +189,7 @@ class TestSKReaderDelta:
 
     def test_bad_position_value_warns(self) -> None:
         buf: dict[str, float] = {}
-        with patch("logger.sk_reader.logger") as mock_log:
+        with patch("helmlog.sk_reader.logger") as mock_log:
             records = process_delta(_delta("navigation.position", "not-a-dict"), buf)
         assert records == []
         mock_log.warning.assert_called_once()
@@ -260,7 +260,7 @@ class TestSKReaderReconnect:
                 await asyncio.sleep(3600)  # block until cancelled
                 yield ""  # never reached
 
-        with patch("logger.sk_reader._ws_connect", FakeWS):
+        with patch("helmlog.sk_reader._ws_connect", FakeWS):
             reader = SKReader(SKReaderConfig())
             task = asyncio.create_task(self._collect_one(reader))
             await asyncio.sleep(0)  # let task start
@@ -299,7 +299,7 @@ class TestSKReaderReconnect:
                     await asyncio.sleep(3600)
                     yield ""  # never reached
 
-        with patch("logger.sk_reader._ws_connect", lambda _uri: FakeWS()):
+        with patch("helmlog.sk_reader._ws_connect", lambda _uri: FakeWS()):
             reader = SKReader(SKReaderConfig())
 
             async def collect() -> list[object]:
@@ -339,7 +339,7 @@ class TestSKReaderReconnect:
             async def _gen(self) -> AsyncGenerator[str, None]:
                 yield ""  # never reached
 
-        with patch("logger.sk_reader._ws_connect", lambda _uri: FailWS()):
+        with patch("helmlog.sk_reader._ws_connect", lambda _uri: FailWS()):
             reader = SKReader(SKReaderConfig(reconnect_delay_s=0.05))
             task = asyncio.create_task(self._collect_one(reader))
             await asyncio.sleep(0.15)  # let at least 2 retries fire

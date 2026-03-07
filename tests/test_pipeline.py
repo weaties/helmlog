@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from logger.insta360 import InstaRecording
-from logger.pipeline import PipelineConfig, process_recording
-from logger.youtube import UploadResult
+from helmlog.insta360 import InstaRecording
+from helmlog.pipeline import PipelineConfig, process_recording
+from helmlog.youtube import UploadResult
 
 
 def _make_sessions() -> list[dict[str, Any]]:
@@ -69,8 +69,8 @@ class TestProcessRecording:
         mock_link = AsyncMock(return_value=httpx.Response(201))
 
         with (
-            patch("logger.pipeline.upload_video", mock_upload),
-            patch("logger.pipeline._link_video_on_pi", mock_link),
+            patch("helmlog.pipeline.upload_video", mock_upload),
+            patch("helmlog.pipeline._link_video_on_pi", mock_link),
         ):
             result = await process_recording(
                 rec=rec,
@@ -97,7 +97,7 @@ class TestProcessRecording:
 
         mock_upload = AsyncMock(return_value=_upload_result())
 
-        with patch("logger.pipeline.upload_video", mock_upload):
+        with patch("helmlog.pipeline.upload_video", mock_upload):
             result = await process_recording(
                 rec=rec,
                 video_path="/tmp/test.mp4",
@@ -122,8 +122,8 @@ class TestProcessRecording:
         mock_link = AsyncMock()
 
         with (
-            patch("logger.pipeline.upload_video", mock_upload),
-            patch("logger.pipeline._link_video_on_pi", mock_link),
+            patch("helmlog.pipeline.upload_video", mock_upload),
+            patch("helmlog.pipeline._link_video_on_pi", mock_link),
         ):
             result = await process_recording(
                 rec=rec,
@@ -148,8 +148,8 @@ class TestProcessRecording:
         mock_link = AsyncMock(return_value=httpx.Response(401))
 
         with (
-            patch("logger.pipeline.upload_video", mock_upload),
-            patch("logger.pipeline._link_video_on_pi", mock_link),
+            patch("helmlog.pipeline.upload_video", mock_upload),
+            patch("helmlog.pipeline._link_video_on_pi", mock_link),
         ):
             result = await process_recording(
                 rec=rec,
@@ -170,7 +170,7 @@ class TestProcessRecording:
 
         mock_upload = AsyncMock(side_effect=RuntimeError("quota exceeded"))
 
-        with patch("logger.pipeline.upload_video", mock_upload):
+        with patch("helmlog.pipeline.upload_video", mock_upload):
             result = await process_recording(
                 rec=rec,
                 video_path="/tmp/test.mp4",
@@ -187,7 +187,7 @@ class TestFetchSessions:
 
     @pytest.mark.asyncio
     async def test_fetch_success(self) -> None:
-        from logger.pipeline import fetch_sessions_from_pi
+        from helmlog.pipeline import fetch_sessions_from_pi
 
         mock_response = httpx.Response(
             200,
@@ -208,7 +208,7 @@ class TestFetchSessions:
     @pytest.mark.asyncio
     async def test_fetch_returns_list_format(self) -> None:
         """Handle APIs that return a plain list instead of {sessions: [...]}."""
-        from logger.pipeline import fetch_sessions_from_pi
+        from helmlog.pipeline import fetch_sessions_from_pi
 
         mock_response = httpx.Response(
             200,
@@ -227,7 +227,7 @@ class TestFetchSessions:
 
     @pytest.mark.asyncio
     async def test_fetch_failure_returns_empty(self) -> None:
-        from logger.pipeline import fetch_sessions_from_pi
+        from helmlog.pipeline import fetch_sessions_from_pi
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
@@ -241,7 +241,7 @@ class TestFetchSessions:
 
     @pytest.mark.asyncio
     async def test_fetch_non_200_returns_empty(self) -> None:
-        from logger.pipeline import fetch_sessions_from_pi
+        from helmlog.pipeline import fetch_sessions_from_pi
 
         mock_response = httpx.Response(
             500,
@@ -263,7 +263,7 @@ class TestLinkVideoOnPi:
 
     @pytest.mark.asyncio
     async def test_link_success(self) -> None:
-        from logger.pipeline import _link_video_on_pi
+        from helmlog.pipeline import _link_video_on_pi
 
         mock_response = httpx.Response(
             201,
@@ -291,7 +291,7 @@ class TestLinkVideoOnPi:
 
     @pytest.mark.asyncio
     async def test_link_network_error_raises(self) -> None:
-        from logger.pipeline import _link_video_on_pi
+        from helmlog.pipeline import _link_video_on_pi
 
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
