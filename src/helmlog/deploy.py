@@ -15,14 +15,17 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from helmlog.storage import Storage
 
 
 @dataclass
 class DeployConfig:
-    """Deployment configuration from environment variables."""
+    """Deployment configuration — DB overrides → env vars → defaults."""
 
     mode: str = field(default_factory=lambda: os.environ.get("DEPLOY_MODE", "explicit"))
     branch: str = field(default_factory=lambda: os.environ.get("DEPLOY_BRANCH", "main"))
@@ -39,6 +42,29 @@ class DeployConfig:
         default_factory=lambda: os.environ.get("GITHUB_REPO", "weaties/helmlog")
     )
     github_token: str | None = field(default_factory=lambda: os.environ.get("GITHUB_TOKEN"))
+
+    @staticmethod
+    async def from_storage(storage: Storage) -> DeployConfig:
+        """Build config with DB overrides taking priority over env vars."""
+        from helmlog.storage import get_effective_setting
+
+        config = DeployConfig()
+        mode = await get_effective_setting(storage, "DEPLOY_MODE")
+        if mode:
+            config.mode = mode
+        branch = await get_effective_setting(storage, "DEPLOY_BRANCH")
+        if branch:
+            config.branch = branch
+        poll = await get_effective_setting(storage, "DEPLOY_POLL_INTERVAL")
+        if poll:
+            config.poll_interval = int(poll)
+        ws = await storage.get_setting("DEPLOY_WINDOW_START")
+        if ws is not None:
+            config.window_start = _opt_int(ws)
+        we = await storage.get_setting("DEPLOY_WINDOW_END")
+        if we is not None:
+            config.window_end = _opt_int(we)
+        return config
 
 
 def _opt_int(val: str | None) -> int | None:
@@ -85,6 +111,21 @@ def _git(args: list[str]) -> str:
         stderr=subprocess.DEVNULL,
         text=True,
     ).strip()
+
+
+async def list_remote_branches() -> list[str]:
+    """Return sorted list of remote branch names from origin."""
+    try:
+        await asyncio.to_thread(_git, ["fetch", "--prune", "origin"])
+        raw = await asyncio.to_thread(_git, ["branch", "-r", "--format=%(refname:short)"])
+    except Exception:  # noqa: BLE001
+        return []
+    branches: list[str] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if line.startswith("origin/") and not line.endswith("/HEAD"):
+            branches.append(line.removeprefix("origin/"))
+    return sorted(branches)
 
 
 def get_running_version() -> dict[str, str]:

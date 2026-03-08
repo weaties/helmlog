@@ -3067,14 +3067,9 @@ def create_app(
         request: Request,
         _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
     ) -> JSONResponse:
-        from helmlog.deploy import (
-            DeployConfig,
-            commits_behind,
-            fetch_latest,
-            get_running_version,
-        )
+        from helmlog.deploy import DeployConfig, commits_behind, fetch_latest, get_running_version
 
-        config = DeployConfig()
+        config = await DeployConfig.from_storage(storage)
         running = get_running_version()
         await fetch_latest(config)  # update origin refs before comparing
         behind = commits_behind(config)
@@ -3103,7 +3098,7 @@ def create_app(
     ) -> JSONResponse:
         from helmlog.deploy import DeployConfig, get_changelog
 
-        config = DeployConfig()
+        config = await DeployConfig.from_storage(storage)
         commits = await get_changelog(config)
         return JSONResponse({"commits": commits, "count": len(commits)})
 
@@ -3115,7 +3110,7 @@ def create_app(
     ) -> JSONResponse:
         from helmlog.deploy import DeployConfig, execute_deploy
 
-        config = DeployConfig()
+        config = await DeployConfig.from_storage(storage)
         result = await execute_deploy(config)
         await storage.log_deployment(
             from_sha=result.get("from_sha", ""),
@@ -3134,6 +3129,60 @@ def create_app(
         if result["status"] == "failed":
             raise HTTPException(status_code=500, detail=result.get("error", "Deploy failed"))
         return JSONResponse(result)
+
+    @app.get("/api/deployment/branches")
+    @limiter.limit("10/minute")
+    async def api_deployment_branches(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.deploy import list_remote_branches
+
+        branches = await list_remote_branches()
+        return JSONResponse({"branches": branches})
+
+    @app.put("/api/deployment/config")
+    @limiter.limit("10/minute")
+    async def api_deployment_config(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        body = await request.json()
+        changed: list[str] = []
+        if "mode" in body:
+            mode = body["mode"]
+            if mode not in ("explicit", "evergreen"):
+                raise HTTPException(status_code=400, detail="Mode must be 'explicit' or 'evergreen'")
+            await storage.set_setting("DEPLOY_MODE", mode)
+            changed.append(f"mode={mode}")
+        if "branch" in body:
+            branch = str(body["branch"]).strip()
+            if not branch:
+                raise HTTPException(status_code=400, detail="Branch cannot be empty")
+            await storage.set_setting("DEPLOY_BRANCH", branch)
+            changed.append(f"branch={branch}")
+        if "poll_interval" in body:
+            poll = int(body["poll_interval"])
+            if poll < 60:
+                raise HTTPException(status_code=400, detail="Poll interval must be >= 60 seconds")
+            await storage.set_setting("DEPLOY_POLL_INTERVAL", str(poll))
+            changed.append(f"poll_interval={poll}")
+        if "window_start" in body:
+            val = body["window_start"]
+            if val is None or val == "":
+                await storage.delete_setting("DEPLOY_WINDOW_START")
+            else:
+                await storage.set_setting("DEPLOY_WINDOW_START", str(int(val)))
+            changed.append(f"window_start={val}")
+        if "window_end" in body:
+            val = body["window_end"]
+            if val is None or val == "":
+                await storage.delete_setting("DEPLOY_WINDOW_END")
+            else:
+                await storage.set_setting("DEPLOY_WINDOW_END", str(int(val)))
+            changed.append(f"window_end={val}")
+        await _audit(request, "deployment.config", detail=", ".join(changed), user=_user)
+        return JSONResponse({"status": "ok", "changed": changed})
 
     @app.get("/api/deployment/history")
     @limiter.limit("30/minute")

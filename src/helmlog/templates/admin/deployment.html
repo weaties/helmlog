@@ -4,7 +4,7 @@
 <style>
 .card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:12px}
 .label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#8892a4;margin-bottom:8px}
-.kv{display:flex;gap:8px;margin-bottom:6px;font-size:.85rem}
+.kv{display:flex;gap:8px;margin-bottom:6px;font-size:.85rem;align-items:center}
 .kv .k{color:#8892a4;min-width:120px}
 .kv .v{color:#e8eaf0;font-family:monospace}
 .badge{display:inline-block;font-size:.7rem;padding:2px 8px;border-radius:4px;font-weight:600;letter-spacing:.04em}
@@ -31,6 +31,9 @@ table.history{width:100%;border-collapse:collapse;font-size:.8rem;margin-top:8px
 table.history th{text-align:left;color:#8892a4;font-weight:500;padding:4px 8px;border-bottom:1px solid #374151}
 table.history td{padding:4px 8px;color:#e8eaf0;border-bottom:1px solid #1e293b}
 table.history .mono{font-family:monospace;font-size:.78rem}
+select.cfg-input,input.cfg-input{background:#0b1121;border:1px solid #374151;border-radius:4px;color:#e8eaf0;padding:4px 8px;font-size:.82rem;font-family:monospace}
+select.cfg-input{min-width:160px}
+.mode-desc{font-size:.72rem;color:#8892a4;margin-top:2px}
 </style>
 {% endblock %}
 {% block content %}
@@ -41,6 +44,32 @@ table.history .mono{font-family:monospace;font-size:.78rem}
   <div class="btn-row" id="deploy-actions" style="display:none">
     <button class="btn btn-primary" id="btn-deploy" onclick="deploy()">Deploy Now</button>
     <span id="behind-badge"></span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="label">Configuration</div>
+  <div id="config-form">
+    <div class="kv">
+      <span class="k">Mode</span>
+      <span class="v">
+        <select class="cfg-input" id="cfg-mode">
+          <option value="explicit">explicit</option>
+          <option value="evergreen">evergreen</option>
+        </select>
+      </span>
+    </div>
+    <div class="mode-desc" id="mode-desc">Explicit: manually deploy from this page. Evergreen: auto-deploy when the tracked branch changes.</div>
+    <div class="kv" style="margin-top:8px">
+      <span class="k">Track branch</span>
+      <span class="v">
+        <select class="cfg-input" id="cfg-branch"><option>Loading...</option></select>
+      </span>
+    </div>
+    <div class="btn-row">
+      <button class="btn" id="btn-save-config" onclick="saveConfig()">Save</button>
+      <span id="config-status" style="font-size:.8rem"></span>
+    </div>
   </div>
 </div>
 
@@ -66,7 +95,6 @@ async function loadStatus(){
   let html='';
   html+='<div class="kv"><span class="k">Running</span><span class="v">'+esc(v.branch)+' @ '+esc(v.short_sha)+' ('+esc(v.commit_timestamp).slice(0,19)+')</span></div>';
   html+='<div class="kv"><span class="k">Tracking</span><span class="v">'+esc(s.branch)+'</span></div>';
-  html+='<div class="kv"><span class="k">Mode</span><span class="v"><span class="badge badge-mode">'+esc(s.mode)+'</span></span></div>';
   html+='<div class="kv"><span class="k">Poll interval</span><span class="v">'+s.poll_interval+'s</span></div>';
   if(s.deploy_window.start!==null){
     html+='<div class="kv"><span class="k">Deploy window</span><span class="v">'+s.deploy_window.start+':00 – '+s.deploy_window.end+':00 UTC</span></div>';
@@ -75,11 +103,16 @@ async function loadStatus(){
     html+='<div class="kv"><span class="k">Last deploy</span><span class="v">'+esc(s.last_deploy.started_at).slice(0,19)+' ('+esc(s.last_deploy.status)+')</span></div>';
   }
   document.getElementById('version-info').innerHTML=html;
+  // Update config controls to match current state
+  document.getElementById('cfg-mode').value=s.mode;
+  updateModeDesc();
   const actions=document.getElementById('deploy-actions');
   const badge=document.getElementById('behind-badge');
   if(s.update_available){
     badge.innerHTML='<span class="badge badge-warn">'+s.commits_behind+' commit'+(s.commits_behind!==1?'s':'')+' behind</span>';
     actions.style.display='flex';
+    document.getElementById('btn-deploy').disabled=false;
+    document.getElementById('btn-deploy').textContent='Deploy Now';
     const navDeploy=document.getElementById('nav-deploy');
     if(navDeploy) navDeploy.textContent='Deploy ('+s.commits_behind+')';
   } else {
@@ -88,6 +121,56 @@ async function loadStatus(){
     document.getElementById('btn-deploy').disabled=true;
     document.getElementById('btn-deploy').textContent='Up to date';
   }
+}
+async function loadBranches(){
+  const r=await fetch('/api/deployment/branches');
+  if(!r.ok) return;
+  const data=await r.json();
+  const sel=document.getElementById('cfg-branch');
+  const current=statusData?statusData.branch:'';
+  sel.innerHTML='';
+  for(const b of data.branches){
+    const opt=document.createElement('option');
+    opt.value=b;opt.textContent=b;
+    if(b===current) opt.selected=true;
+    sel.appendChild(opt);
+  }
+  // If current branch not in list, add it
+  if(current && !data.branches.includes(current)){
+    const opt=document.createElement('option');
+    opt.value=current;opt.textContent=current+' (current)';
+    opt.selected=true;
+    sel.prepend(opt);
+  }
+}
+function updateModeDesc(){
+  const mode=document.getElementById('cfg-mode').value;
+  const desc=document.getElementById('mode-desc');
+  if(mode==='evergreen'){
+    desc.textContent='Evergreen: automatically deploys when the tracked branch changes. Checks every poll interval.';
+  } else {
+    desc.textContent='Explicit: manually deploy from this page when you are ready.';
+  }
+}
+document.getElementById('cfg-mode').addEventListener('change',updateModeDesc);
+async function saveConfig(){
+  const mode=document.getElementById('cfg-mode').value;
+  const branch=document.getElementById('cfg-branch').value;
+  const btn=document.getElementById('btn-save-config');
+  const st=document.getElementById('config-status');
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/deployment/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode,branch})});
+    if(r.ok){
+      st.textContent='Saved';st.style.color='#4ade80';
+      setTimeout(()=>{st.textContent=''},3000);
+      loadStatus();loadChangelog();
+    } else {
+      const d=await r.json();
+      st.textContent='Error: '+(d.detail||'unknown');st.style.color='#f87171';
+    }
+  }catch(e){st.textContent='Error: '+e.message;st.style.color='#f87171'}
+  btn.disabled=false;
 }
 async function loadChangelog(){
   const r=await fetch('/api/deployment/changelog');
@@ -143,6 +226,7 @@ async function deploy(){
 }
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')}
 function showStatus(msg,cls){const el=document.getElementById('deploy-status');el.textContent=msg;el.className='status '+cls;if(cls==='ok')setTimeout(()=>{el.className='status'},5000)}
-loadStatus();loadChangelog();loadHistory();
+async function init(){await loadStatus();loadBranches();loadChangelog();loadHistory()}
+init();
 </script>
 {% endblock %}

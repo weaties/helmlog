@@ -154,3 +154,62 @@ async def test_deployment_api_status(storage: Storage) -> None:
     assert "mode" in data
     assert "commits_behind" in data
     assert "update_available" in data
+
+
+@pytest.mark.asyncio
+async def test_config_from_storage(storage: Storage) -> None:
+    """DeployConfig.from_storage reads DB overrides."""
+    await storage.set_setting("DEPLOY_MODE", "evergreen")
+    await storage.set_setting("DEPLOY_BRANCH", "live")
+    config = await DeployConfig.from_storage(storage)
+    assert config.mode == "evergreen"
+    assert config.branch == "live"
+
+
+@pytest.mark.asyncio
+async def test_config_api_update(storage: Storage) -> None:
+    """PUT /api/deployment/config persists mode and branch."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/deployment/config",
+            json={"mode": "evergreen", "branch": "live"},
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "mode=evergreen" in data["changed"]
+    assert "branch=live" in data["changed"]
+    # Verify persisted
+    config = await DeployConfig.from_storage(storage)
+    assert config.mode == "evergreen"
+    assert config.branch == "live"
+
+
+@pytest.mark.asyncio
+async def test_config_api_invalid_mode(storage: Storage) -> None:
+    """PUT /api/deployment/config rejects invalid mode."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/deployment/config",
+            json={"mode": "yolo"},
+        )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_branches_api(storage: Storage) -> None:
+    """GET /api/deployment/branches returns a list."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/deployment/branches")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "branches" in data
+    assert isinstance(data["branches"], list)
