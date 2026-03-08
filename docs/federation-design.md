@@ -103,6 +103,7 @@ The founding admin's Pi:
      "session_visibility": "event_scoped",
      "data_aging": { "current_season": "full", "previous_season": "reduced", "older": "summary" },
      "benchmark_min_boats": 4,
+     "benchmark_cache_ttl": 86400,
      "membership_eligibility": { "active_racing_required": true },
      "charter_url": "https://...",
      "admin_sigs": [
@@ -481,7 +482,7 @@ Crew member opens co-op view on their Pi
 ### Coach access
 
 Coach access is **per-boat opt-in** with **session-level permissioning**.
-The admin does not grant fleet-wide coach access — each boat individually
+The admin does not grant co-op-wide coach access — each boat individually
 decides whether to share with a specific coach.
 
 ```
@@ -982,7 +983,7 @@ Decisions reached through PR review and external feedback:
     cruises, etc.) via a toggle in the web UI. The manual toggle prevents
     false-active from a Pi left running at the marina.
 
-11. **Coach access is per-boat, not fleet-wide.** Each boat individually
+11. **Coach access is per-boat, not co-op-wide.** Each boat individually
     opts into sharing with a specific coach at the session level. The co-op
     admin does not control coach access. See Section 5 above.
 
@@ -1000,23 +1001,52 @@ Decisions reached through PR review and external feedback:
     show summary metrics only. This is the recommended default; co-ops can
     opt for full visibility in their charter.
 
+15. **Decentralized benchmark computation with local caching.** Each Pi
+    computes its own benchmarks by querying all peers (fully decentralized).
+
+    Alternatives considered:
+
+    | Approach | Pros | Cons |
+    |---|---|---|
+    | **Fully decentralized** (each Pi queries all peers) | No coordination role, no single point of failure, each boat sees fresh data, no trust required in an aggregator | N×N queries on a co-op of N boats; every Pi does the same aggregation work; more network traffic |
+    | **Designated aggregator** (one Pi computes, distributes results) | One set of queries per refresh cycle, less network traffic, consistent results across all boats | Introduces a coordination role (who runs it?), aggregator sees all per-peer responses (privacy concern), single point of failure if aggregator is offline |
+
+    **Decision: fully decentralized.** In a co-op of 10-20 boats, each Pi
+    querying all peers for lightweight metric arrays is trivial network load.
+    The aggregator model's efficiency gains don't justify the coordination
+    complexity and privacy trade-off. If co-ops grow to 50+ boats, a
+    designated aggregator could be reconsidered.
+
+    Benchmark results are **cached locally** with a **co-op-configurable TTL**
+    (charter field `benchmark_cache_ttl`, default: 24 hours). This avoids
+    hammering peers on every dashboard load while keeping results reasonably
+    fresh. The cache is invalidated when the boat uploads a new session or
+    when the TTL expires. Boats can force a live refresh from the dashboard.
+
+16. **Maneuver detection auto-calibrated from co-op data.** Rather than
+    requiring each co-op charter to specify detection thresholds (heading
+    change angle, BSP dip threshold, etc.), the platform auto-calibrates
+    from the co-op's own data:
+
+    - On first run, use conservative defaults (e.g., heading change >70°
+      for a tack, >60° for a gybe)
+    - After accumulating 20+ sessions in the co-op, compute fleet-specific
+      thresholds from the distribution of heading change rates and BSP
+      patterns during known maneuvers
+    - Store calibrated thresholds in the co-op's charter metadata
+    - Re-calibrate periodically (once per season or when the co-op votes
+      to reset)
+
+    This handles the J/105-vs-J/80 problem automatically — a co-op of
+    heavy displacement boats will naturally produce different heading rate
+    distributions than a co-op of sportboats, and the calibration adapts.
+
 ---
 
 ## 15. Open Questions
 
 (Previously open questions 1-3 have been resolved — see Section 14 items
-8-10 above.)
+8-10. Questions 4-6 resolved — see items 15-16 above.)
 
-1. **Benchmark computation location**: Should each Pi compute its own
-   benchmarks by querying all peers (fully decentralized, but N×N queries),
-   or should a designated "benchmark aggregator" Pi compute once and
-   distribute results (more efficient, but introduces a coordination role)?
-
-2. **Maneuver detection calibration**: How should the platform handle
-   fleet-specific maneuver detection thresholds? A J/105 tack looks
-   different from a J/80 tack. Should the co-op charter specify detection
-   parameters, or should they be auto-calibrated from the fleet's data?
-
-3. **Benchmark caching**: Should benchmark results be cached locally with
-   a TTL (e.g., refresh daily), or always computed live? Caching reduces
-   peer queries but means benchmarks lag behind new data.
+No open questions remain. All design decisions have been resolved through
+PR review feedback.
