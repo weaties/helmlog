@@ -3152,7 +3152,9 @@ def create_app(
         if "mode" in body:
             mode = body["mode"]
             if mode not in ("explicit", "evergreen"):
-                raise HTTPException(status_code=400, detail="Mode must be 'explicit' or 'evergreen'")
+                raise HTTPException(
+                    status_code=400, detail="Mode must be 'explicit' or 'evergreen'"
+                )
             await storage.set_setting("DEPLOY_MODE", mode)
             changed.append(f"mode={mode}")
         if "branch" in body:
