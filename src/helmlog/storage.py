@@ -71,7 +71,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 26
+_CURRENT_VERSION: int = 27
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -559,6 +559,21 @@ _MIGRATIONS: dict[int, str] = {
         DROP TABLE race_videos;
         ALTER TABLE race_videos_new RENAME TO race_videos;
         CREATE INDEX IF NOT EXISTS idx_race_videos_race_id ON race_videos(race_id);
+    """,
+    27: """
+        -- Deployment management (#125)
+        CREATE TABLE IF NOT EXISTS deployment_log (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_sha   TEXT NOT NULL,
+            to_sha     TEXT NOT NULL,
+            trigger    TEXT NOT NULL DEFAULT 'manual',
+            status     TEXT NOT NULL DEFAULT 'success',
+            error      TEXT,
+            started_at TEXT NOT NULL,
+            user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_deployment_log_started
+            ON deployment_log(started_at);
     """,
 }
 
@@ -3149,6 +3164,59 @@ class Storage:
         await db.commit()
         logger.info("Sailor {!r} anonymized to {!r} ({} rows)", sailor_name, replacement, count)
         return count
+
+    # ------------------------------------------------------------------
+    # Deployment log (#125)
+    # ------------------------------------------------------------------
+
+    async def log_deployment(
+        self,
+        from_sha: str,
+        to_sha: str,
+        trigger: str = "manual",
+        status: str = "success",
+        error: str | None = None,
+        user_id: int | None = None,
+    ) -> int:
+        """Record a deployment event. Returns the new row id."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        now = _datetime.now(UTC).isoformat()
+        cur = await db.execute(
+            "INSERT INTO deployment_log"
+            " (from_sha, to_sha, trigger, status, error, started_at, user_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (from_sha, to_sha, trigger, status, error, now, user_id),
+        )
+        await db.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+
+    async def list_deployments(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent deployment log entries, newest first."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT d.*, u.email AS user_email"
+            " FROM deployment_log d"
+            " LEFT JOIN users u ON d.user_id = u.id"
+            " ORDER BY d.started_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+    async def last_deployment(self) -> dict[str, Any] | None:
+        """Return the most recent successful deployment, or None."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT d.*, u.email AS user_email"
+            " FROM deployment_log d"
+            " LEFT JOIN users u ON d.user_id = u.id"
+            " WHERE d.status = 'success'"
+            " ORDER BY d.started_at DESC LIMIT 1",
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
 
     # ------------------------------------------------------------------
     # Helpers

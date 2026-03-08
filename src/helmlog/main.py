@@ -162,6 +162,60 @@ async def _web_loop(
         raise
 
 
+async def _deploy_loop(storage: object, config: object) -> None:
+    """Background task: poll for updates and auto-deploy in evergreen mode.
+
+    Checks the subscribed branch at the configured interval. If new commits
+    are detected and the current time is within the deploy window, executes
+    a deployment (git pull + uv sync + service restart).
+    """
+    from helmlog.deploy import (
+        DeployConfig,
+        commits_behind,
+        execute_deploy,
+        fetch_latest,
+        in_deploy_window,
+    )
+    from helmlog.storage import Storage
+
+    assert isinstance(storage, Storage)
+    assert isinstance(config, DeployConfig)
+
+    logger.info(
+        "Evergreen deploy loop started: branch={} interval={}s",
+        config.branch,
+        config.poll_interval,
+    )
+
+    while True:
+        try:
+            latest = await fetch_latest(config)
+            if latest is not None:
+                behind = commits_behind(config)
+                if behind > 0 and in_deploy_window(config):
+                    logger.info("Evergreen deploy: {} commit(s) behind, deploying...", behind)
+                    result = await execute_deploy(config)
+                    await storage.log_deployment(
+                        from_sha=result.get("from_sha", ""),
+                        to_sha=result.get("to_sha", ""),
+                        trigger="evergreen",
+                        status=result["status"],
+                        error=result.get("error"),
+                    )
+                    if result["status"] == "success":
+                        logger.info("Evergreen deploy succeeded")
+                    else:
+                        logger.error("Evergreen deploy failed: {}", result.get("error"))
+                elif behind > 0:
+                    logger.debug("Updates available ({} commits) but outside deploy window", behind)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Deploy loop error (will retry): {}", exc)
+
+        await asyncio.sleep(config.poll_interval)
+
+
 async def _run() -> None:
     """Main async loop: read instrument data, decode, persist.
 
@@ -200,6 +254,7 @@ async def _run() -> None:
     if cameras_str:
         await storage.seed_cameras_from_env(cameras_str)
 
+    from helmlog.deploy import DeployConfig
     from helmlog.external import external_data_enabled
     from helmlog.monitor import monitor_loop
 
@@ -213,6 +268,11 @@ async def _run() -> None:
             tide_task = asyncio.create_task(asyncio.sleep(1e9))
         web_task = asyncio.create_task(_web_loop(storage, recorder, audio_config))
         monitor_task = asyncio.create_task(monitor_loop())
+        deploy_config = DeployConfig()
+        if deploy_config.mode == "evergreen":
+            deploy_task = asyncio.create_task(_deploy_loop(storage, deploy_config))
+        else:
+            deploy_task = asyncio.create_task(asyncio.sleep(1e9))
         try:
             if data_source == "signalk":
                 from helmlog.sk_reader import SKReader, SKReaderConfig
@@ -253,8 +313,14 @@ async def _run() -> None:
             tide_task.cancel()
             web_task.cancel()
             monitor_task.cancel()
+            deploy_task.cancel()
             await asyncio.gather(
-                weather_task, tide_task, web_task, monitor_task, return_exceptions=True
+                weather_task,
+                tide_task,
+                web_task,
+                monitor_task,
+                deploy_task,
+                return_exceptions=True,
             )
             await storage.close()
             logger.info("Logger stopped")

@@ -3049,11 +3049,93 @@ def create_app(
         )
 
     # ------------------------------------------------------------------
-    # Rate-limited data endpoints (#204)
+    # Deployment management (#125)
     # ------------------------------------------------------------------
 
-    # Note: rate limits are applied inline on the endpoints above via
-    # @limiter.limit() decorators. Additional limits here for remaining
-    # endpoints that need protection.
+    @app.get("/admin/deployment", response_class=HTMLResponse, include_in_schema=False)
+    async def admin_deployment_page(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> Response:
+        return _templates.TemplateResponse(
+            request, "admin/deployment.html", _tpl_ctx(request, "/admin/deployment")
+        )
+
+    @app.get("/api/deployment/status")
+    @limiter.limit("30/minute")
+    async def api_deployment_status(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.deploy import DeployConfig, commits_behind, get_running_version
+
+        config = DeployConfig()
+        running = get_running_version()
+        behind = commits_behind(config)
+        last = await storage.last_deployment()
+        return JSONResponse(
+            {
+                "running": running,
+                "branch": config.branch,
+                "mode": config.mode,
+                "poll_interval": config.poll_interval,
+                "deploy_window": {
+                    "start": config.window_start,
+                    "end": config.window_end,
+                },
+                "commits_behind": behind,
+                "update_available": behind > 0,
+                "last_deploy": last,
+            }
+        )
+
+    @app.get("/api/deployment/changelog")
+    @limiter.limit("10/minute")
+    async def api_deployment_changelog(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.deploy import DeployConfig, get_changelog
+
+        config = DeployConfig()
+        commits = await get_changelog(config)
+        return JSONResponse({"commits": commits, "count": len(commits)})
+
+    @app.post("/api/deployment/deploy")
+    @limiter.limit("3/minute")
+    async def api_deployment_deploy(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.deploy import DeployConfig, execute_deploy
+
+        config = DeployConfig()
+        result = await execute_deploy(config)
+        await storage.log_deployment(
+            from_sha=result.get("from_sha", ""),
+            to_sha=result.get("to_sha", ""),
+            trigger="manual",
+            status=result["status"],
+            error=result.get("error"),
+            user_id=_user.get("id"),
+        )
+        await _audit(
+            request,
+            "deployment.manual",
+            detail=f"{result.get('from_sha', '')[:7]}→{result.get('to_sha', '')[:7]}",
+            user=_user,
+        )
+        if result["status"] == "failed":
+            raise HTTPException(status_code=500, detail=result.get("error", "Deploy failed"))
+        return JSONResponse(result)
+
+    @app.get("/api/deployment/history")
+    @limiter.limit("30/minute")
+    async def api_deployment_history(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        deployments = await storage.list_deployments()
+        return JSONResponse({"deployments": deployments})
 
     return app
