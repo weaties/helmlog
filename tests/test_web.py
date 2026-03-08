@@ -21,7 +21,7 @@ from helmlog.nmea2000 import (
     SpeedRecord,
     WindRecord,
 )
-from helmlog.web import create_app
+from helmlog.web import _get_git_info, create_app
 
 if TYPE_CHECKING:
     from helmlog.storage import Storage
@@ -29,6 +29,16 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def test_git_info_includes_hostname() -> None:
+    """_get_git_info() should include the system hostname."""
+    import socket
+
+    info = _get_git_info()
+    assert info  # non-empty (we're in a git repo)
+    assert socket.gethostname() in info
+
 
 _DEVICE = "Gordik 2T1R USB Audio"
 _START_UTC = datetime(2026, 2, 26, 14, 0, 0, tzinfo=UTC)
