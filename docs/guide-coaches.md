@@ -44,7 +44,7 @@ you **cannot** access:
 | Photos and notes | Personal race notes stay private |
 | Crew rosters | Who sailed where is boat-private |
 | Sail selection | Gear choices are competitive info |
-| YouTube video links | Video links are boat-private unless a boat shares them with you directly |
+| YouTube video links | Boats may link race video to sessions; these links are boat-private unless a boat shares them with you directly during a debrief |
 | Raw data export / bulk download | Prevents data accumulation beyond your access window |
 
 If a boat wants to share any of these with you directly (e.g., play you an
@@ -67,9 +67,12 @@ serve it to you automatically.
 - You can view any session that a co-op member has shared
 - Every time you view a session, it's logged in the co-op's audit trail
 - You can view data in the platform but not export it in bulk
-- **Taking notes, screenshots, and preparing presentations is explicitly
-  encouraged** — that's expected coaching work. The no-export rule applies
-  to raw data downloads, not to your own analysis and materials.
+- **Taking notes, screenshots, and preparing presentations is expected
+  coaching work.** The no-export rule prevents bulk raw-data downloads,
+  not your own analysis. That said, screenshots of every boat's track
+  are effectively a persistent copy of shared data — the trust model
+  assumes coaches use these for coaching, not for building an archive
+  that outlasts the engagement.
 
 ### What happens when access expires
 
@@ -97,10 +100,12 @@ relationships stay healthy. Each one has a reason:
    *Why: Each co-op's data belongs to that co-op. Combining fleets would
    create competitive intelligence that no individual fleet agreed to.*
 
-2. **No derivative works beyond your access window.** If you build a
-   presentation, polar model, or analysis from co-op data, you should not
-   continue distributing it after your access expires. The fleet's data
-   stays with the fleet.
+2. **No distributing materials built from co-op data after your access
+   expires.** If you build a presentation, polar model, or analysis from
+   co-op data, you agree not to continue distributing it after your
+   access ends. This is an agreement between you and the fleet, not a
+   technical control — the platform can't reach into your laptop. But
+   it's the agreement that makes the relationship work.
    *Why: Access is time-limited for a reason. If analyses outlive the
    engagement, the time limit is meaningless.*
 
