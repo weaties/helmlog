@@ -1,6 +1,110 @@
 # Release Notes
 
-## Unreleased (main, 2026-03-02)
+## Unreleased (main, 2026-03-08)
+
+### Embedded YouTube player with track sync (#183, #185)
+
+Session replay now includes synchronized video:
+
+- **Embedded YouTube player** on session detail page and history page cards
+- **Bidirectional track sync** — click a point on the track map and the video
+  jumps to that moment; video playback updates the track marker position
+- Deep-link support via `?t=<seconds>` for sharing specific race moments
+
+### Session detail page with track map (#178, #180)
+
+Dedicated session view at `/session/{id}`:
+
+- **Interactive track map** — GPS track rendered with speed-based color coding
+- **Video deep-links** — clickable timestamps jump to the corresponding video
+- All session metadata (crew, results, notes, transcripts, sails, exports)
+  consolidated into a single page replacing the history accordion cards
+
+### Simplified home page (#170, #171)
+
+Home page redesigned for race-day focus:
+
+- **Idle state** — start buttons only (race, practice, debrief)
+- **Active state** — current race card with live instruments and controls
+- Red stop button with two-tap safety guard and countdown timer
+- Camera start/stop runs fire-and-forget so race API responds instantly
+- Extracted inline HTML/CSS/JS from `web.py` into Jinja2 templates and
+  static files (`base.html`, `home.html`, `history.html`, `base.css`,
+  `shared.js`, `home.js`, `history.js`)
+
+### Gaia GPS backfill (#101, #176)
+
+Import historical race data from Gaia GPS exports:
+
+- **Track download** — fetch GPX tracks from Gaia GPS API
+- **Race classification** — auto-detect race sessions from track patterns
+- **SQLite import** — backfill position, heading, and speed data
+- **InfluxDB migration** — push historical data to Grafana dashboards
+
+### Insta360 X4 video pipeline (#155, #161)
+
+End-to-end automated video workflow:
+
+- **Camera control** — start/stop recording via OSC HTTP API, tied to race
+  start/stop events (#98, #147)
+- **Camera admin UI** — add/configure cameras, WiFi credentials, status
+  monitoring from the web interface (#147)
+- **Stitch & upload** — Docker-based stitcher with ffmpeg fallback; discovers
+  both `.insv` (360°) and `.mp4` (single-lens) recordings
+- **Auto-link** — uploaded videos automatically associated with race sessions
+  by time overlap
+- WiFi SSID/password fields on camera config for direct camera network access
+
+### Remote transcription offload (#121, #146)
+
+Offload Whisper transcription from the Pi to a faster machine:
+
+- **HTTP worker** (`scripts/transcribe_worker.py`) runs on a Mac or other
+  machine with more CPU
+- **Admin settings page** — SQLite-backed settings overrides configurable
+  from `/admin/settings` in the web UI
+- Transparent fallback to local Pi transcription if remote worker is
+  unreachable
+
+### Nginx reverse proxy (#137, #167)
+
+Single-port access to all services on the Pi:
+
+- **Path-based routing** — `/` (Helm Log), `/grafana/` (Grafana), `/sk/`
+  (Signal K admin), `/signalk/` (Signal K API)
+- Eliminates the need to remember multiple port numbers
+- Signal K admin UI moved to `/sk/` to avoid conflict with `/admin/`
+
+### Configurable event naming rules (#154, #159)
+
+Day-of-week event names are now admin-configurable:
+
+- Admin UI at `/admin/events` for creating and managing event rules
+- Custom event names (set via web UI) take precedence over weekday defaults
+- Error message shown when starting a race without a daily event set (#153)
+
+### Self-service login (#148, #152)
+
+Existing users can request a new magic link from the login page without
+needing an admin to generate an invite token.
+
+### Configurable Pi host references (#151)
+
+Removed hardcoded `corvopi` / `weaties` references from scripts and docs.
+All Pi-specific values now come from environment variables or are
+auto-detected.
+
+### Infrastructure fixes
+
+- **Loki + Promtail** for centralized log management (#139, #142), with
+  loopback-only config fix (#162)
+- **Setup.sh fixes** — bcrypt module, data/ permissions, uv Python
+  traversal, tmux, locale (#140, #141, #144)
+- **Signal K** — fix CORS origins crash on fresh install (#143)
+- **Grafana** — bind to 0.0.0.0 for Tailscale access, auto-populate
+  InfluxDB vars in `.env`, anonymous access with None role for login page
+- **Race Track query optimization** — downsample before union, 65x faster
+- **Database schema documentation** at `docs/database-schema.md` (#156, #157)
 
 ### Shared navigation, version footer, timezone support (#129, #130)
 
