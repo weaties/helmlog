@@ -23,8 +23,8 @@
   formats (CSV, GPX, JSON) at any time. No lock-in.
 - **Not for protest hearings.** Co-op data cannot be used as evidence in racing
   protests or redress hearings.
-- **Seasonal controls.** You can time-delay sharing — race during the series,
-  share after it ends.
+- **Seasonal controls.** The co-op can time-delay sharing — race during the
+  series, share after it ends.
 - **Safety first.** This data is for performance analysis, not navigation. Don't
   hit a rock because of a shared log.
 
@@ -101,19 +101,29 @@ and anonymization rights that apply to audio (above) apply to identifiable photo
 
 ### Email addresses
 
-Email addresses provided for co-op membership (e.g., in the boat card's
-`owner_email` field) are **personally identifiable information (PII)**. Email
-addresses are:
+Email addresses stored by Helm Log are **personally identifiable information
+(PII)**. This applies to both:
 
-- **Required for co-op membership** — enables out-of-band communication for
-  votes, admin transfers, and emergencies
+- **Boat owner emails** — provided in the boat card's `owner_email` field for
+  co-op membership (votes, admin transfers, emergencies)
+- **Crew member emails** — used for magic-link authentication tokens to access
+  the boat's Helm Log instance
+
+Email address rules:
+
+- **Required for co-op membership** (owner email) — enables out-of-band
+  communication for votes, admin transfers, and emergencies
+- **Required for crew access** (crew email) — used for auth token delivery
 - **Optional for standalone use** — a boat running Helm Log without co-op
-  membership is not required to provide an email
-- **Visible only to co-op admins** by default — member email addresses are not
-  shared with other co-op members unless the co-op charter specifies otherwise
+  membership or crew accounts is not required to collect emails
+- **Visible only to co-op admins** by default — owner email addresses are not
+  shared with other co-op members unless the co-op charter specifies otherwise.
+  Crew emails are visible only to the boat owner, never to the co-op
 - Subject to the same **deletion and anonymization rights** as other PII — on
-  departure or deletion, a boat's email is scrubbed from all membership records,
-  revocation records, and any other co-op documents held by other members' Pis
+  departure or deletion, a boat's owner email is scrubbed from all membership
+  records, revocation records, and any other co-op documents held by other
+  members' Pis. Crew emails are deleted when the crew member's access is revoked
+  or when the crew member requests deletion
 
 ### Biometric and physiological data
 
@@ -309,19 +319,24 @@ broader co-op.
 
 ### Temporal sharing controls
 
-A boat may apply a **sharing delay** to sessions, making them available to the
-co-op only after a specified period. This allows boats to share data
-reciprocally while protecting competitive advantage during an active series:
+The co-op may establish a **sharing delay policy** that applies to all members,
+controlling when session data becomes available after a race. This is a
+**co-op-level decision** (set by majority vote or in the co-op charter), not a
+per-boat choice — ensuring all members operate under the same rules:
 
 - **Immediate sharing** (default): session data is available to the co-op as
   soon as it is marked as shared
-- **Delayed sharing**: session data is embargoed for a boat-specified duration
+- **Delayed sharing**: session data is embargoed for a co-op-specified duration
   (e.g., "share 7 days after session" or "share after series ends"). During
   the embargo, the session is visible in the co-op session list as "pending"
   but track and instrument data are not accessible
-- **Seasonal sharing**: a boat may set a blanket policy (e.g., "share all
+- **Seasonal sharing**: the co-op may set a blanket policy (e.g., "share all
   sessions after the last race of the series") that applies to all sessions
   within a date range
+
+The co-op sets the delay policy; individual boats cannot override it with a
+shorter or longer delay. This prevents a situation where some boats share
+immediately while others delay, creating an asymmetric information advantage.
 
 Delayed sessions **count toward the contribution threshold** — a boat with
 delayed-but-committed sessions is fulfilling its reciprocal obligation, just
@@ -1030,3 +1045,4 @@ beyond what the AGPLv3 allows.
 | 2026-03-07 | Rev 12 — plain English summary at top of document, rate-limiting auto-freeze on anomalous access patterns |
 | 2026-03-07 | Rev 13 — co-op charter template, charter reference in pre-join disclosure |
 | 2026-03-07 | Rev 14 — hardening from cross-sport research (NFL/NBA/MLB/SailGP/Strava/esports): email as PII with admin-only visibility and departure scrubbing; biometric data firewall with per-person consent independent of instrument sharing; temporal/seasonal sharing controls (delayed and embargoed sessions); gambling/betting absolute prohibition; data portability guarantee (anti-lock-in); protest hearing data firewall (other boats' co-op data inadmissible under RRS); active/inactive quorum based on heartbeat to prevent winter deadlock; multi-admin M-of-N signing model replacing single-admin elections |
+| 2026-03-08 | Rev 15 — PR review feedback: crew member emails covered alongside owner emails; temporal sharing controls changed from per-boat to co-op-level decision |

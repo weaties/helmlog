@@ -61,7 +61,21 @@ Must be clean. Pre-existing exceptions (do not fix unless asked):
 - `web.py`: `Item "None" of "AudioRecorder | None" has no attribute "stop"` (x2)
 - `main.py`: `Unused "type: ignore" comment`
 
-## 6. Documentation updates
+## 6. Data licensing compliance
+
+If the change touches data storage, export, deletion, API endpoints, PII
+handling, co-op features, or any new data type collection, run `/data-license`
+to verify compliance with `docs/data-licensing.md`.
+
+Key items to check:
+- Own-boat data remains exportable in open formats (CSV, GPX, JSON, WAV)
+- PII (audio, photos, emails, biometrics) supports deletion/anonymization
+- Co-op endpoints do not allow bulk export of other boats' data
+- Temporal sharing embargo timestamps are respected
+- No gambling/betting facilitation
+- Audit logging on co-op data access
+
+## 7. Documentation updates
 
 If the change involved any of these, update accordingly:
 - **New module** → update project structure tree in `CLAUDE.md`
@@ -69,8 +83,9 @@ If the change involved any of these, update accordingly:
 - **New CLI command** → update Common Commands in `CLAUDE.md`
 - **New stack tool** → update Stack & Tooling table in `CLAUDE.md`
 - **Schema migration** → update schema version in `CLAUDE.md` Stack table
+- **Data handling changes** → verify against `docs/data-licensing.md`
 
-## 7. Commit and push
+## 8. Commit and push
 
 ```bash
 git add <files>
@@ -78,7 +93,7 @@ git commit -m "feat: description (#issue)"
 git push -u origin <branch>
 ```
 
-## 8. Create PR
+## 9. Create PR
 
 ```bash
 gh pr create --title "..." --body "..."

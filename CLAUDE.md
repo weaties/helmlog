@@ -169,6 +169,33 @@ is `.env.example` — read it for the full list of available settings.
 
 ---
 
+## Data Licensing Policy
+
+The data licensing policy (`docs/data-licensing.md`) governs all data ownership,
+sharing, and privacy. **All code that touches user data must comply with this
+policy.** Key constraints that affect development:
+
+- **Boat owns its data** — never restrict a boat's ability to export its own
+  data in CSV, GPX, JSON, or WAV
+- **PII categories** — audio, photos, emails, biometrics, and diarized
+  transcripts are PII with deletion/anonymization rights. Code handling PII
+  must support these rights
+- **Co-op data is view-only** — API endpoints serving other boats' co-op data
+  must not support bulk export. Audit logging and rate limiting required
+- **Temporal sharing** — session data may be under co-op embargo. Check embargo
+  timestamps before serving track data
+- **Gambling prohibition** — no feature may facilitate betting or wagering use
+  of co-op data
+- **Protest firewall** — do not build export formats for co-op data designed for
+  protest committee submission
+- **Biometric data** — requires per-person consent separate from instrument
+  data. Cannot be used in personnel decisions. Coaches need separate
+  authorization from the individual, not just the boat owner
+
+Use `/data-license` to review code changes against the full policy.
+
+---
+
 ## Dos and Don'ts
 
 **Do:**
@@ -211,3 +238,4 @@ is `.env.example` — read it for the full list of available settings.
 | `/new-migration` | Add a SQLite schema migration to storage.py |
 | `/deploy-pi` | Pi deployment reference and service architecture |
 | `/pr-checklist` | Pre-PR verification (tests, lint, types, docs) |
+| `/data-license` | Review changes against the data licensing policy |
