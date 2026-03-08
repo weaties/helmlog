@@ -76,6 +76,35 @@ Checked items are complete.
 - [ ] **AIS exclusion** — ensure the platform does not capture proximity or tracking data
       from non-member vessels.
 
+### Anonymous fleet benchmarking
+
+- [ ] **Maneuver detection** — detect tacks, gybes, mark roundings, starts, and acceleration
+      events from instrument data (heading rate, BSP delta, GPS track geometry). Store as
+      typed events with timestamps and duration/loss metrics.
+
+- [ ] **Condition binning** — bucket sessions and maneuvers by environmental conditions
+      (TWS bands, wave state) so benchmarks compare apples-to-apples. Configurable bins
+      at the co-op level.
+
+- [ ] **Fleet benchmark engine** — compute anonymous aggregate statistics (median, 10th/25th/75th/90th
+      percentiles) per maneuver type per condition bin across all contributing co-op boats.
+      Enforce minimum 4-boat threshold per bin; return "insufficient data" below threshold.
+      Exclude embargoed sessions until embargo lifts.
+
+- [ ] **Percentile Heatmap dashboard** — single-screen visualization showing the boat's
+      performance in every key maneuver vs the fleet distribution. Columns: maneuver,
+      fleet 10th %, fleet median, fleet 90th %, your result, your percentile. Color-coded:
+      green (top 25%), yellow (middle 50%), red (bottom 25%). The "where am I losing time?"
+      view that makes the co-op addictive.
+
+- [ ] **Maneuver detail drilldown** — click any row in the heatmap to see historical trend
+      (how your percentile has changed over time), per-session breakdown, and condition
+      scatter plots. Own-boat data only; no cross-boat comparison at this level.
+
+- [ ] **Benchmark API** — API endpoints serving benchmark data for the requesting boat only.
+      Rate-limited and audit-logged per Section 12. No endpoint returns per-boat breakdowns
+      or allows correlation of benchmark positions with individual boats.
+
 ---
 
 ## Completed
@@ -149,9 +178,9 @@ Checked items are complete.
 ### Licensing & governance
 - [x] AGPLv3 software license (`LICENSE`)
 - [x] Data licensing policy (`docs/data-licensing.md`) — 13-section policy covering data
-      ownership, co-op sharing model, governance, crew access, retention/deletion, cross-co-op
-      boundaries, non-member protections, AI/ML rights, commercial use, tide/current data,
-      and technical requirements
+      ownership, co-op sharing model, anonymous fleet benchmarking, governance, crew access,
+      retention/deletion, cross-co-op boundaries, non-member protections, AI/ML rights,
+      commercial use, tide/current data, and technical requirements
 - [x] Co-op charter template (`docs/co-op-charter-template.md`) — fillable template for
       individual co-ops to define mission, membership, governance, active agreements, and
       fleet-specific rules
