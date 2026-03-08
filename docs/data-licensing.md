@@ -14,6 +14,17 @@
   models or selling data) require a supermajority or unanimous vote.
 - **Easy exit.** You can leave anytime. Your data stays in the co-op but becomes
   permanently anonymous ("Boat X").
+- **No gambling.** Co-op data may not be used for betting or wagering, period.
+- **Your email is protected.** Email addresses used for co-op membership are PII
+  with the same deletion rights as audio and photos.
+- **Biometrics stay separate.** Heart rate, fatigue, and other body data require
+  their own explicit consent — completely independent of instrument data sharing.
+- **You can always export.** Every boat can export all of its own data in open
+  formats (CSV, GPX, JSON) at any time. No lock-in.
+- **Not for protest hearings.** Co-op data cannot be used as evidence in racing
+  protests or redress hearings.
+- **Seasonal controls.** You can time-delay sharing — race during the series,
+  share after it ends.
 - **Safety first.** This data is for performance analysis, not navigation. Don't
   hit a rock because of a shared log.
 
@@ -87,6 +98,44 @@ Photos captured as part of session notes, on-board cameras, or image-based
 detection (e.g., sail shape analysis) are owned by the boat and are **boat-private
 by default**. Photos that contain identifiable people are PII — the same deletion
 and anonymization rights that apply to audio (above) apply to identifiable photos.
+
+### Email addresses
+
+Email addresses provided for co-op membership (e.g., in the boat card's
+`owner_email` field) are **personally identifiable information (PII)**. Email
+addresses are:
+
+- **Required for co-op membership** — enables out-of-band communication for
+  votes, admin transfers, and emergencies
+- **Optional for standalone use** — a boat running Helm Log without co-op
+  membership is not required to provide an email
+- **Visible only to co-op admins** by default — member email addresses are not
+  shared with other co-op members unless the co-op charter specifies otherwise
+- Subject to the same **deletion and anonymization rights** as other PII — on
+  departure or deletion, a boat's email is scrubbed from all membership records,
+  revocation records, and any other co-op documents held by other members' Pis
+
+### Biometric and physiological data
+
+If Helm Log is extended to capture **biometric data** — heart rate, crew fatigue
+metrics, sleep data, stress indicators, or any other physiological measurements
+from wearable sensors — the following rules apply:
+
+- Biometric data is **PII owned by the individual crew member**, not the boat
+- Biometric data requires **explicit, per-person consent** separate from any
+  co-op membership or instrument data sharing agreement. Consenting to share
+  instrument data does not consent to share biometric data
+- Biometric data is **never shared with the co-op** by default — it is
+  boat-private and person-private
+- Biometric data may **not be used in crew selection, contract negotiations,
+  or any personnel decisions**. This mirrors protections established in the
+  NFL (Article 55 of the 2020 CBA) and NBA (2023 CBA) collective bargaining
+  agreements, which prohibit using athlete biometric data in contract
+  negotiations under penalty of fine
+- Any crew member may **revoke biometric consent and request deletion** at any
+  time, independent of their crew membership status
+- Coaches with delegated access may **not** access biometric data unless
+  separately authorized by the individual crew member (not just the boat owner)
 
 ### Notes and annotations
 
@@ -258,6 +307,30 @@ with:
 Explicit sharing is per-boat, revocable at any time, and does not extend to the
 broader co-op.
 
+### Temporal sharing controls
+
+A boat may apply a **sharing delay** to sessions, making them available to the
+co-op only after a specified period. This allows boats to share data
+reciprocally while protecting competitive advantage during an active series:
+
+- **Immediate sharing** (default): session data is available to the co-op as
+  soon as it is marked as shared
+- **Delayed sharing**: session data is embargoed for a boat-specified duration
+  (e.g., "share 7 days after session" or "share after series ends"). During
+  the embargo, the session is visible in the co-op session list as "pending"
+  but track and instrument data are not accessible
+- **Seasonal sharing**: a boat may set a blanket policy (e.g., "share all
+  sessions after the last race of the series") that applies to all sessions
+  within a date range
+
+Delayed sessions **count toward the contribution threshold** — a boat with
+delayed-but-committed sessions is fulfilling its reciprocal obligation, just
+on a time delay.
+
+Elite cycling teams on Strava routinely hide power and heart rate data during
+competition but share freely in the off-season. This feature acknowledges the
+same competitive dynamic in one-design sailing.
+
 ### Contribution threshold
 
 To join the co-op and access co-op data, a boat must share **at least one race
@@ -308,18 +381,48 @@ admins are subject to the same voting rules as any other member.
 
 #### Admin selection
 
-- During **bootstrap phase** (fewer than 5 boats), the co-op founder serves as
-  admin
-- Once the co-op exits bootstrap, admins are **elected by simple majority** of
-  boat representatives
-- Admin terms last **one year**, with no term limits. Admins may be re-elected
-- There may be more than one admin
+- The co-op founder designates the **initial admin boats** (2–3 boats,
+  including themselves) at co-op creation
+- Admin authority is distributed: administrative actions (approving members,
+  signing revocations) require signatures from a **majority of admin boats**
+  (e.g., 2-of-3). This eliminates single points of failure — the co-op
+  survives the loss of any single admin's Pi
+- Admin rotation is handled by **charter amendment**: the existing admins
+  (meeting threshold) sign an amendment that adds or removes an admin boat.
+  No private key material changes hands
+- There is no fixed admin term — admins serve until replaced by charter
+  amendment or removed by member vote
 
 #### Admin removal
 
 An admin can be removed by the same **supermajority (2/3) vote** used for
 expulsion. Admin removal does not affect the person's co-op membership — they
-remain a member, just no longer an admin.
+remain a member, just no longer an admin. The remaining admins sign a charter
+amendment to update the admin boat list.
+
+### Active and inactive members
+
+In a seasonal sport, requiring votes from boats that are hauled out for the
+winter creates deadlock. To prevent this:
+
+- **Active**: a boat that has sent a heartbeat (an automated presence signal)
+  within the co-op's configured inactivity threshold (default: 60 days).
+  Active boats are counted in the quorum denominator for all votes
+- **Inactive**: a boat with no heartbeat in 60+ days. Inactive boats are
+  **excluded from the quorum denominator** for standard votes (2/3
+  supermajority) but retain full data access, co-op membership, and the
+  right to vote if they choose to
+- **Unanimous votes** (e.g., current model sharing per Section 8) require
+  all **active** members. Inactive members are excluded from the denominator
+  but may opt back in by sending a heartbeat before the vote closes
+
+Example: 7-boat co-op, 2 boats inactive for winter haul-out.
+- 2/3 supermajority vote: need 4 of 5 active boats (not 5 of 7)
+- Unanimous vote: need 5 of 5 active boats
+
+A boat that comes back online and sends a heartbeat immediately becomes
+active again and is included in future votes. The inactivity threshold is
+set in the co-op charter and may be adjusted by majority vote.
 
 ### Joining
 
@@ -512,6 +615,25 @@ During the grace period:
   (those comparisons are anonymized, not removed)
 - Aggregated or statistical data that cannot be attributed to a specific boat
 - YouTube videos themselves (hosted on YouTube, not controlled by the logger)
+
+### Data portability
+
+Every boat has the **unconditional right to export all of its own data** at any
+time in open, non-proprietary formats:
+
+- **Instrument data and tracks**: CSV, GPX, JSON
+- **Session metadata and race results**: JSON
+- **Audio recordings**: original WAV files
+- **Transcripts**: plain text or JSON with timestamps
+
+This right exists regardless of co-op membership status, platform version, or
+any other condition. No technical mechanism, API change, or platform update may
+restrict a boat's ability to export its own data. This guarantee prevents the
+platform lock-in pattern seen in services like Strava, where API policy changes
+have restricted athletes' ability to use their own data with third-party tools.
+
+A boat's own data is always the boat's own data. The platform is a tool, not a
+custodian.
 
 ---
 
@@ -720,6 +842,26 @@ approval.
 This principle applies regardless of who performs the technical work of building
 analytics, models, or products on top of co-op data.
 
+### Gambling and wagering prohibition
+
+Co-op data, derivatives, models, and any information obtained through co-op
+membership may **not** be used in connection with **betting, wagering, gambling,
+fantasy sports, or prediction markets** of any kind. This prohibition is
+**absolute and cannot be overridden by co-op vote**.
+
+This blanket prohibition exists because:
+
+- Betting markets in sailing are growing (SailGP, match racing, offshore events).
+  MLB's exclusive data deal with Sportradar is worth hundreds of millions and is
+  driven almost entirely by sports betting demand. Once co-op data has gambling
+  value, the incentive structure changes in ways that are incompatible with a
+  reciprocal sharing cooperative
+- The co-op exists to make everyone faster, not to create an information asymmetry
+  that benefits bettors
+- Individual boats retain full rights to their own data (Section 1) and may use
+  it however they wish — this prohibition applies only to co-op data and
+  derivatives
+
 ### Revenue distribution
 
 If the co-op votes to commercialize data or derivatives, revenue is distributed to
@@ -772,6 +914,31 @@ The co-op does not guarantee continuous access to shared data. Data may become
 unavailable due to member departures, deletions, technical failures, or co-op
 dissolution.
 
+### Protest hearings and dispute resolution
+
+Co-op data — including GPS tracks, instrument telemetry, and derived metrics
+from **any boat other than your own** — may **not** be submitted as evidence in
+racing protest hearings, redress requests, or any formal dispute resolution
+process governed by the Racing Rules of Sailing.
+
+A boat may use **its own data** in a protest (it's their data — they can do
+what they want with it). But using another co-op member's shared data against
+them in a hearing would fundamentally undermine the trust required for
+reciprocal sharing. If members feared their GPS tracks could be used to
+penalize them in a protest, no one would share.
+
+This restriction applies to:
+
+- Formal protests under RRS Part 5
+- Redress hearings
+- Measurement protests
+- Any proceeding before a protest committee or appeals body
+- Class association disciplinary proceedings
+
+This restriction does **not** prevent informal post-race discussion or debrief
+using co-op data — "hey, look at where we both were at the mark" is fine.
+Submitting that data to a protest committee is not.
+
 ---
 
 ## 12. Technical Requirements
@@ -812,6 +979,15 @@ codebase:
 | Pre-join disclosure | Present all active commercial, ML, current model, and cross-co-op agreements to prospective members before admission |
 | Per-event co-op assignment | When a boat belongs to multiple co-ops, require co-op selection per session before data is shared; prevent same session from being contributed to multiple co-ops |
 | Dual membership tracking | Record multi-co-op memberships; notify both co-ops; enforce co-op-level dual membership policies |
+| Email PII handling | Scrub owner email from membership/revocation records on departure; admin-only visibility by default |
+| Biometric consent tracking | Per-person, per-data-type consent records for biometric data; independent of instrument data sharing |
+| Biometric data isolation | Store biometric data separately from instrument data; enforce per-person access controls |
+| Temporal sharing controls | Per-session sharing delay (immediate, duration-based, or date-based embargo); embargo state visible in co-op session list |
+| Data portability export | Unconditional export of all own-boat data in CSV, GPX, JSON, WAV formats; no restrictions on frequency or volume |
+| Gambling prohibition enforcement | Block co-op data API access for any purpose flagged as betting/wagering; include prohibition in co-op membership agreement |
+| Protest firewall | Technical documentation that co-op data from other boats is inadmissible in protest proceedings; no enforcement mechanism needed (policy-only) |
+| Active/inactive member tracking | Heartbeat-based activity detection; configurable inactivity threshold; automatic quorum denominator adjustment for votes |
+| Multi-admin signing | M-of-N admin boat signatures for membership, revocation, and charter amendment records |
 
 ---
 
@@ -853,3 +1029,4 @@ beyond what the AGPLv3 allows.
 | 2026-03-07 | Rev 11 — OA result import liability on co-op not platform, minimum viable co-op (3 boats) triggers dormancy |
 | 2026-03-07 | Rev 12 — plain English summary at top of document, rate-limiting auto-freeze on anomalous access patterns |
 | 2026-03-07 | Rev 13 — co-op charter template, charter reference in pre-join disclosure |
+| 2026-03-07 | Rev 14 — hardening from cross-sport research (NFL/NBA/MLB/SailGP/Strava/esports): email as PII with admin-only visibility and departure scrubbing; biometric data firewall with per-person consent independent of instrument sharing; temporal/seasonal sharing controls (delayed and embargoed sessions); gambling/betting absolute prohibition; data portability guarantee (anti-lock-in); protest hearing data firewall (other boats' co-op data inadmissible under RRS); active/inactive quorum based on heartbeat to prevent winter deadlock; multi-admin M-of-N signing model replacing single-admin elections |
