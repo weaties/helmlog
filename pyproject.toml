@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Open-source sailing data platform — instrument logging, race debrief, fleet performance"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = { text = "AGPL-3.0-or-later" }
 
 dependencies = [
     # CAN bus

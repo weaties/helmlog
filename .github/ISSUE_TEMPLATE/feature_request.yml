@@ -1,0 +1,43 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: What problem does this solve? What sailing scenario motivates it?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How should this work? Be as specific as you can.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you think about? Why is the proposed solution better?
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: How big is this change?
+      options:
+        - "Small — single file or function"
+        - "Medium — multiple files, one module"
+        - "Large — cross-module or new module"
+        - "Not sure"
+
+  - type: checkboxes
+    id: data-policy
+    attributes:
+      label: Data policy
+      options:
+        - label: This feature touches user data (storage, export, PII, or co-op sharing) and should be reviewed against `docs/data-licensing.md`

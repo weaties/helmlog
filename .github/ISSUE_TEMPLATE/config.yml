@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Data Licensing Policy
+    url: https://github.com/weaties/helmlog/blob/main/docs/data-licensing.md
+    about: Review the data ownership and privacy policy before working on data-related features

@@ -80,6 +80,26 @@ Use the `/data-license` skill to review changes against the policy.
 - Use `httpx.AsyncClient` with `ASGITransport` for web route tests
 - Mock hardware modules (`audio.py`, `can_reader.py`, `sk_reader.py`, `cameras.py`)
 
+## AI Agent Collaboration
+
+HelmLog is developed with AI coding agents (primarily Claude Code). If you use
+AI agents in your contributions:
+
+- **Co-Authored-By**: Include `Co-Authored-By: <Agent> <noreply@anthropic.com>`
+  in commit messages when an AI agent wrote or substantially modified the code
+- **TDD workflow**: Agents should follow the same TDD cycle as human
+  contributors — write a failing test first, then implement
+- **Human review required**: Schema migrations, auth changes, data deletion
+  logic, and anything touching `storage.py` FK constraints or `auth.py` must
+  have human review regardless of who (or what) wrote the code
+- **Agent-friendly issues**: Well-scoped issues with clear acceptance criteria,
+  test cases, and module boundaries work best for agent-assisted development.
+  The `good first issue` label marks issues suitable for new contributors
+  (human or AI)
+- **Plan before implementing**: For non-trivial changes (new modules,
+  cross-module refactors, schema changes), write a plan or design comment on the
+  issue before coding
+
 ## Skills
 
 Claude Code skills are available for common workflows:
@@ -92,6 +112,28 @@ Claude Code skills are available for common workflows:
 | `/deploy-pi` | Pi deployment reference |
 | `/pr-checklist` | Pre-PR verification checks |
 | `/data-license` | Review changes against the data licensing policy |
+
+## Module Review Guide
+
+Some modules require extra care:
+
+| Module | Risk | Notes |
+|---|---|---|
+| `storage.py` | High | Schema migrations must be backwards-compatible; FK constraints affect cascading deletes |
+| `auth.py` | High | Security-sensitive; changes affect all authenticated endpoints |
+| `main.py` | Medium | Wiring only — no business logic; changes affect startup order |
+| `web.py` | Medium | Large file; check auth decorators and rate limits on new endpoints |
+| `export.py` | Medium | Data leaves the system; check GPS precision and data policy compliance |
+| `transcribe.py` | Low | Isolated; mock-friendly |
+| `cameras.py`, `sk_reader.py`, `can_reader.py` | Low | Hardware-isolated; well-contained |
+| `nmea2000.py`, `races.py`, `polar.py` | Low | Pure logic; easy to test |
+
+## Review Process
+
+- PRs require CI to pass (tests, lint, format) and at least one maintainer approval
+- Expect a response within a few days; complex changes may take longer
+- Maintainers may request changes, ask questions, or suggest alternatives
+- Once approved, the maintainer will merge via squash-and-merge
 
 ## License
 
