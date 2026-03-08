@@ -25,24 +25,38 @@ boat's cryptographic identity. The private key never leaves the Pi.
 ~/.helmlog/identity/
 ├── boat.key          # Ed25519 private key (mode 0600)
 ├── boat.pub          # Ed25519 public key
-└── boat.json         # { "pub": "<base64>", "sail_number": "69", "name": "Javelina" }
+└── boat.json         # { "pub": "<base64>", "sail_number": "69",
+                      #   "name": "Javelina", "owner_email": "skipper@example.com" }
 ```
 
 The `boat.json` is the **boat card** — a self-signed document that associates
-the public key with human-readable metadata. It's freely shareable.
+the public key with human-readable metadata. It's freely shareable. The
+`owner_email` field is **required for co-op membership** (enables out-of-band
+communication for votes, admin transfers, and emergencies) but **optional for
+standalone use**.
+
+### Ed25519 performance characteristics
+
+- Signature size: 64 bytes
+- Pi 4 verification speed: ~20,000 signatures/second
+- Even querying 50 peers simultaneously for a race replay, signature
+  verification overhead is negligible (<5 ms)
 
 ### Co-op identity
 
-A co-op is created by an admin who generates a **co-op keypair**. The co-op's
-public key is its identity. The private key is held by the current lead admin
-(and can be transferred via a signed handoff message).
+A co-op is identified by a **co-op public key**. Rather than a single admin
+holding a private key (single point of failure), the co-op uses **multi-admin
+signing**: membership records are valid when signed by M of N designated admin
+boats. This allows the co-op to survive the loss of any single Pi without
+complex key-sharding ceremonies.
+
+The founding admin designates 2-3 admin boats at creation. A membership record
+or revocation requires signatures from a majority of admins (e.g., 2-of-3).
 
 ```
 ~/.helmlog/co-ops/<co-op-id>/
-├── co-op.key         # Ed25519 private key (admin only, mode 0600)
-├── co-op.pub         # Ed25519 public key
-├── charter.json      # Signed charter metadata
-└── members/          # Signed membership records
+├── charter.json      # Signed charter metadata (includes admin boat list)
+└── members/          # Signed membership records (multi-sig)
     ├── <boat-pubkey-fingerprint>.json
     └── ...
 ```
@@ -62,21 +76,31 @@ public key is its identity. The private key is held by the current lead admin
 
 The founding admin's Pi:
 
-1. Generates co-op keypair
-2. Creates and signs a **charter record**:
+1. Designates the initial admin boats (2-3 boats, including themselves)
+2. Creates a **charter record** signed by all founding admins:
    ```json
    {
      "type": "charter",
-     "co_op_pub": "<base64>",
+     "co_op_id": "<fingerprint>",
      "name": "Puget Sound J/105",
      "area": ["Elliott Bay", "Central Puget Sound"],
      "created_at": "2026-04-01T00:00:00Z",
-     "admin_boat_pub": "<base64>",
+     "admin_boats": [
+       { "boat_pub": "<base64>", "name": "Javelina" },
+       { "boat_pub": "<base64>", "name": "Blackhawk" },
+       { "boat_pub": "<base64>", "name": "Surfer Girl" }
+     ],
+     "admin_threshold": 2,
+     "heartbeat_inactive_days": 60,
      "charter_url": "https://...",
-     "sig": "<base64>"
+     "admin_sigs": [
+       { "admin_boat_pub": "<base64>", "sig": "<base64>" },
+       { "admin_boat_pub": "<base64>", "sig": "<base64>" },
+       { "admin_boat_pub": "<base64>", "sig": "<base64>" }
+     ]
    }
    ```
-3. Signs their own membership record (self-admission)
+3. Admins sign membership records for each other (multi-sig bootstrap)
 
 ### Joining a co-op
 
@@ -98,39 +122,48 @@ Joining boat                          Admin's Pi
 
 ### Membership record
 
-A membership record is signed by the **co-op admin key** and proves that a
-boat is an authorized member:
+A membership record is signed by a **majority of admin boats** (M-of-N
+multi-sig) and proves that a boat is an authorized member:
 
 ```json
 {
   "type": "membership",
-  "co_op_pub": "<base64>",
+  "co_op_id": "<fingerprint>",
   "boat_pub": "<base64>",
   "sail_number": "69",
   "boat_name": "Javelina",
+  "owner_email": "skipper@example.com",
   "role": "member",
   "joined_at": "2026-04-15T00:00:00Z",
   "expires_at": null,
-  "admin_sig": "<base64>"
+  "admin_sigs": [
+    { "admin_boat_pub": "<base64>", "sig": "<base64>" },
+    { "admin_boat_pub": "<base64>", "sig": "<base64>" }
+  ]
 }
 ```
 
-Any Pi can verify this record using the co-op's public key — no network call
-required.
+Any Pi can verify this record by checking that the required number of admin
+signatures are present and valid — no network call required. The admin boat
+list is in the charter record.
 
 ### Revoking membership (departure or expulsion)
 
-The admin signs a **revocation record**:
+The admins sign a **revocation record** (M-of-N, same threshold as
+membership):
 
 ```json
 {
   "type": "revocation",
-  "co_op_pub": "<base64>",
+  "co_op_id": "<fingerprint>",
   "boat_pub": "<base64>",
   "reason": "voluntary_departure",
   "effective_at": "2026-09-01T00:00:00Z",
   "grace_until": "2026-10-01T00:00:00Z",
-  "admin_sig": "<base64>"
+  "admin_sigs": [
+    { "admin_boat_pub": "<base64>", "sig": "<base64>" },
+    { "admin_boat_pub": "<base64>", "sig": "<base64>" }
+  ]
 }
 ```
 
@@ -138,24 +171,30 @@ During the 30-day grace period, the departing boat's data is still accessible
 but marked as pending departure. After `grace_until`, other Pis stop querying
 that boat and purge any cached data.
 
-### Admin transfer
+### Admin rotation
 
-A signed handoff message transfers the co-op private key to a new admin:
+Since admin authority is distributed across M-of-N admin boats, rotating
+an admin is straightforward — no private key transfer needed. The existing
+admins (meeting threshold) sign a **charter amendment** that updates the
+admin boat list:
 
 ```json
 {
-  "type": "admin_transfer",
-  "co_op_pub": "<base64>",
-  "from_boat_pub": "<base64>",
-  "to_boat_pub": "<base64>",
+  "type": "charter_amendment",
+  "co_op_id": "<fingerprint>",
+  "remove_admin": "<boat_pub to remove>",
+  "add_admin": "<boat_pub to add>",
   "effective_at": "2027-04-01T00:00:00Z",
-  "from_sig": "<base64>"
+  "admin_sigs": [
+    { "admin_boat_pub": "<base64>", "sig": "<base64>" },
+    { "admin_boat_pub": "<base64>", "sig": "<base64>" }
+  ]
 }
 ```
 
-The new admin receives the co-op private key via a secure channel (in-person
-USB transfer, or encrypted over Tailscale). The transfer record is distributed
-to all members so they know who can sign new membership records.
+The amendment is distributed to all members. No key material changes hands.
+If a single admin's Pi is lost, the remaining admins still meet threshold
+and can sign a replacement into the admin set.
 
 ---
 
@@ -243,6 +282,24 @@ GET  /co-op/{co_op_id}/tombstones?after=<iso>
      to stay in sync on deletions.
 ```
 
+### Heartbeat & presence
+
+```
+GET  /co-op/{co_op_id}/heartbeat
+     Lightweight presence check. Returns:
+     {
+       "timestamp": "2026-03-07T19:00:00Z",
+       "status": "online",
+       "last_gps_fix": "2026-03-07T18:55:00Z",
+       "sig": "<base64>"
+     }
+
+     Pis poll this to determine who is "on the water" vs "in the slip"
+     without pulling heavy session lists. Also used to determine
+     active vs inactive membership status for quorum calculations
+     (see Section 3.1).
+```
+
 ### Audit
 
 ```
@@ -250,6 +307,27 @@ GET  /co-op/{co_op_id}/audit-log
      This boat's audit log of co-op data access events. Admin-only.
      Returns: who accessed what session, when, from which boat.
 ```
+
+### 3.1. Active vs Inactive Members and Quorum
+
+In a seasonal sport, "unanimous" is a recipe for deadlock when a boat is
+hauled out for the winter. The heartbeat endpoint solves this:
+
+- **Active**: last heartbeat within `heartbeat_inactive_days` (charter
+  default: 60 days). Counted in quorum denominator.
+- **Inactive**: no heartbeat in 60+ days. **Excluded from quorum
+  denominator** for standard votes (2/3 supermajority) but retains full
+  data access and co-op membership.
+- **Unanimous votes** (e.g., current model sharing): still require all
+  **active** members. Inactive members are excluded from the denominator
+  but can opt back in by sending a heartbeat.
+
+Example: 7-boat co-op, 2 boats inactive for winter.
+- 2/3 supermajority vote: need 4 of 5 active boats (not 5 of 7)
+- Unanimous vote: need 5 of 5 active boats
+
+A boat that comes back online and sends a heartbeat immediately becomes
+active again and is included in future votes.
 
 ---
 
@@ -268,12 +346,28 @@ The signature covers: `METHOD /path timestamp`. The receiving Pi:
 
 1. Looks up the boat's public key by fingerprint
 2. Verifies the signature
-3. Checks that the timestamp is within 5 minutes of now (replay protection)
+3. Checks that the timestamp is within the allowed window (replay protection)
 4. Checks that the boat holds a valid membership record for the requested
    co-op
 5. Logs the access to the audit trail
 
 No OAuth, no tokens to refresh, no central auth server. Just signatures.
+
+### Clock skew handling
+
+Raspberry Pis without a battery-backed RTC (Real-Time Clock) lose time when
+powered down at the dock without internet. The protocol must tolerate this:
+
+- **Default window**: 5 minutes (when both Pis have NTP sync)
+- **Relaxed window**: 20 minutes (if either Pi's last NTP sync is >1 hour
+  old, indicated by a `X-HelmLog-NTP-Age` header)
+- **Peer clock slew**: on startup, if a Pi lacks NTP sync, it queries
+  heartbeat timestamps from 3+ Tailscale peers and uses the median as a
+  reference to slew its local clock
+- The signature is always valid if the cryptographic verification passes;
+  the timestamp window is a replay-protection heuristic, not an auth gate.
+  A valid signature with an out-of-window timestamp logs a warning but does
+  not reject the request — it just flags it in the audit trail
 
 ---
 
@@ -597,29 +691,57 @@ IPs have changed.
 
 ---
 
-## 14. Open Questions
+## 14. Resolved Design Decisions
 
-1. **Tailscale dependency**: Should the federation protocol work without
-   Tailscale (e.g., over plain WireGuard or even the public internet)?
-   Tailscale is convenient but creates a vendor dependency.
+Decisions reached through PR review and external feedback:
 
-2. **Co-op key custody**: The co-op private key is a single point of
-   failure. If the admin's Pi dies, the co-op can't sign new memberships.
-   Options: key escrow with a second admin, Shamir secret sharing among
-   N members, or a re-keying protocol where members vote to accept a new
-   co-op key.
+1. **Tailscale is the transport layer for Phase 1-3.** The protocol is
+   transport-agnostic (just signed HTTPS requests), but Tailscale provides
+   free NAT traversal, E2E encryption, and stable addressing. The "cost of
+   entry" for a boat to join a co-op includes a Tailscale node. If Tailscale
+   becomes a problem, swapping to plain WireGuard or a relay is a transport
+   change, not a protocol change.
 
-3. **Offline voting**: If a proposal needs unanimous consent and one boat
-   is offline for the winter, how long do you wait? The charter should
-   define a voting window (e.g., 30 days) and quorum rules.
+2. **Multi-admin signing replaces single co-op key.** No single point of
+   failure. Membership records require M-of-N admin boat signatures. The
+   co-op survives the loss of any single Pi. See updated Sections 1 and 2.
 
-4. **Helmlog.org portal**: The path-based URL structure
-   (`helmlog.org/<co-op>/<boat>`) implies a web portal. Should that portal
-   be a thin proxy that routes to Pis over Tailscale, or a static site
-   that links to each Pi's Tailscale Funnel URL? The former requires a
-   server; the latter is just a directory.
+3. **Active/inactive quorum based on heartbeat.** Boats without a heartbeat
+   in 60+ days are excluded from the quorum denominator. Prevents winter
+   haul-outs from deadlocking votes. See Section 3.1.
 
-5. **Mobile access**: Crew members without Tailscale access need a way to
-   view co-op data. Tailscale Funnel exposes each Pi to the public internet
-   — should the co-op view work over Funnel, or is Tailscale membership
-   required for co-op features?
+4. **Helmlog.org is a static directory + lightweight API gateway.** Static
+   site on Cloudflare Pages (free), API gateway on Cloudflare Workers (free
+   tier: 100K req/day). Gateway is a stateless router — maintains a registry
+   of co-ops and boat endpoints in Cloudflare KV, proxies requests to Pis
+   via Tailscale Funnel URLs. DDoS protection included. Registry entries
+   authenticated via Ed25519 signed boat cards. Zero sailing data at rest.
+
+5. **Mobile access via the gateway.** Crew members hit
+   `helmlog.org/<co-op>/<boat>` in a browser. The Cloudflare Worker proxies
+   to the Pi's Tailscale Funnel URL. The Pi handles auth via the existing
+   magic-link flow. No app install, no Tailscale on the phone.
+
+6. **Owner email required for co-op membership.** The boat card includes an
+   `owner_email` field (required for co-op, optional for standalone). Enables
+   out-of-band communication for votes, admin transfers, and emergencies.
+
+7. **Clock skew tolerance for Pis without RTC.** Default 5-minute window
+   relaxes to 20 minutes when NTP sync is stale. Peer clock slew on startup
+   via heartbeat timestamps. See Section 4.
+
+---
+
+## 15. Open Questions
+
+1. **Email visibility within co-op**: Should member emails be visible to
+   all co-op members, or admin-only? Charter should specify.
+
+2. **Admin threshold for small co-ops**: With only 3 boats, 2-of-3 admin
+   threshold means every admin is critical. Should the minimum co-op size
+   for multi-admin be 4+ boats, with single-admin + backup key for 3-boat
+   co-ops?
+
+3. **Heartbeat granularity**: Should "on the water" vs "in the slip" be
+   inferred from GPS fix recency, or should the boat owner explicitly set
+   a status?
