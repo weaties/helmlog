@@ -57,6 +57,25 @@ _NOAA_PREDICTIONS_URL = "https://api.tidesandcurrents.noaa.gov/api/prod/datagett
 # ---------------------------------------------------------------------------
 
 
+def external_data_enabled() -> bool:
+    """Check if external data fetching is enabled (#209).
+
+    Defaults to True. Set EXTERNAL_DATA_ENABLED=false to disable.
+    When disabled, GPS position is not sent to external APIs.
+    """
+    import os
+
+    return os.environ.get("EXTERNAL_DATA_ENABLED", "true").lower() != "false"
+
+
+def _reduce_precision(val: float, decimals: int = 2) -> float:
+    """Reduce GPS coordinate precision for external API calls (#209).
+
+    0.01° ≈ 1.1 km — sufficient for weather/tide lookups.
+    """
+    return round(val, decimals)
+
+
 class ExternalFetcher:
     """Fetches external environmental data from web APIs."""
 
@@ -261,11 +280,14 @@ class ExternalFetcher:
             A WeatherReading, or None if the request fails or the response
             cannot be parsed.
         """
-        logger.debug("fetch_weather: lat={:.4f} lon={:.4f} dt={}", lat, lon, dt)
+        # Reduce GPS precision for external API calls (#209)
+        lat = _reduce_precision(lat)
+        lon = _reduce_precision(lon)
+        logger.debug("fetch_weather: lat={:.2f} lon={:.2f} dt={}", lat, lon, dt)
 
         params: dict[str, Any] = {
-            "latitude": round(lat, 4),
-            "longitude": round(lon, 4),
+            "latitude": lat,
+            "longitude": lon,
             "current": "wind_speed_10m,wind_direction_10m,temperature_2m,surface_pressure",
             "wind_speed_unit": "kn",
             "timezone": "UTC",

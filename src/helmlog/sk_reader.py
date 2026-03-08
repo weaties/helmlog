@@ -165,6 +165,13 @@ def process_delta(raw: str, buf: dict[str, float]) -> list[PGNRecord]:
         return []
 
     records: list[PGNRecord] = []
+
+    # Reject other-vessel data — only process self-vessel deltas (#208)
+    context: str = delta.get("context", "vessels.self")
+    if context and context != "vessels.self" and not context.endswith(".self"):
+        logger.warning("SK: rejecting non-self delta (context={!r})", context)
+        return []
+
     for update in delta.get("updates", []):
         ts_str: str = update.get("timestamp", "")
         try:
@@ -176,6 +183,11 @@ def process_delta(raw: str, buf: dict[str, float]) -> list[PGNRecord]:
             path: str = entry.get("path", "")
             value: Any = entry.get("value")
             if value is None:
+                continue
+
+            # Block AIS-related paths (#208)
+            if "ais" in path.lower() or path.startswith("vessels.urn:"):
+                logger.warning("SK: rejecting AIS/other-vessel path {!r}", path)
                 continue
 
             if path == "navigation.position":

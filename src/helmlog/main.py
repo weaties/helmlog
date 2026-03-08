@@ -200,11 +200,17 @@ async def _run() -> None:
     if cameras_str:
         await storage.seed_cameras_from_env(cameras_str)
 
+    from helmlog.external import external_data_enabled
     from helmlog.monitor import monitor_loop
 
     async with ExternalFetcher() as fetcher:
-        weather_task = asyncio.create_task(_weather_loop(storage, fetcher))
-        tide_task = asyncio.create_task(_tide_loop(storage, fetcher))
+        if external_data_enabled():
+            weather_task = asyncio.create_task(_weather_loop(storage, fetcher))
+            tide_task = asyncio.create_task(_tide_loop(storage, fetcher))
+        else:
+            logger.info("External data fetching disabled (EXTERNAL_DATA_ENABLED=false)")
+            weather_task = asyncio.create_task(asyncio.sleep(1e9))  # no-op placeholder
+            tide_task = asyncio.create_task(asyncio.sleep(1e9))
         web_task = asyncio.create_task(_web_loop(storage, recorder, audio_config))
         monitor_task = asyncio.create_task(monitor_loop())
         try:

@@ -71,7 +71,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 25
+_CURRENT_VERSION: int = 26
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -461,6 +461,104 @@ _MIGRATIONS: dict[int, str] = {
         ALTER TABLE races ADD COLUMN source TEXT NOT NULL DEFAULT 'live';
         ALTER TABLE races ADD COLUMN source_id TEXT;
         ALTER TABLE races ADD COLUMN imported_at TEXT;
+    """,
+    26: """
+        -- Data-policy compliance (#194–#211)
+
+        -- Crew consent tracking (#202)
+        CREATE TABLE IF NOT EXISTS crew_consents (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            sailor_name  TEXT    NOT NULL,
+            consent_type TEXT    NOT NULL,
+            granted      INTEGER NOT NULL DEFAULT 1,
+            granted_at   TEXT    NOT NULL,
+            revoked_at   TEXT,
+            UNIQUE(sailor_name, consent_type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_crew_consents_sailor ON crew_consents(sailor_name);
+
+        -- Transcript speaker anonymization map (#197)
+        ALTER TABLE transcripts ADD COLUMN speaker_anon_map TEXT;
+
+        -- FK cascade fixes (#206): recreate tables with proper ON DELETE behavior.
+        -- race_results.boat_id → ON DELETE SET NULL
+        CREATE TABLE IF NOT EXISTS race_results_new (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            race_id     INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+            place       INTEGER NOT NULL,
+            boat_id     INTEGER REFERENCES boats(id) ON DELETE SET NULL,
+            finish_time TEXT,
+            dnf         INTEGER NOT NULL DEFAULT 0,
+            dns         INTEGER NOT NULL DEFAULT 0,
+            notes       TEXT,
+            created_at  TEXT NOT NULL,
+            UNIQUE(race_id, place),
+            UNIQUE(race_id, boat_id)
+        );
+        INSERT INTO race_results_new
+            SELECT id, race_id, place, boat_id, finish_time, dnf, dns, notes, created_at
+            FROM race_results;
+        DROP TABLE race_results;
+        ALTER TABLE race_results_new RENAME TO race_results;
+        CREATE INDEX IF NOT EXISTS idx_race_results_race_id ON race_results(race_id);
+
+        -- invite_tokens.created_by → ON DELETE SET NULL
+        CREATE TABLE IF NOT EXISTS invite_tokens_new (
+            token      TEXT PRIMARY KEY,
+            email      TEXT NOT NULL,
+            role       TEXT NOT NULL,
+            created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            expires_at TEXT NOT NULL,
+            used_at    TEXT
+        );
+        INSERT INTO invite_tokens_new
+            SELECT token, email, role, created_by, expires_at, used_at
+            FROM invite_tokens;
+        DROP TABLE invite_tokens;
+        ALTER TABLE invite_tokens_new RENAME TO invite_tokens;
+
+        -- session_notes.user_id → ON DELETE SET NULL
+        CREATE TABLE IF NOT EXISTS session_notes_new (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            race_id            INTEGER REFERENCES races(id) ON DELETE CASCADE,
+            audio_session_id   INTEGER REFERENCES audio_sessions(id) ON DELETE CASCADE,
+            ts                 TEXT NOT NULL,
+            note_type          TEXT NOT NULL DEFAULT 'text',
+            body               TEXT,
+            photo_path         TEXT,
+            created_at         TEXT NOT NULL,
+            user_id            INTEGER REFERENCES users(id) ON DELETE SET NULL
+        );
+        INSERT INTO session_notes_new
+            SELECT id, race_id, audio_session_id, ts, note_type, body,
+                   photo_path, created_at, user_id
+            FROM session_notes;
+        DROP TABLE session_notes;
+        ALTER TABLE session_notes_new RENAME TO session_notes;
+        CREATE INDEX IF NOT EXISTS idx_session_notes_race_id ON session_notes(race_id);
+        CREATE INDEX IF NOT EXISTS idx_session_notes_ts ON session_notes(ts);
+
+        -- race_videos.user_id → ON DELETE SET NULL
+        CREATE TABLE IF NOT EXISTS race_videos_new (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            race_id          INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+            youtube_url      TEXT NOT NULL,
+            video_id         TEXT NOT NULL,
+            label            TEXT NOT NULL DEFAULT '',
+            sync_utc         TEXT NOT NULL,
+            sync_offset_s    REAL NOT NULL DEFAULT 0,
+            duration_s       REAL,
+            title            TEXT NOT NULL DEFAULT '',
+            created_at       TEXT NOT NULL,
+            user_id          INTEGER REFERENCES users(id) ON DELETE SET NULL
+        );
+        INSERT INTO race_videos_new
+            SELECT id, race_id, youtube_url, video_id, label, sync_utc,
+                   sync_offset_s, duration_s, title, created_at, user_id
+            FROM race_videos;
+        DROP TABLE race_videos;
+        ALTER TABLE race_videos_new RENAME TO race_videos;
+        CREATE INDEX IF NOT EXISTS idx_race_videos_race_id ON race_videos(race_id);
     """,
 }
 
@@ -2819,6 +2917,238 @@ class Storage:
         )
         rows = await cur.fetchall()
         return [dict(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Session deletion (#194)
+    # ------------------------------------------------------------------
+
+    async def delete_race_session(self, session_id: int) -> list[str]:
+        """Delete a race/practice session and all related data.
+
+        Returns a list of file paths (audio WAV, photos) that should be
+        deleted from disk by the caller.
+        """
+        db = self._conn()
+        files: list[str] = []
+
+        # Collect audio file paths
+        cur = await db.execute(
+            "SELECT file_path FROM audio_sessions WHERE race_id = ?", (session_id,)
+        )
+        for row in await cur.fetchall():
+            if row["file_path"]:
+                files.append(row["file_path"])
+
+        # Collect photo file paths from notes
+        cur = await db.execute(
+            "SELECT photo_path FROM session_notes WHERE race_id = ? AND photo_path IS NOT NULL",
+            (session_id,),
+        )
+        for row in await cur.fetchall():
+            if row["photo_path"]:
+                files.append(row["photo_path"])
+
+        # Cascade delete handles: race_crew, race_results, race_sails,
+        # race_videos, session_notes, camera_sessions, session_tags.
+        # audio_sessions → transcripts also cascades.
+        await db.execute("DELETE FROM audio_sessions WHERE race_id = ?", (session_id,))
+
+        # Delete instrument data in the time range of this session
+        cur = await db.execute("SELECT start_utc, end_utc FROM races WHERE id = ?", (session_id,))
+        race_row = await cur.fetchone()
+        if race_row and race_row["end_utc"]:
+            s, e = race_row["start_utc"], race_row["end_utc"]
+            for table in (
+                "headings",
+                "speeds",
+                "depths",
+                "positions",
+                "cogsog",
+                "winds",
+                "environmental",
+            ):
+                await db.execute(
+                    f"DELETE FROM {table} WHERE ts >= ? AND ts <= ?",  # noqa: S608
+                    (s, e),
+                )
+
+        await db.execute("DELETE FROM races WHERE id = ?", (session_id,))
+        await db.commit()
+        logger.info("Session {} deleted (cascade + {} files)", session_id, len(files))
+        return files
+
+    # ------------------------------------------------------------------
+    # Audio deletion (#196)
+    # ------------------------------------------------------------------
+
+    async def delete_audio_session(self, audio_session_id: int) -> str | None:
+        """Delete an audio session and its transcript. Returns the file_path for disk cleanup."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT file_path FROM audio_sessions WHERE id = ?", (audio_session_id,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        file_path: str = row["file_path"]
+        # transcripts cascade via FK
+        await db.execute("DELETE FROM audio_sessions WHERE id = ?", (audio_session_id,))
+        await db.commit()
+        logger.info("Audio session {} deleted", audio_session_id)
+        return file_path
+
+    # ------------------------------------------------------------------
+    # Photo cleanup on note deletion (#205)
+    # ------------------------------------------------------------------
+
+    async def delete_note_with_file(self, note_id: int) -> tuple[bool, str | None]:
+        """Delete a note and return (found, photo_path) for disk cleanup."""
+        db = self._conn()
+        cur = await db.execute("SELECT photo_path FROM session_notes WHERE id = ?", (note_id,))
+        row = await cur.fetchone()
+        if row is None:
+            return False, None
+        photo_path: str | None = row["photo_path"]
+        await db.execute("DELETE FROM session_notes WHERE id = ?", (note_id,))
+        await db.commit()
+        return True, photo_path
+
+    # ------------------------------------------------------------------
+    # User deletion (#195)
+    # ------------------------------------------------------------------
+
+    async def delete_user(self, user_id: int) -> None:
+        """Anonymize and soft-delete a user.
+
+        Replaces email with deleted_<id>@redacted, clears name and avatar,
+        deletes auth sessions and invite tokens. Preserves audit trail with
+        anonymized user_id references.
+        """
+        db = self._conn()
+        anon_email = f"deleted_{user_id}@redacted"
+        await db.execute(
+            "UPDATE users SET email = ?, name = NULL, avatar_path = NULL WHERE id = ?",
+            (anon_email, user_id),
+        )
+        await db.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
+        await db.execute(
+            "UPDATE invite_tokens SET created_by = NULL WHERE created_by = ?", (user_id,)
+        )
+        await db.commit()
+        logger.info("User {} anonymized and sessions deleted", user_id)
+
+    # ------------------------------------------------------------------
+    # Speaker anonymization (#197)
+    # ------------------------------------------------------------------
+
+    async def anonymize_speaker(self, transcript_id: int, speaker_label: str) -> bool:
+        """Add a speaker to the anonymization map for a transcript.
+
+        Returns True if the transcript was found and updated.
+        """
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT speaker_anon_map FROM transcripts WHERE id = ?", (transcript_id,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return False
+        existing: dict[str, str] = json.loads(row["speaker_anon_map"] or "{}")
+        existing[speaker_label] = "REDACTED"
+        await db.execute(
+            "UPDATE transcripts SET speaker_anon_map = ? WHERE id = ?",
+            (json.dumps(existing), transcript_id),
+        )
+        await db.commit()
+        logger.info("Speaker {} anonymized in transcript {}", speaker_label, transcript_id)
+        return True
+
+    async def get_transcript_with_anon(self, audio_session_id: int) -> dict[str, Any] | None:
+        """Get transcript with speaker anonymization map applied to segments."""
+        t = await self.get_transcript(audio_session_id)
+        if t is None:
+            return None
+        anon_map: dict[str, str] = json.loads(t.get("speaker_anon_map") or "{}")
+        if anon_map and t.get("segments_json"):
+            segments = json.loads(t["segments_json"])
+            for seg in segments:
+                speaker = seg.get("speaker", "")
+                if speaker in anon_map:
+                    seg["speaker"] = anon_map[speaker]
+                    seg["text"] = "[REDACTED]"
+            t["segments_json"] = json.dumps(segments)
+            # Also redact the plain text
+            if t.get("text"):
+                lines = t["text"].split("\n")
+                redacted_lines = []
+                for line in lines:
+                    for original, replacement in anon_map.items():
+                        if line.startswith(f"{original}:"):
+                            line = f"{replacement}: [REDACTED]"
+                    redacted_lines.append(line)
+                t["text"] = "\n".join(redacted_lines)
+        return t
+
+    # ------------------------------------------------------------------
+    # Crew consent (#202)
+    # ------------------------------------------------------------------
+
+    async def set_crew_consent(self, sailor_name: str, consent_type: str, granted: bool) -> int:
+        """Record or update crew consent. Returns the row id."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        if granted:
+            cur = await db.execute(
+                "INSERT INTO crew_consents (sailor_name, consent_type, granted, granted_at)"
+                " VALUES (?, ?, 1, ?)"
+                " ON CONFLICT(sailor_name, consent_type)"
+                " DO UPDATE SET granted = 1, granted_at = excluded.granted_at, revoked_at = NULL",
+                (sailor_name.strip(), consent_type, now),
+            )
+        else:
+            cur = await db.execute(
+                "INSERT INTO crew_consents"
+                " (sailor_name, consent_type, granted, granted_at, revoked_at)"
+                " VALUES (?, ?, 0, ?, ?)"
+                " ON CONFLICT(sailor_name, consent_type)"
+                " DO UPDATE SET granted = 0, revoked_at = excluded.revoked_at",
+                (sailor_name.strip(), consent_type, now, now),
+            )
+        await db.commit()
+        return cur.lastrowid or 0
+
+    async def get_crew_consents(self, sailor_name: str) -> list[dict[str, Any]]:
+        """Return all consent records for a sailor."""
+        cur = await self._conn().execute(
+            "SELECT id, sailor_name, consent_type, granted, granted_at, revoked_at"
+            " FROM crew_consents WHERE sailor_name = ?",
+            (sailor_name.strip(),),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def list_crew_consents(self) -> list[dict[str, Any]]:
+        """Return all consent records."""
+        cur = await self._conn().execute(
+            "SELECT id, sailor_name, consent_type, granted, granted_at, revoked_at"
+            " FROM crew_consents ORDER BY sailor_name, consent_type"
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def anonymize_sailor(self, sailor_name: str, replacement: str = "Anonymous") -> int:
+        """Replace a sailor name across all sessions. Returns number of rows updated."""
+        db = self._conn()
+        cur = await db.execute(
+            "UPDATE race_crew SET sailor = ? WHERE sailor = ?",
+            (replacement, sailor_name.strip()),
+        )
+        count = cur.rowcount or 0
+        await db.execute("DELETE FROM recent_sailors WHERE sailor = ?", (sailor_name.strip(),))
+        await db.commit()
+        logger.info("Sailor {!r} anonymized to {!r} ({} rows)", sailor_name, replacement, count)
+        return count
 
     # ------------------------------------------------------------------
     # Helpers
