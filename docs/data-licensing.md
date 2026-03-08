@@ -261,6 +261,10 @@ authority has already made public.
 When a coach accesses multiple boats' data for analysis, the coach holds a
 **delegated access license**, not ownership. The following rules apply:
 
+- **Per-boat opt-in**: a coach can only see data from boats that have
+  **individually and explicitly granted** that coach access. There is no
+  "co-op-wide coach access." Each boat decides independently whether to share
+  with a specific coach and which sessions to share
 - The coach may **view and analyze** data within the Helm Log platform but may
   **not bulk-export or download** co-op data from other boats
 - The coach may **not aggregate** multiple boats' data into a derived dataset that
@@ -278,6 +282,20 @@ When a coach accesses multiple boats' data for analysis, the coach holds a
   or co-op to deny future coach access
 - The boat owner can revoke a coach's access at any time, which triggers the
   same deletion and non-retention obligations
+
+#### Knowledge transfer reality
+
+This policy cannot prevent a coach from **learning** from data and carrying
+that knowledge to future engagements. A coach who studies a fleet's wind
+patterns, tuning ranges, or tactical tendencies retains that knowledge
+regardless of file deletion. This is how competitive knowledge has always
+moved in sailing — through people, not databases.
+
+The policy's goal is to prevent **systematic extraction** (bulk data capture,
+dataset aggregation, commercial analytics products) while accepting that
+**human learning is uncontrollable**. The per-boat opt-in and session-level
+permissioning ensure each boat consciously chooses what a specific coach sees,
+rather than inadvertently exposing the entire co-op dataset.
 
 ---
 
@@ -315,6 +333,45 @@ owner explicitly opts in:
 - Sail selections and tuning notes
 - YouTube video links and metadata
 - Observed current and tide data (derived local knowledge)
+
+### Session visibility and data aging
+
+To limit the value of slow, patient data extraction, the co-op may configure
+**session visibility rules** in its charter:
+
+#### Event-scoped visibility (recommended)
+
+Members can view full-detail session data only from **events they also
+participated in**. This is the core reciprocal value proposition — "I show
+you my race, you show me yours." Sessions from events a member did not attend
+are visible as **summary metrics only** (session metadata, finishing position,
+aggregate performance stats) but not full track or instrument data.
+
+This prevents a member from mining the entire historical dataset of races they
+never sailed in, while preserving the full value of head-to-head comparison
+for events where both boats were on the water.
+
+#### Data aging tiers (optional)
+
+The co-op may configure **data aging** to reduce the detail level of older
+sessions:
+
+| Age | Detail level |
+|---|---|
+| Current season | Full instrument data at recorded resolution |
+| Previous season | Reduced resolution (e.g., 10-second intervals instead of 1 Hz) |
+| Older than 2 seasons | Summary metrics only (aggregates, no raw track data) |
+
+Data aging thresholds are set in the co-op charter. A boat's **own data** is
+never aged — the boat owner always has full access to their complete history
+regardless of co-op aging rules.
+
+#### Default behavior
+
+If the co-op charter does not specify visibility rules, the default is
+**full visibility for all shared sessions** (the current behavior). Event
+scoping and data aging are opt-in features that the co-op enables by charter
+provision or majority vote.
 
 ### No export tools for co-op data
 
@@ -495,6 +552,27 @@ requirement. Joining requires:
 1. Agreeing to this data licensing policy
 2. Sharing at least one race session
 3. Acceptance by a co-op admin
+
+#### Membership eligibility
+
+The co-op exists for **boats that actively race**. To prevent commercial
+analytics actors (sailmakers, design firms, performance analytics startups,
+betting data companies) from joining solely to observe and extract value:
+
+- Each co-op may set **eligibility criteria** in its charter (e.g., "must
+  actively race in the fleet's regular series," "must be a current class
+  association member," "must have raced at least 3 events in the past 12
+  months")
+- A co-op member that is discovered to have joined primarily for data
+  observation — rather than reciprocal competitive sailing — may be subject
+  to **expulsion** under the standard process (Section 3)
+- **Sailmakers, coaches, and analytics providers** may access co-op data
+  only through the delegated coach access mechanism (Section 1), which is
+  per-boat opt-in, time-limited, and revocable — not through direct
+  membership
+
+If no eligibility criteria are specified in the charter, the default is: any
+boat with a Helm Log instance that shares at least one session may join.
 
 #### Disclosure of active agreements
 
@@ -963,12 +1041,24 @@ this when drawing conclusions from co-op data.
 
 ### Anonymization limitations in small datasets
 
-In small co-ops (fewer than ~10 boats), anonymization (replacing a boat's name
-with "Boat X") **does not guarantee de-identification**. GPS tracks, wind data,
-and racing patterns may be unique enough that knowledgeable fleet members can
-deduce a boat's identity from the data alone. Members should be aware that
-anonymization provides identity protection against casual inspection, not against
-determined analysis by someone with fleet knowledge.
+In small co-ops (fewer than ~10 boats), anonymized race data **will almost
+certainly be identifiable** by experienced fleet members. GPS tracks are
+fingerprints — start-line position, upwind mode, tacking style, sail
+inventory, and performance signature are unique to each boat. Replacing a
+name with "Boat X" hides identity from outsiders but not from people who
+race against that boat every week.
+
+Members should understand that anonymization provides:
+
+- **Protection against outsiders** who don't know the fleet
+- **Plausible deniability** in casual conversation
+- **No protection** against determined analysis by someone with fleet knowledge
+
+This is not a flaw in the system — it is an inherent limitation of
+anonymizing small, specialized datasets. The same limitation exists in Strava
+anonymized segments, cycling power datasets, and esports match telemetry.
+Members who are uncomfortable with this should factor it into their decision
+to join the co-op.
 
 ---
 
@@ -1158,3 +1248,4 @@ beyond what the AGPLv3 allows.
 | 2026-03-07 | Rev 14 — hardening from cross-sport research (NFL/NBA/MLB/SailGP/Strava/esports): email as PII with admin-only visibility and departure scrubbing; biometric data firewall with per-person consent independent of instrument sharing; temporal/seasonal sharing controls (delayed and embargoed sessions); gambling/betting absolute prohibition; data portability guarantee (anti-lock-in); protest hearing data firewall (other boats' co-op data inadmissible under RRS); active/inactive quorum based on heartbeat to prevent winter deadlock; multi-admin M-of-N signing model replacing single-admin elections |
 | 2026-03-08 | Rev 15 — PR review feedback: crew member emails covered alongside owner emails; temporal sharing controls changed from per-boat to co-op-level decision |
 | 2026-03-08 | Rev 16 — adversarial review hardening: formal definitions section (session, boat owner, entity, derived metrics, PII, platform, etc.); boat owner vs instance operator clarified (owner wins); coach derivative works reframed as normative obligation; bulk export reframed as "no export tools" with honest acknowledgment of view-only limitations; expulsion+deletion precedence (shared sessions survive expulsion as anonymized data); single moderator mode for small co-ops; heartbeat seasonal power-down handling with manual inactive toggle; liability expanded (limitation of damages, indemnification, governing law); data controller/processor roles defined for GDPR; audit logging scoped to API endpoints not UI views; audio PII weakened to whole-recording deletion baseline; tech requirements split into MVP vs future |
+| 2026-03-08 | Rev 17 — attack vector mitigations: coach access scoped to per-boat opt-in with session-level permissioning and "knowledge transfer reality" acknowledgment; anonymization disclaimer strengthened to "will almost certainly be identifiable" with specific examples (track shapes, start positions, tactical style); event-scoped session visibility (full detail only for events you participated in) with optional data aging tiers (current season full, previous season reduced, older summary only); membership eligibility criteria (active racing requirement, commercial actors must use coach access, observation-only grounds for expulsion) |
