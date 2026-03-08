@@ -204,7 +204,9 @@ You can opt out of current sharing even if the rest of the co-op opts in.
 - **The co-op has rules.** Every co-op has a charter that spells out how
   data is used. You see the charter before you join.
 - **Prohibited uses.** The charter explicitly prohibits using co-op data
-  in protest hearings or for surveillance of other boats.
+  in protest hearings or for tracking where a specific boat sailed
+  outside of shared racing sessions (e.g., monitoring practice
+  locations or cruising patterns).
 
 ---
 
@@ -225,9 +227,7 @@ Co-op data is view-only in the platform. There's no bulk export.
 **"If I leave, do other boats keep my old data?"**
 Your individual sessions are deleted from other boats' caches within 30
 days. Anonymous contributions to fleet benchmarks are preserved as
-"Boat X." One exception: if you linked YouTube videos to sessions, the
-videos still exist on YouTube — Helm Log can't delete content from a
-third-party platform.
+"Boat X."
 
 **"If I share, can the coach see everything?"**
 Only the instrument data you shared, and only during their access

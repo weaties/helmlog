@@ -146,20 +146,6 @@ governed. The coach knows the rules are clear and consistent.
 
 ---
 
-## Quick reference: what you can and can't see
-
-| You can see                        | You can't see                  |
-|------------------------------------|--------------------------------|
-| GPS tracks (speed-colored)         | Audio recordings               |
-| Boat speed, wind, heading, heel    | Transcripts                    |
-| Polar performance vs targets       | Photos and notes               |
-| Race results and time deltas       | Crew rosters and positions     |
-| Fleet benchmark percentiles        | Sail selection                 |
-|                                    | YouTube video links            |
-|                                    | Raw data export / bulk download|
-
----
-
 ## Running a debrief with Helm Log
 
 A typical post-race debrief using co-op data:

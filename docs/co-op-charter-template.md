@@ -68,7 +68,7 @@ included in these projects.
 | Project type | Status | Scope / purpose |
 |---|---|---|
 | **Commercial** | [None / Active] | [e.g., Cost-recovery for fleet coach access] |
-| **ML/AI models** | [None / Active] | [e.g., Polar performance model for the class] |
+| **ML/AI models** | [None / Active] | [e.g., Polar performance model for the class — see [Data Licensing Policy](data-licensing.md) Section 10 for what "ML/AI model training" means and how your data is used] |
 | **Current models** | [None / Active] | [e.g., High-resolution current map of Elliott Bay] |
 | **Cross-co-op sharing** | [None / Active] | [e.g., Data sharing with the SF J/105 Co-op] |
 
