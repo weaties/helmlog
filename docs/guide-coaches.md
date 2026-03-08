@@ -22,6 +22,10 @@ data. This gives you:
 This is enough to run a full debrief, identify fleet-wide weaknesses, and
 give targeted coaching to individual boats.
 
+Note: fleet benchmarks require at least 4 boats contributing data in a
+given condition band (wind speed / angle range) to produce meaningful
+percentile rankings.
+
 ---
 
 ## What you don't get
@@ -36,6 +40,7 @@ you **cannot** access:
 | Photos and notes | Personal race notes stay private |
 | Crew rosters | Who sailed where is boat-private |
 | Sail selection | Gear choices are competitive info |
+| YouTube video links | Video links are boat-private unless a boat shares them with you directly |
 | Raw data export / bulk download | Prevents data accumulation beyond your access window |
 
 If a boat wants to share any of these with you directly (e.g., play you an

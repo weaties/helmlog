@@ -39,6 +39,9 @@ race data with your fleet.
 
 ---
 
+The fastest fleets in the world already share data — this makes it
+accessible to everyone.
+
 ## What you get back
 
 - See where you gained and lost vs other boats
@@ -66,6 +69,10 @@ No. You choose, race by race.
 
 **Can I leave?**
 Anytime. Your data is removed from the co-op within 30 days.
+
+**Do I need internet on the water?**
+No. The Pi records everything offline. You only need internet when you
+want to share or view other boats' data.
 
 **Is this like Strava for sailing?**
 No. There's no central server. Boats talk directly to each other.

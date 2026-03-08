@@ -82,6 +82,16 @@ up to you, every time.
 
 ---
 
+## What you'll see in the app
+
+When you open Helm Log on your phone, you'll see your sessions — each
+race, practice, or debrief you've recorded. Each session has a **Share**
+button. Tap it to share with the co-op, or leave it private. The
+**Co-op** view shows all shared sessions from fleet members, with track
+overlays and fleet benchmarks.
+
+---
+
 ## How it works day-to-day
 
 ### On race day
@@ -181,6 +191,10 @@ want, skip the ones you don't.
 No. Co-op data is view-only in the platform. There's no bulk export.
 If you leave the co-op, cached copies are deleted and your contributions
 are anonymized within 30 days.
+
+**"If I leave, do other boats keep my old data?"**
+No. Cached copies are deleted and your contributions are anonymized
+within 30 days.
 
 **"This is like uploading to Strava or RacingRules."**
 Not at all. There is no central server. Your data lives on your Pi and

@@ -86,6 +86,11 @@ Good — neither do we. That's why there's no cloud, no company, no
 subscription. Your data stays on your boat unless you choose to share
 it. You can leave anytime and take everything with you.
 
+**"What if someone uses this against me in a protest?"**
+They can't. Co-op data cannot be used in protests — it's explicitly
+prohibited in the charter. The platform exists to make the fleet faster,
+not to police it.
+
 ### What not to lead with
 
 - Don't lead with "peer-to-peer" or "cryptographic identity" or
@@ -252,6 +257,22 @@ If things go well, here's where you'll be four weeks in:
 
 You don't need the whole fleet on day one. Three boats sharing
 consistently is enough to prove the value. The rest will follow.
+
+---
+
+## How to run a dock talk
+
+Your first group pitch should take about 15 minutes:
+
+1. **5 minutes: what it is** — use the mental model ("each boat is its
+   own server"), show the diagram, explain shared vs private
+2. **5 minutes: show a shared race** — pull up a real session on your
+   phone, overlay two boats, point out where one gained on a beat
+3. **5 minutes: Q&A** — let people ask questions, handle objections
+   using the language above
+
+Bring a printout of the [Fleet Quickstart](fleet-quickstart.md) for
+anyone who wants to take something home.
 
 ---
 
