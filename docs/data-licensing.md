@@ -39,6 +39,53 @@
 
 ---
 
+## Data Type Matrix
+
+| Data Type | Owner | Default Visibility | Shared with Co-op? | Deletion Rights | Coach Access? |
+|---|---|---|---|---|---|
+| **Instrument data** (GPS, speed, wind, heading, depth, heel, pitch) | Boat owner | Boat-private until co-op join | Yes — per-session, when you choose to share | Anonymized on departure ("Boat X"); full deletion after 30-day grace period | Yes, per-boat opt-in only |
+| **Derived metrics** (VMG, polar %, tacking angles, laylines) | Boat owner | Same as instrument data | Yes — per-session, when you choose to share | Same as instrument data | Yes, per-boat opt-in only |
+| **Audio recordings** | Boat owner (speakers retain PII rights over their voice) | Boat-private | No — never shared unless boat owner explicitly opts in | Speakers can request deletion/anonymization at any time, including former crew | Only if boat owner explicitly grants session access |
+| **Transcripts** | Boat owner (speakers retain PII rights) | Boat-private | No — never shared unless boat owner explicitly opts in | Same as audio — speakers can request deletion of segments attributed to them | Only if boat owner explicitly grants session access |
+| **Video / camera recordings** | Boat owner (crew retain PII rights over likeness) | Boat-private; YouTube default is unlisted | No — video links/metadata are boat-private | Crew can request face-blur or removal; YouTube videos must be deleted separately by uploader | Only if boat owner explicitly grants access |
+| **Photos and notes** | Boat owner | Boat-private | No — never shared unless boat owner explicitly opts in | Identifiable photos: same PII deletion rights as audio. Notes: deleted on request | Only if boat owner explicitly grants session access |
+| **Crew roster / positions** | Boat owner | Boat-private | No | Crew emails scrubbed on departure or on request | No — not shared via coach access |
+| **Sail selection** | Boat owner | Boat-private | No — tuning notes are never shared by default | Deleted with session on request | Only if boat owner explicitly grants session access |
+| **Race results** (finish order/time) | Boat owner (but publicly available from organizing authority) | Shared — already public data | Yes — included in co-op shared data by default | Anonymized on departure ("Boat X") but not removed (public data) | Yes, visible as part of shared session data |
+| **Biometrics** (heart rate, fatigue, etc.) | Individual crew member — not the boat | Person-private | No — never shared with co-op | Crew member can revoke consent and request deletion at any time, independent of crew status | No — requires separate authorization from the individual crew member, not just boat owner |
+| **YouTube video links/metadata** | Boat owner | Boat-private | No — listed under "not shared" | Metadata deleted on departure; actual YouTube videos remain on YouTube | Only if boat owner explicitly grants access |
+| **Email addresses** | Individual (PII) | Admin-only (owner email visible to co-op admins; crew email visible only to boat owner) | No — never shared with co-op members | Scrubbed from all records on departure or on request | No |
+| **Current/tide observations** | Boat owner | Boat-private | No — hard-earned local knowledge, never shared unless boat owner explicitly opts in | Deleted on request | Only if boat owner explicitly grants access |
+
+---
+
+## Crew Rights Summary
+
+Crew PII rights are independent of boat ownership and persist even after a crew
+member departs. The following rights apply regardless of crew membership status:
+
+- **Audio recordings**: Any crew member (active or former) can request deletion
+  or anonymization of recordings containing their voice. Anonymization (voice
+  scrambling, redaction, speaker removal) is an acceptable alternative to full
+  deletion. Transcripts derived from audio inherit the same rights — speakers
+  can request deletion of transcript segments attributed to them.
+- **Video recordings**: Any crew member (active or former) can request that their
+  identifiable appearance be face-blurred or removed from video. This applies to
+  both local video files and YouTube-published footage. Video anonymization is
+  technically harder than audio anonymization and may require re-processing.
+- **Biometric data**: Requires explicit, per-person consent **separate from** any
+  co-op or instrument data sharing agreement. Crew members can revoke biometric
+  consent and request deletion at any time, independent of crew membership.
+  Biometric data may not be used in crew selection or personnel decisions. Coach
+  access to biometrics requires separate authorization from the individual crew
+  member, not just the boat owner.
+- **Email addresses**: Treated as PII. Crew emails are visible only to the boat
+  owner (never to the co-op). On departure or request, crew emails are deleted
+  from the boat's instance. Owner emails are scrubbed from co-op membership
+  records, revocation records, and any other co-op documents on departure.
+
+---
+
 This document defines data ownership, access, sharing, and retention rules for all
 data collected, stored, and shared through the Helm Log platform. These rules
 govern both single-boat usage and co-op data sharing.

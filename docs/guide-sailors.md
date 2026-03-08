@@ -14,6 +14,12 @@ boat — you own it completely.
 If you join a **co-op**, you agree to share some of that data with other
 boats in your fleet. In return, you see theirs. Everyone gets faster.
 
+A note on terminology: your **fleet** is the group of boats you sail
+with. A **co-op** is a data-sharing agreement among some or all of those
+boats. They often overlap completely, but a fleet can exist without a
+co-op, and a co-op could theoretically include boats from different
+fleets.
+
 ---
 
 ## Why fleets do this
@@ -170,6 +176,29 @@ You keep all your own data on your Pi.
 If you need a temporary break (injury, boat work, sabbatical), you don't
 have to leave the co-op — just stop sharing sessions. Your membership
 stays active, and you can resume sharing whenever you're ready.
+
+---
+
+## What happens if something goes wrong
+
+**Your Pi's SD card dies.**
+Your local data is gone unless you backed it up (your fleet champion can
+help with backups). If you backed up your identity key, you can rejoin
+the co-op as the same boat. If not, you rejoin as a new identity. Either
+way, data you previously shared is still cached on other boats.
+
+**You accidentally shared a session you didn't mean to.**
+Contact your fleet champion or admin. The session can be un-shared, and
+cached copies on other boats will be deleted on their next sync.
+
+**You want to delete something.**
+You can delete any session, note, or recording from your Pi at any time.
+Deleted data is also purged from other boats' caches.
+
+**Your Pi is stolen or compromised.**
+Contact your fleet admin immediately. They can revoke your boat's
+membership, which invalidates your identity key and prevents the
+compromised Pi from accessing co-op data.
 
 ---
 

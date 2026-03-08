@@ -128,6 +128,28 @@ relationships stay healthy. Each one has a reason:
    *Why: Trust requires visibility. Knowing that access is logged keeps
    everyone honest and makes the system trustworthy for all parties.*
 
+### How these rules protect you as a coach
+
+These aren't just restrictions — they're clarity. When the rules are
+explicit, you don't have to guess what's appropriate. You know exactly
+what you can access, how long you have it, and what's expected when
+it ends. No ambiguity means no awkward conversations later.
+
+---
+
+## What boats should do before granting you access
+
+If a boat owner asks you what they need to know, here's the checklist:
+
+- **Confirm your identity** — the boat owner should know who they're
+  granting access to (your email or coaching identity)
+- **Understand the access window** — access is time-limited; the boat
+  owner sets the start and end dates
+- **Know what you can see** — instrument data, tracks, benchmarks, race
+  results. Not audio, notes, crew, or sails.
+- **Know they can revoke anytime** — if the relationship changes, access
+  ends immediately
+
 ---
 
 ## What makes this different from other platforms
