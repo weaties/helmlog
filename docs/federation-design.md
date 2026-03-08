@@ -310,8 +310,8 @@ GET  /co-op/{co_op_id}/sessions
      Query params: ?after=<iso>&before=<iso>&type=race|practice
      Returns: session summaries (id, type, start, end, event_name).
      Does NOT return private data (audio, notes, crew, sails, video links).
-     See [Data Licensing Policy](data-licensing.md) Section 1 for the full
-     PII definition and Section 3 for the shared/private data boundary.
+     See [Data Licensing Policy](data-licensing.md) Definitions section for the full
+     PII definition and Section 2 ("Data Sharing — The Co-op Model") for the shared/private data boundary.
 
      Respects temporal sharing controls:
      - Embargoed sessions return { "status": "embargoed", "available_at": "<iso>" }
