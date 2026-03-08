@@ -34,7 +34,7 @@ OUTPUT_DIR="${VIDEO_OUTPUT_DIR:-$HOME/Videos/helmlog}"
 RESOLUTION="${VIDEO_RESOLUTION:-3840x1920}"
 IMAGE="${DOCKER_IMAGE:-insta360-cli-utils}"
 PI_API="${PI_API_URL:-http://corvopi:3002}"
-PRIVACY="${VIDEO_PRIVACY:-unlisted}"
+PRIVACY="${VIDEO_PRIVACY:-private}"
 TZ_NAME="${TIMEZONE:-America/Los_Angeles}"
 
 log() { echo "[$(date -u +%H:%M:%SZ)] $*"; }
@@ -274,6 +274,24 @@ asyncio.run(main())
 
 # Clean up pending file
 rm -f "$OUTPUT_DIR/.pending_uploads"
+
+# ── 5b. Clean up stitched files after upload (#211 — data policy) ──────────
+
+CLEANUP="${VIDEO_CLEANUP_AFTER_UPLOAD:-false}"
+if [ "$CLEANUP" = "true" ] && [ -f "$OUTPUT_DIR/.upload_results.json" ]; then
+  log "Cleaning up stitched MP4 files..."
+  python3 -c "
+import json, os
+with open('$OUTPUT_DIR/.upload_results.json') as f:
+    results = json.load(f)
+for r in results:
+    if r.get('uploaded'):
+        mp4 = '$OUTPUT_DIR/' + r['timestamp'] + '.mp4'
+        if os.path.exists(mp4):
+            os.remove(mp4)
+            print(f'  Deleted: {mp4}')
+"
+fi
 
 # ── 6. Summary ──────────────────────────────────────────────────────────────
 

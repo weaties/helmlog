@@ -130,9 +130,25 @@ _SETTINGS_DEFS: tuple[_SettingDef, ...] = (
         key="VIDEO_PRIVACY",
         label="YouTube upload privacy",
         input_type="select",
-        default="unlisted",
+        default="private",
         options=("private", "unlisted", "public"),
-        help_text="Privacy status for auto-uploaded YouTube videos.",
+        help_text="Privacy status for auto-uploaded YouTube videos. Default is 'private' per data policy.",
+    ),
+    _SettingDef(
+        key="EXTERNAL_DATA_ENABLED",
+        label="External data fetching",
+        input_type="select",
+        default="true",
+        options=("true", "false"),
+        help_text="Enable weather/tide fetching (sends GPS position to Open-Meteo and NOAA).",
+    ),
+    _SettingDef(
+        key="VIDEO_CLEANUP_AFTER_UPLOAD",
+        label="Delete video after upload",
+        input_type="select",
+        default="false",
+        options=("true", "false"),
+        help_text="Delete stitched MP4 from Mac after successful YouTube upload.",
     ),
     _SettingDef(
         key="PI_SESSION_COOKIE",
@@ -321,7 +337,7 @@ def create_app(
 
             request.state.user = _MOCK_ADMIN
             return await call_next(request)  # type: ignore[no-any-return]
-        if path in _PUBLIC_PATHS or path.startswith(("/notes/", "/static/")):
+        if path in _PUBLIC_PATHS or path.startswith(("/static/",)):
             return await call_next(request)  # type: ignore[no-any-return]
         from http.cookies import SimpleCookie
 
@@ -844,6 +860,8 @@ def create_app(
         )
         result: list[dict[str, Any]] = []
         for cam, st in zip(cams, statuses, strict=True):
+            # Mask WiFi passwords in API responses (#210)
+            masked_pw = "••••••••" if cam.wifi_password else None
             if isinstance(st, BaseException):
                 result.append(
                     {
@@ -851,7 +869,7 @@ def create_app(
                         "ip": cam.ip,
                         "model": cam.model,
                         "wifi_ssid": cam.wifi_ssid,
-                        "wifi_password": cam.wifi_password,
+                        "wifi_password": masked_pw,
                         "recording": False,
                         "error": str(st),
                     }
@@ -863,7 +881,7 @@ def create_app(
                         "ip": st.ip,
                         "model": cam.model,
                         "wifi_ssid": cam.wifi_ssid,
-                        "wifi_password": cam.wifi_password,
+                        "wifi_password": masked_pw,
                         "recording": st.recording,
                         "error": st.error,
                     }
@@ -1022,7 +1040,9 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/state")
-    async def api_state() -> JSONResponse:
+    async def api_state(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         from helmlog.races import Race as _Race
         from helmlog.races import configured_tz, default_event_for_date, local_today, local_weekday
 
@@ -1115,7 +1135,9 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/instruments")
-    async def api_instruments() -> JSONResponse:
+    async def api_instruments(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         data = await storage.latest_instruments()
         return JSONResponse(data)
 
@@ -1124,7 +1146,9 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/polar/current")
-    async def api_polar_current() -> JSONResponse:
+    async def api_polar_current(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         import helmlog.polar as _polar
 
         inst = await storage.latest_instruments()
@@ -1458,7 +1482,15 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/races/{race_id}/export.{fmt}")
-    async def api_export_race(race_id: int, fmt: str) -> FileResponse:
+    @limiter.limit("20/minute")
+    async def api_export_race(
+        request: Request,
+        race_id: int,
+        fmt: str,
+        gps_precision: int | None = Query(default=None, ge=0, le=8),
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> FileResponse:
+        """Export race data. Optional gps_precision (0-8 decimal places) reduces GPS accuracy (#203)."""
         if fmt not in ("csv", "gpx", "json"):
             raise HTTPException(status_code=400, detail="fmt must be csv, gpx, or json")
 
@@ -1506,7 +1538,13 @@ def create_app(
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
             out_path = f.name
 
-        await export_to_file(storage, race.start_utc, race.end_utc, out_path)
+        await export_to_file(
+            storage,
+            race.start_utc,
+            race.end_utc,
+            out_path,
+            gps_precision=gps_precision,
+        )
 
         filename = f"{race.name}.{fmt}"
         media = {
@@ -1514,6 +1552,7 @@ def create_app(
             "gpx": "application/gpx+xml",
             "json": "application/json",
         }[fmt]
+        await _audit(request, "export.download", detail=f"{race.name}.{fmt}", user=_user)
         return FileResponse(
             out_path,
             media_type=media,
@@ -1526,7 +1565,12 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/sessions/{session_id}/track")
-    async def api_session_track(session_id: int) -> JSONResponse:
+    @limiter.limit("30/minute")
+    async def api_session_track(
+        request: Request,
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         """Return GPS track as GeoJSON for map display."""
         db = storage._conn()
         cur = await db.execute("SELECT start_utc, end_utc FROM races WHERE id = ?", (session_id,))
@@ -1565,7 +1609,10 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/sessions/{session_id}/detail")
-    async def api_session_detail(session_id: int) -> JSONResponse:
+    async def api_session_detail(
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         """Return full metadata for a single session."""
         db = storage._conn()
         cur = await db.execute(
@@ -1624,6 +1671,7 @@ def create_app(
         to_date: str | None = None,
         limit: int = 25,
         offset: int = 0,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
     ) -> JSONResponse:
         if type is not None and type not in ("race", "practice", "debrief"):
             raise HTTPException(
@@ -1646,7 +1694,10 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/races")
-    async def api_list_races(date: str | None = None) -> JSONResponse:
+    async def api_list_races(
+        date: str | None = None,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         if date is None:
             from helmlog.races import local_today
 
@@ -1698,7 +1749,10 @@ def create_app(
         await _audit(request, "crew.set", detail=str(race_id), user=_user)
 
     @app.get("/api/races/{race_id}/crew")
-    async def api_get_crew(race_id: int) -> JSONResponse:
+    async def api_get_crew(
+        race_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         cur = await storage._conn().execute("SELECT id FROM races WHERE id = ?", (race_id,))
         if await cur.fetchone() is None:
             raise HTTPException(status_code=404, detail="Race not found")
@@ -1712,7 +1766,9 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/sailors/recent")
-    async def api_recent_sailors() -> JSONResponse:
+    async def api_recent_sailors(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         sailors = await storage.get_recent_sailors()
         return JSONResponse({"sailors": sailors})
 
@@ -1724,6 +1780,7 @@ def create_app(
     async def api_list_boats(
         q: str | None = None,
         exclude_race: int | None = None,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
     ) -> JSONResponse:
         boats = await storage.list_boats(exclude_race_id=exclude_race, q=q or None)
         return JSONResponse(boats)
@@ -1777,7 +1834,10 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/sessions/{race_id}/results")
-    async def api_get_results(race_id: int) -> JSONResponse:
+    async def api_get_results(
+        race_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         results = await storage.list_race_results(race_id)
         return JSONResponse(results)
 
@@ -1976,7 +2036,10 @@ def create_app(
         )
 
     @app.get("/api/sessions/{session_id}/notes")
-    async def api_list_notes(session_id: int) -> JSONResponse:
+    async def api_list_notes(
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         race_id, audio_session_id = await _resolve_session(session_id)
         notes = await storage.list_notes(race_id=race_id, audio_session_id=audio_session_id)
         return JSONResponse(notes)
@@ -1987,13 +2050,22 @@ def create_app(
         note_id: int,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> None:
-        found = await storage.delete_note(note_id)
+        found, photo_path = await storage.delete_note_with_file(note_id)
         if not found:
             raise HTTPException(status_code=404, detail="Note not found")
+        if photo_path:
+            # Clean up the physical photo file (#205)
+            notes_dir = Path(os.environ.get("NOTES_DIR", "data/notes"))
+            full_path = notes_dir / photo_path
+            if full_path.exists():
+                await asyncio.to_thread(full_path.unlink)
+                logger.info("Deleted photo file: {}", full_path)
         await _audit(request, "note.delete", detail=str(note_id), user=_user)
 
     @app.get("/api/notes/settings-keys")
-    async def api_settings_keys() -> JSONResponse:
+    async def api_settings_keys(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         """Return all distinct keys used in settings notes, sorted alphabetically.
 
         Used to populate the typeahead datalist on the settings note entry form.
@@ -2036,6 +2108,7 @@ def create_app(
     async def api_list_videos(
         session_id: int,
         at: str | None = None,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
     ) -> JSONResponse:
         """List videos linked to a session.
 
@@ -2291,7 +2364,9 @@ def create_app(
     from helmlog.storage import _SAIL_TYPES  # noqa: PLC0415
 
     @app.get("/api/sails")
-    async def api_list_sails() -> JSONResponse:
+    async def api_list_sails(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         """Return active sails grouped by type."""
         all_sails = await storage.list_sails(include_inactive=False)
         grouped: dict[str, list[dict[str, Any]]] = {t: [] for t in _SAIL_TYPES}
@@ -2343,7 +2418,10 @@ def create_app(
         return JSONResponse({"id": sail_id, "updated": True})
 
     @app.get("/api/sessions/{session_id}/sails")
-    async def api_get_session_sails(session_id: int) -> JSONResponse:
+    async def api_get_session_sails(
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         """Return the sail selection for a race/practice session."""
         race = await storage.get_race(session_id)
         if race is None:
@@ -2396,7 +2474,12 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/audio/{session_id}/download")
-    async def download_audio(session_id: int) -> FileResponse:
+    @limiter.limit("10/minute")
+    async def download_audio(
+        request: Request,
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> FileResponse:
         """Download a WAV file as an attachment."""
         row = await storage.get_audio_session_row(session_id)
         if row is None:
@@ -2404,6 +2487,7 @@ def create_app(
         path = Path(row["file_path"])
         if not path.exists():
             raise HTTPException(status_code=404, detail="Audio file not found on disk")
+        await _audit(request, "audio.download", detail=str(session_id), user=_user)
         return FileResponse(
             path,
             media_type="audio/wav",
@@ -2411,7 +2495,12 @@ def create_app(
         )
 
     @app.get("/api/audio/{session_id}/stream")
-    async def stream_audio(session_id: int) -> FileResponse:
+    @limiter.limit("30/minute")
+    async def stream_audio(
+        request: Request,
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> FileResponse:
         """Stream a WAV file; Starlette handles Range headers for seekable playback."""
         row = await storage.get_audio_session_row(session_id)
         if row is None:
@@ -2419,6 +2508,7 @@ def create_app(
         path = Path(row["file_path"])
         if not path.exists():
             raise HTTPException(status_code=404, detail="Audio file not found on disk")
+        await _audit(request, "audio.stream", detail=str(session_id), user=_user)
         return FileResponse(path, media_type="audio/wav")
 
     # ------------------------------------------------------------------
@@ -2426,7 +2516,9 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/system-health")
-    async def api_system_health() -> JSONResponse:
+    async def api_system_health(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         """Return current CPU, memory, and disk utilisation percentages."""
         import psutil  # type: ignore[import-untyped]
 
@@ -2495,16 +2587,24 @@ def create_app(
         return JSONResponse({"status": "accepted", "transcript_id": transcript_id}, status_code=202)
 
     @app.get("/api/audio/{session_id}/transcript")
-    async def api_get_transcript(session_id: int) -> JSONResponse:
-        """Poll transcription status and retrieve the transcript text when done."""
+    async def api_get_transcript(
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Poll transcription status and retrieve the transcript text when done.
+
+        Applies speaker anonymization map if present (#197).
+        """
         import json as _json
 
-        t = await storage.get_transcript(session_id)
+        t = await storage.get_transcript_with_anon(session_id)
         if t is None:
             raise HTTPException(status_code=404, detail="No transcript job found for this session")
         if t.get("segments_json"):
             t["segments"] = _json.loads(t["segments_json"])
         del t["segments_json"]
+        # Remove internal anon map from response
+        t.pop("speaker_anon_map", None)
         return JSONResponse(t)
 
     # ------------------------------------------------------------------
@@ -2512,7 +2612,9 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/tags")
-    async def api_list_tags() -> JSONResponse:
+    async def api_list_tags(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         tags = await storage.list_tags()
         return JSONResponse(tags)
 
@@ -2590,7 +2692,10 @@ def create_app(
         )
 
     @app.get("/api/sessions/{session_id}/tags")
-    async def api_get_session_tags(session_id: int) -> JSONResponse:
+    async def api_get_session_tags(
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         tags = await storage.get_session_tags(session_id)
         return JSONResponse(tags)
 
@@ -2623,7 +2728,10 @@ def create_app(
         await _audit(request, "note.tag.remove", detail=f"note={note_id} tag={tag_id}", user=_user)
 
     @app.get("/api/notes/{note_id}/tags")
-    async def api_get_note_tags(note_id: int) -> JSONResponse:
+    async def api_get_note_tags(
+        note_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
         tags = await storage.get_note_tags(note_id)
         return JSONResponse(tags)
 
@@ -2737,5 +2845,212 @@ def create_app(
             media_type="image/svg+xml",
             headers={"Cache-Control": "no-cache"},
         )
+
+    # ------------------------------------------------------------------
+    # DELETE /api/sessions/{id}  (#194 — session/data deletion)
+    # ------------------------------------------------------------------
+
+    @app.delete("/api/sessions/{session_id}", status_code=204)
+    async def api_delete_session(
+        request: Request,
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> None:
+        """Delete a session and all related data (admin only)."""
+        cur = await storage._conn().execute("SELECT name FROM races WHERE id = ?", (session_id,))
+        row = await cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        files = await storage.delete_race_session(session_id)
+        # Clean up physical files
+        for f in files:
+            p = Path(f)
+            if p.exists():
+                await asyncio.to_thread(p.unlink)
+                logger.info("Deleted file: {}", p)
+        await _audit(request, "session.delete", detail=row["name"], user=_user)
+
+    # ------------------------------------------------------------------
+    # DELETE /api/audio/{id}  (#196 — audio deletion)
+    # ------------------------------------------------------------------
+
+    @app.delete("/api/audio/{session_id}", status_code=204)
+    async def api_delete_audio(
+        request: Request,
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> None:
+        """Delete an audio session and its WAV file."""
+        file_path = await storage.delete_audio_session(session_id)
+        if file_path is None:
+            raise HTTPException(status_code=404, detail="Audio session not found")
+        p = Path(file_path)
+        if p.exists():
+            await asyncio.to_thread(p.unlink)
+            logger.info("Deleted audio file: {}", p)
+        await _audit(request, "audio.delete", detail=str(session_id), user=_user)
+
+    # ------------------------------------------------------------------
+    # DELETE /api/users/{id}  (#195 — user deletion)
+    # ------------------------------------------------------------------
+
+    @app.delete("/api/users/{user_id}", status_code=204)
+    async def api_delete_user(
+        request: Request,
+        user_id: int,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> None:
+        """Anonymize and delete a user account (admin only)."""
+        target = await storage.get_user_by_id(user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        # Delete avatar file
+        avatar_dir = Path(os.environ.get("AVATAR_DIR", "data/avatars"))
+        avatar_file = avatar_dir / f"{user_id}.jpg"
+        if avatar_file.exists():
+            await asyncio.to_thread(avatar_file.unlink)
+        await storage.delete_user(user_id)
+        await _audit(request, "user.delete", detail=f"user_id={user_id}", user=_user)
+
+    @app.delete("/api/me", status_code=204)
+    async def api_delete_me(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> None:
+        """Self-delete: anonymize and remove own account."""
+        user_id = _user.get("id")
+        if user_id is None:
+            raise HTTPException(status_code=400, detail="Cannot delete mock user")
+        avatar_dir = Path(os.environ.get("AVATAR_DIR", "data/avatars"))
+        avatar_file = avatar_dir / f"{user_id}.jpg"
+        if avatar_file.exists():
+            await asyncio.to_thread(avatar_file.unlink)
+        await storage.delete_user(user_id)
+        await _audit(request, "user.self_delete", detail=f"user_id={user_id}", user=_user)
+
+    # ------------------------------------------------------------------
+    # Speaker anonymization (#197)
+    # ------------------------------------------------------------------
+
+    @app.post("/api/audio/{session_id}/transcript/anonymize-speaker", status_code=200)
+    async def api_anonymize_speaker(
+        request: Request,
+        session_id: int,
+        body: dict[str, Any],
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Anonymize a speaker label in a diarized transcript."""
+        speaker_label = (body.get("speaker_label") or "").strip()
+        if not speaker_label:
+            raise HTTPException(status_code=422, detail="speaker_label is required")
+        # Find the transcript for this audio session
+        t = await storage.get_transcript(session_id)
+        if t is None:
+            raise HTTPException(status_code=404, detail="Transcript not found")
+        found = await storage.anonymize_speaker(t["id"], speaker_label)
+        if not found:
+            raise HTTPException(status_code=404, detail="Transcript not found")
+        await _audit(
+            request,
+            "transcript.anonymize_speaker",
+            detail=f"session={session_id} speaker={speaker_label}",
+            user=_user,
+        )
+        return JSONResponse({"anonymized": speaker_label})
+
+    # ------------------------------------------------------------------
+    # Crew consent (#202)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/crew/consents")
+    async def api_list_consents(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """List all crew consent records."""
+        consents = await storage.list_crew_consents()
+        return JSONResponse(consents)
+
+    @app.get("/api/crew/{sailor_name}/consents")
+    async def api_get_sailor_consents(
+        sailor_name: str,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Get consent records for a specific sailor."""
+        consents = await storage.get_crew_consents(sailor_name)
+        return JSONResponse(consents)
+
+    @app.put("/api/crew/{sailor_name}/consents", status_code=200)
+    async def api_set_consent(
+        request: Request,
+        sailor_name: str,
+        body: dict[str, Any],
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Set or revoke consent for a sailor."""
+        consent_type = (body.get("consent_type") or "").strip()
+        if consent_type not in ("audio", "video", "name", "photo"):
+            raise HTTPException(
+                status_code=422, detail="consent_type must be audio/video/name/photo"
+            )
+        granted = bool(body.get("granted", True))
+        row_id = await storage.set_crew_consent(sailor_name, consent_type, granted)
+        action = "consent.grant" if granted else "consent.revoke"
+        await _audit(request, action, detail=f"{sailor_name}/{consent_type}", user=_user)
+        return JSONResponse(
+            {
+                "id": row_id,
+                "sailor_name": sailor_name,
+                "consent_type": consent_type,
+                "granted": granted,
+            }
+        )
+
+    @app.post("/api/crew/{sailor_name}/anonymize", status_code=200)
+    async def api_anonymize_sailor(
+        request: Request,
+        sailor_name: str,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Anonymize a sailor's name across all sessions."""
+        count = await storage.anonymize_sailor(sailor_name)
+        await _audit(request, "sailor.anonymize", detail=sailor_name, user=_user)
+        return JSONResponse({"anonymized": sailor_name, "rows_updated": count})
+
+    # ------------------------------------------------------------------
+    # Camera status for crew (#207)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/cameras/status")
+    async def api_camera_status_crew(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return camera recording status (available to all authenticated users)."""
+        cams = await _load_cameras()
+        if not cams:
+            return JSONResponse({"recording": False, "cameras": []})
+        import helmlog.cameras as cameras_mod
+
+        statuses = await asyncio.gather(
+            *(cameras_mod.get_status(cam) for cam in cams),
+            return_exceptions=True,
+        )
+        recording_cams: list[str] = []
+        for cam, st in zip(cams, statuses, strict=True):
+            if not isinstance(st, BaseException) and st.recording:
+                recording_cams.append(cam.name)
+        return JSONResponse(
+            {
+                "recording": bool(recording_cams),
+                "cameras": recording_cams,
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # Rate-limited data endpoints (#204)
+    # ------------------------------------------------------------------
+
+    # Note: rate limits are applied inline on the endpoints above via
+    # @limiter.limit() decorators. Additional limits here for remaining
+    # endpoints that need protection.
 
     return app

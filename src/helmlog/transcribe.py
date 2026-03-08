@@ -60,6 +60,14 @@ async def _try_remote_transcribe(
     if not url:
         return None
 
+    # Warn when sending audio PII over unencrypted transport (#201)
+    if url.startswith("http://") and not any(h in url for h in ("localhost", "127.0.0.1", "::1")):
+        logger.warning(
+            "TRANSCRIBE_URL uses plain HTTP ({}) — crew voice PII is sent unencrypted. "
+            "Use HTTPS for production deployments.",
+            url,
+        )
+
     import httpx
 
     endpoint = f"{url}/transcribe"

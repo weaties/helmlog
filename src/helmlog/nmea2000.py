@@ -46,6 +46,34 @@ SUPPORTED_PGNS: Final[frozenset[int]] = frozenset(
     }
 )
 
+# AIS and other-vessel PGN blocklist (#208) — must never be ingested or stored
+AIS_BLOCKED_PGNS: Final[frozenset[int]] = frozenset(
+    {
+        129038,  # AIS Class A Position Report
+        129039,  # AIS Class B Position Report
+        129040,  # AIS Class B Extended Position Report
+        129041,  # AIS Aids to Navigation (AtoN) Report
+        129793,  # AIS UTC and Date Report
+        129794,  # AIS Class A Static and Voyage Related Data
+        129795,  # AIS Addressed Binary Message
+        129796,  # AIS Acknowledge
+        129797,  # AIS Binary Broadcast Message
+        129798,  # AIS SAR Aircraft Position Report
+        129799,  # AIS Radio Frequency/Mode/Power
+        129800,  # AIS UTC/Date Inquiry
+        129801,  # AIS Addressed Safety Related Message
+        129802,  # AIS Safety Related Broadcast Message
+        129803,  # AIS Interrogation
+        129804,  # AIS Assignment Mode Command
+        129805,  # AIS Data Link Management
+        129806,  # AIS Channel Management
+        129807,  # AIS Class B Group Assignment
+        129808,  # DSC Call Information
+        129809,  # AIS Class B CS Static Data Report, Part A
+        129810,  # AIS Class B CS Static Data Report, Part B
+    }
+)
+
 # ---------------------------------------------------------------------------
 # Record dataclasses
 # ---------------------------------------------------------------------------
