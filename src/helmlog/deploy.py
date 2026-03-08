@@ -68,6 +68,11 @@ def _uv_bin() -> str:
     svc_local = Path("/home/helmlog/.local/bin/uv")
     if svc_local.exists():
         return str(svc_local)
+    # Search common home dirs on the Pi
+    for user_dir in Path("/home").iterdir():
+        candidate = user_dir / ".local" / "bin" / "uv"
+        if candidate.exists():
+            return str(candidate)
     return "uv"  # last resort — let it fail with a clear error
 
 
@@ -245,10 +250,12 @@ async def execute_deploy(config: DeployConfig) -> dict[str, Any]:
         await asyncio.to_thread(_git, ["pull", "origin", config.branch])
 
         # uv sync (best-effort — may fail on first run if deps changed)
+        uv = _uv_bin()
+        logger.info("Using uv binary: {}", uv)
         try:
             await asyncio.to_thread(
                 subprocess.check_output,
-                [_uv_bin(), "sync", "--no-interaction", "--project", repo],
+                [uv, "sync", "--no-interaction", "--project", repo],
                 cwd=repo,
                 stderr=subprocess.STDOUT,
                 text=True,
