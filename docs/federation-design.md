@@ -33,7 +33,9 @@ The `boat.json` is the **boat card** — a self-signed document that associates
 the public key with human-readable metadata. It's freely shareable. The
 `owner_email` field is **required for co-op membership** (enables out-of-band
 communication for votes, admin transfers, and emergencies) but **optional for
-standalone use**.
+standalone use**. Email addresses are **PII** — visible only to co-op admins,
+never exposed to other members, and scrubbed on departure (see data licensing
+policy Section 1).
 
 ### Ed25519 performance characteristics
 
@@ -52,6 +54,11 @@ complex key-sharding ceremonies.
 
 The founding admin designates 2-3 admin boats at creation. A membership record
 or revocation requires signatures from a majority of admins (e.g., 2-of-3).
+
+**Single moderator mode** (for small co-ops of 3-4 boats): instead of M-of-N,
+a single moderator boat signs all admin records. A **designated backup boat**
+can assume moderator role if the moderator's Pi is lost. The charter specifies
+which mode the co-op uses.
 
 ```
 ~/.helmlog/co-ops/<co-op-id>/
@@ -92,6 +99,11 @@ The founding admin's Pi:
      ],
      "admin_threshold": 2,
      "heartbeat_inactive_days": 60,
+     "sharing_delay": "immediate",
+     "session_visibility": "event_scoped",
+     "data_aging": { "current_season": "full", "previous_season": "reduced", "older": "summary" },
+     "benchmark_min_boats": 4,
+     "membership_eligibility": { "active_racing_required": true },
      "charter_url": "https://...",
      "admin_sigs": [
        { "admin_boat_pub": "<base64>", "sig": "<base64>" },
@@ -111,6 +123,12 @@ Joining boat                          Admin's Pi
      |       { boat_card, message }        |
      |                                     |
      |       Admin reviews request         |
+     |       - Verifies eligibility        |
+     |         (active racer, not a        |
+     |          commercial actor)          |
+     |       - Returns pre-join disclosure  |
+     |         (active agreements, ML,     |
+     |          current models, embargo)   |
      |       (web UI or CLI)               |
      |                                     |
      |  <-- signed membership record ---   |
@@ -119,6 +137,16 @@ Joining boat                          Admin's Pi
      |  Adds co-op pub to trusted list     |
      |                                     |
 ```
+
+**Membership eligibility** (per data licensing policy Section 3):
+
+- The co-op charter may require **active racing** as a condition of membership
+- **Commercial actors** (coaching services, analytics companies, sail lofts)
+  must use the coach access mechanism instead of full membership
+- Joining primarily for **data observation** (without contributing) is grounds
+  for expulsion
+- The admin presents a **pre-join disclosure** of all active agreements before
+  admission
 
 ### Membership record
 
@@ -231,17 +259,72 @@ GET  /co-op/{co_op_id}/sessions
      Returns: session summaries (id, type, start, end, event_name).
      Does NOT return private data (audio, notes, crew, sails).
 
+     Respects temporal sharing controls:
+     - Embargoed sessions return { "status": "embargoed", "available_at": "<iso>" }
+       in the summary instead of full metadata
+     - Embargo policy is co-op-level (set in charter or by majority vote)
+
 GET  /co-op/{co_op_id}/sessions/{session_id}/track
      GPS track for a shared session. Returns position + instrument data
      at 1 Hz: lat, lon, bsp, tws, twa, hdg, cog, sog, aws, awa.
 
+     Respects session visibility and data aging:
+     - If the co-op uses event-scoped visibility, returns 403 with
+       { "error": "event_scope", "message": "Track data available only
+       for events you participated in" } unless the requesting boat also
+       has a shared session in the same event
+     - If data aging is enabled, older sessions return reduced-resolution
+       data (e.g., 10-second intervals for previous season, summary-only
+       for 2+ seasons ago)
+     - Returns 403 for embargoed sessions
+
 GET  /co-op/{co_op_id}/sessions/{session_id}/results
      Race results for a shared session (if results exist).
      Returns: [{boat, place, finish_time}].
+     Results are always visible (even for event-scoped co-ops) since race
+     results are public data.
 
 GET  /co-op/{co_op_id}/sessions/{session_id}/polar
      Polar performance data for the session (BSP vs target at each TWS/TWA).
+     Subject to the same event-scoping and data aging rules as /track.
 ```
+
+### Fleet benchmarking
+
+```
+GET  /co-op/{co_op_id}/benchmarks/maneuvers
+     This boat's per-maneuver metrics for benchmark aggregation.
+     Returns: [{ "type": "tack"|"gybe"|"mark_rounding"|"start"|"acceleration",
+                 "session_id": 42, "tws_bin": "10-12",
+                 "duration_sec": 5.2, "loss_metric": 0.3 }]
+     Only served to co-op members. Each boat contributes its own maneuver
+     metrics; no boat sees another boat's individual data points.
+
+     Respects embargo: embargoed session maneuvers are excluded until
+     embargo lifts.
+
+GET  /co-op/{co_op_id}/benchmarks/polar
+     This boat's polar performance data points for benchmark aggregation.
+     Returns: [{ "session_id": 42, "tws_bin": "10-12", "twa_bin": "30-40",
+                 "bsp_avg": 5.88, "vmg_avg": 5.72, "n_samples": 120 }]
+```
+
+**Benchmark computation** happens on the requesting Pi (or a designated
+aggregator):
+
+1. Query all online peers for `/benchmarks/maneuvers` and `/benchmarks/polar`
+2. Aggregate into anonymous fleet statistics (median, percentiles)
+3. Enforce minimum 4-boat threshold per condition bin
+4. Render the **Percentile Heatmap** dashboard showing:
+   - Each maneuver type with fleet 10th%, median, 90th%, your result,
+     your percentile rank
+   - Color coding: green (top 25%), yellow (middle 50%), red (bottom 25%)
+5. No per-boat data points are stored or displayed — only aggregates
+
+The benchmark endpoints return raw metrics, not identities. The requesting
+Pi never learns which data points came from which boat — it sees only
+anonymous arrays from each peer, and the aggregation discards per-source
+attribution.
 
 ### Current / tide observations
 
@@ -397,15 +480,58 @@ Crew member opens co-op view on their Pi
 
 ### Coach access
 
+Coach access is **per-boat opt-in** with **session-level permissioning**.
+The admin does not grant fleet-wide coach access — each boat individually
+decides whether to share with a specific coach.
+
 ```
-Admin grants coach temporary access
-  → Admin signs a time-limited access record for the coach's key
-  → Coach's device (laptop/phone) gets a keypair + access record
-  → Coach queries member Pis directly over Tailscale
-  → Each Pi verifies the access record signature + expiry
+Coach requests access to Boat A
+  → Boat A owner grants coach a time-limited, session-scoped access record
+    signed by Boat A's key (not the co-op admin)
+  → Access record specifies: coach pub key, allowed session IDs (or "all"),
+    expiry date, no-aggregation flag
+  → Coach's device gets a keypair + per-boat access records
+  → Coach queries only Boat A's Pi directly over Tailscale
+  → Boat A's Pi verifies: access record signature, expiry, session scope
   → Access logged to audit trail
-  → After expiry, Pis reject the coach's requests automatically
+  → After expiry, Pi rejects the coach's requests automatically
+
+Coach wants access to Boat B too
+  → Boat B owner independently grants (or denies) access
+  → Coach accumulates per-boat access records
+  → Each Pi enforces its own access scope independently
 ```
+
+A coach may **not aggregate** multiple boats' data into a derived dataset
+that could be shared with other clients. This is a normative obligation
+(see data licensing policy Section 1) — the platform logs access patterns
+but cannot technically prevent a coach from combining knowledge.
+
+### Fleet benchmarking (Percentile Heatmap)
+
+```
+Boat owner opens benchmarking dashboard
+  → Pi queries all online co-op peers for /benchmarks/maneuvers
+    and /benchmarks/polar (in parallel)
+  → Each peer returns its own anonymous metric arrays
+  → Pi aggregates into fleet statistics per maneuver per condition bin
+  → Bins with <4 contributing boats show "insufficient data"
+  → Embargoed session data excluded from aggregation
+  → Dashboard renders Percentile Heatmap:
+
+    | Maneuver       | Fleet 10th% | Median | Fleet 90th% | You  | %ile |
+    | Upwind tacks   | 4.8 sec     | 5.2 s  | 6.0 sec     | 5.5s | 60%  |
+    | Downwind gybes | 3.0 sec     | 3.5 s  | 4.2 sec     | 3.8s | 55%  |
+    | Mark rounding  | 12.5 sec    | 13.0 s | 14.2 sec    | 13.5 | 58%  |
+    | Acceleration   | 1.5 m/s²    | 1.3    | 1.0 m/s²    | 1.2  | 40%  |
+
+  → Color coded: green (top 25%), yellow (mid 50%), red (bottom 25%)
+  → Click any row to drill into historical trend (own-boat only)
+  → No per-boat data stored — only aggregates held in memory
+```
+
+This is the co-op's primary value proposition for competitive sailors.
+It answers "where am I losing time?" without revealing who is fast.
 
 ### Voting on a proposal
 
@@ -480,6 +606,50 @@ across multiple boats. Here's how it works without a central server:
 
 ---
 
+## 8.5. Fleet Benchmark Computation
+
+Fleet benchmarking is the second feature (after current models) that requires
+aggregation across boats. Unlike current models, **benchmarking does not
+require a governance vote** — it uses only the instrument data and derived
+metrics that are already shared by default under Section 2 of the data
+licensing policy.
+
+### How it works without a central server
+
+1. **Maneuver detection runs locally** on each Pi after each session:
+   - Tack detection: heading change >60° with BSP dip
+   - Gybe detection: heading change >60° downwind with BSP dip
+   - Mark rounding: GPS track curvature + heading change at known mark positions
+   - Start: proximity to start line at gun time
+   - Acceleration: BSP recovery rate after maneuver
+   - Results stored in local `maneuver_events` table
+
+2. **Benchmark query is peer-to-peer**: the requesting Pi queries all
+   online co-op peers for `/benchmarks/maneuvers` (anonymous metric arrays).
+   Each peer returns its own metrics — no identities attached.
+
+3. **Aggregation runs on the requesting Pi**: compute median, 10th/25th/75th/90th
+   percentiles per maneuver type per TWS bin. If fewer than 4 boats contribute
+   to a bin, that bin shows "insufficient data."
+
+4. **No persistent fleet-wide storage**: benchmark results exist only in
+   the requesting Pi's memory during the dashboard session. No Pi stores
+   fleet-wide benchmark data to disk. (Individual maneuver events are
+   stored locally for the boat's own history.)
+
+### Privacy properties
+
+- Each peer returns an **anonymous array** of metrics — no boat identifiers
+  in the response
+- The requesting Pi knows which Tailscale IP returned which array (necessary
+  for the query), but the aggregation discards per-source attribution
+- With the minimum 4-boat threshold, no single boat can be isolated in the
+  aggregate statistics
+- The small-fleet anonymization disclaimer applies: in a 5-boat co-op,
+  "top 10%" is effectively one boat
+
+---
+
 ## 9. SQLite Schema Additions
 
 New tables on each Pi to support federation:
@@ -514,6 +684,8 @@ CREATE TABLE IF NOT EXISTS session_sharing (
     co_op_id    TEXT NOT NULL,
     shared_at   TEXT NOT NULL,
     shared_by   INTEGER REFERENCES users(id),
+    embargo_until TEXT,              -- null = immediate sharing; ISO timestamp = embargoed
+    event_name  TEXT,                -- event identifier for event-scoped visibility
     PRIMARY KEY (session_id, co_op_id)
 );
 
@@ -567,6 +739,32 @@ CREATE TABLE IF NOT EXISTS co_op_cache (
     UNIQUE(co_op_id, source_fp, session_id, data_type)
 );
 
+-- Detected maneuver events (local, not shared directly)
+CREATE TABLE IF NOT EXISTS maneuver_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER NOT NULL REFERENCES sessions(id),
+    type        TEXT NOT NULL,       -- tack | gybe | mark_rounding | start | acceleration
+    timestamp   TEXT NOT NULL,       -- UTC
+    duration_sec REAL,               -- maneuver duration
+    loss_metric  REAL,               -- speed/VMG loss during maneuver
+    tws_bin     TEXT,                -- e.g., "10-12"
+    twa_bin     TEXT,                -- e.g., "30-40"
+    details_json TEXT                -- type-specific details
+);
+
+-- Coach access records (per-boat, session-scoped)
+CREATE TABLE IF NOT EXISTS coach_access (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    coach_pub       TEXT NOT NULL,       -- base64 Ed25519 public key
+    coach_name      TEXT,
+    session_scope   TEXT NOT NULL,       -- "all" or JSON array of session IDs
+    granted_at      TEXT NOT NULL,
+    expires_at      TEXT NOT NULL,
+    revoked_at      TEXT,                -- null if still active
+    access_json     TEXT NOT NULL,       -- full signed access record
+    UNIQUE(coach_pub, granted_at)
+);
+
 -- Signed votes on co-op proposals
 CREATE TABLE IF NOT EXISTS co_op_votes (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -584,7 +782,7 @@ CREATE TABLE IF NOT EXISTS co_op_votes (
 ## 10. New Python Modules
 
 ```
-src/logger/
+src/helmlog/
 ├── federation.py       # Core federation logic
 │   ├── generate_keypair()
 │   ├── sign_message(private_key, message) -> signature
@@ -596,25 +794,51 @@ src/logger/
 │   ├── sign_revocation(co_op_key, boat_pub, reason) -> dict
 │   ├── sign_tombstone(boat_key, session_ids, action) -> dict
 │   ├── verify_request(pub_key, method, path, timestamp, sig) -> bool
+│   ├── sign_coach_access(boat_key, coach_pub, sessions, expiry) -> dict
+│   ├── verify_coach_access(boat_pub, access_record) -> bool
 │   └── CoOpPeer (dataclass for peer connection state)
 │
 ├── co_op_api.py        # FastAPI router for /co-op/* endpoints
 │   ├── router = APIRouter(prefix="/co-op")
 │   ├── Middleware: verify_co_op_request (signature check)
 │   ├── All endpoints from Section 3 above
+│   ├── Embargo enforcement: check co-op sharing delay before serving data
+│   ├── Event-scoping: check requesting boat's event participation
+│   ├── Data aging: downsample older sessions per charter config
 │   └── Depends on federation.py + storage.py
 │
-└── co_op_client.py     # Client for querying other Pis
-    ├── query_peer_sessions(peer, co_op_id, filters) -> list[dict]
-    ├── fetch_track(peer, co_op_id, session_id) -> list[dict]
-    ├── fetch_results(peer, co_op_id, session_id) -> list[dict]
-    ├── fetch_currents(peer, co_op_id, area, time_range) -> list[dict]
-    ├── poll_tombstones(peer, co_op_id, since) -> list[dict]
-    ├── submit_vote(peer, co_op_id, proposal_id, vote) -> dict
-    ├── discover_peers(co_op_id) -> list[CoOpPeer]
-    └── aggregate_co_op_view(co_op_id, filters) -> dict
-        # Queries all online peers in parallel, merges results,
-        # applies cache, returns unified session list
+├── co_op_client.py     # Client for querying other Pis
+│   ├── query_peer_sessions(peer, co_op_id, filters) -> list[dict]
+│   ├── fetch_track(peer, co_op_id, session_id) -> list[dict]
+│   ├── fetch_results(peer, co_op_id, session_id) -> list[dict]
+│   ├── fetch_currents(peer, co_op_id, area, time_range) -> list[dict]
+│   ├── poll_tombstones(peer, co_op_id, since) -> list[dict]
+│   ├── submit_vote(peer, co_op_id, proposal_id, vote) -> dict
+│   ├── discover_peers(co_op_id) -> list[CoOpPeer]
+│   └── aggregate_co_op_view(co_op_id, filters) -> dict
+│       # Queries all online peers in parallel, merges results,
+│       # applies cache, returns unified session list
+│
+├── benchmarks.py       # Fleet benchmarking engine
+│   ├── detect_maneuvers(session_data) -> list[ManeuverEvent]
+│   │   # Detect tacks, gybes, mark roundings, starts, acceleration
+│   │   # from instrument data (heading rate, BSP delta, GPS geometry)
+│   ├── compute_maneuver_metrics(maneuvers) -> list[ManeuverMetric]
+│   ├── fetch_fleet_metrics(peers, co_op_id) -> list[AnonymousMetrics]
+│   │   # Query all peers for /benchmarks/maneuvers and /benchmarks/polar
+│   ├── aggregate_benchmarks(fleet_metrics, own_metrics, min_boats=4)
+│   │   -> BenchmarkResult
+│   │   # Compute percentiles, enforce min-boat threshold, bin by condition
+│   ├── ManeuverEvent (dataclass: type, session_id, timestamp, duration)
+│   ├── ManeuverMetric (dataclass: type, tws_bin, loss_sec)
+│   └── BenchmarkResult (dataclass: rows of maneuver × fleet stats × rank)
+│
+└── maneuver_detect.py  # Maneuver detection from instrument data
+    ├── detect_tacks(heading_series, bsp_series) -> list[TackEvent]
+    ├── detect_gybes(heading_series, bsp_series) -> list[GybeEvent]
+    ├── detect_mark_roundings(gps_track, course_marks) -> list[RoundingEvent]
+    ├── detect_starts(gps_track, start_line) -> list[StartEvent]
+    └── detect_accelerations(bsp_series) -> list[AccelEvent]
 ```
 
 ---
@@ -676,18 +900,31 @@ IPs have changed.
 - Add `/co-op/*` router to FastAPI
 - Implement request signing and verification
 - Query peers for session lists and track data
+- Temporal sharing controls (embargo enforcement)
+- Event-scoped session visibility
 - Co-op view page in web UI
 
-### Phase 3: Governance + voting
+### Phase 3: Fleet benchmarking
+- Maneuver detection from instrument data (tacks, gybes, mark roundings,
+  starts, acceleration)
+- Benchmark API endpoints (`/benchmarks/maneuvers`, `/benchmarks/polar`)
+- Fleet benchmark aggregation engine (min 4-boat threshold)
+- **Percentile Heatmap dashboard** — the primary co-op value proposition
+- Benchmark embargo sync (exclude embargoed data)
+
+### Phase 4: Governance + voting
 - Proposal creation and vote collection
 - Agreement state management
 - Pre-join disclosure endpoint
+- Membership eligibility enforcement
 
-### Phase 4: Current models + advanced features
+### Phase 5: Current models + advanced features
 - Current observation sharing
 - Aggregated current model computation
-- Coach access records
+- Coach access records (per-boat opt-in, session-scoped)
+- Data aging tiers
 - Peer caching (opt-in)
+- Benchmark historical trends and drilldowns
 
 ---
 
@@ -730,18 +967,56 @@ Decisions reached through PR review and external feedback:
    relaxes to 20 minutes when NTP sync is stale. Peer clock slew on startup
    via heartbeat timestamps. See Section 4.
 
+8. **Email is PII, admin-only visibility.** Owner and crew email addresses
+   are personally identifiable information. Visible only to co-op admins,
+   never exposed to other members. Scrubbed on departure. See data licensing
+   policy Section 1.
+
+9. **Single moderator mode for small co-ops.** Co-ops of 3-4 boats may use
+   a single moderator with a designated backup instead of M-of-N multi-admin.
+   Charter specifies which mode. See Section 1 above.
+
+10. **Heartbeat with manual inactive toggle.** "On the water" vs "in the
+    slip" is inferred from GPS fix recency by default. Boat owners can also
+    manually set themselves inactive (for seasonal haul-outs, extended
+    cruises, etc.) via a toggle in the web UI. The manual toggle prevents
+    false-active from a Pi left running at the marina.
+
+11. **Coach access is per-boat, not fleet-wide.** Each boat individually
+    opts into sharing with a specific coach at the session level. The co-op
+    admin does not control coach access. See Section 5 above.
+
+12. **Fleet benchmarking is the primary co-op value proposition.** Anonymous
+    aggregate statistics (Percentile Heatmap) let elite sailors see exactly
+    where they stand without revealing who is faster. This is what makes the
+    co-op worth joining. See Sections 3 and 5.
+
+13. **Temporal sharing is co-op-level.** Embargo policies are set by the
+    co-op (charter or majority vote), not per-boat. All members operate
+    under the same delay rules. See Section 3 above.
+
+14. **Session visibility defaults to event-scoped.** Members see full-detail
+    data only from events they also participated in. Non-attended events
+    show summary metrics only. This is the recommended default; co-ops can
+    opt for full visibility in their charter.
+
 ---
 
 ## 15. Open Questions
 
-1. **Email visibility within co-op**: Should member emails be visible to
-   all co-op members, or admin-only? Charter should specify.
+(Previously open questions 1-3 have been resolved — see Section 14 items
+8-10 above.)
 
-2. **Admin threshold for small co-ops**: With only 3 boats, 2-of-3 admin
-   threshold means every admin is critical. Should the minimum co-op size
-   for multi-admin be 4+ boats, with single-admin + backup key for 3-boat
-   co-ops?
+1. **Benchmark computation location**: Should each Pi compute its own
+   benchmarks by querying all peers (fully decentralized, but N×N queries),
+   or should a designated "benchmark aggregator" Pi compute once and
+   distribute results (more efficient, but introduces a coordination role)?
 
-3. **Heartbeat granularity**: Should "on the water" vs "in the slip" be
-   inferred from GPS fix recency, or should the boat owner explicitly set
-   a status?
+2. **Maneuver detection calibration**: How should the platform handle
+   fleet-specific maneuver detection thresholds? A J/105 tack looks
+   different from a J/80 tack. Should the co-op charter specify detection
+   parameters, or should they be auto-calibrated from the fleet's data?
+
+3. **Benchmark caching**: Should benchmark results be cached locally with
+   a TTL (e.g., refresh daily), or always computed live? Caching reduces
+   peer queries but means benchmarks lag behind new data.
