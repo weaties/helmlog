@@ -29,6 +29,9 @@
   percentiles, rankings) so you can see exactly where you stand — without
   revealing who is faster. You learn "your gybes cost 0.9 seconds vs the fleet
   median" without learning who gybes well.
+- **Processing offload is temporary.** When heavy tasks (transcription, video
+  analysis) are sent to a faster machine, no data stays on the offload host
+  after processing. Your Pi is the only permanent home for your data.
 - **Safety first.** This data is for performance analysis, not navigation. Don't
   hit a rock because of a shared log.
 
@@ -301,6 +304,73 @@ dataset aggregation, commercial analytics products) while accepting that
 **human learning is uncontrollable**. The per-boat opt-in and session-level
 permissioning ensure each boat consciously chooses what a specific coach sees,
 rather than inadvertently exposing the entire co-op dataset.
+
+### Processing offload
+
+Some operations — audio transcription, speaker diarization, photo analysis,
+video processing — are too computationally expensive for the Raspberry Pi.
+Helm Log supports **offloading** these tasks to a faster machine (e.g., a
+Mac on the same Tailscale network). When data leaves the Pi for processing,
+the following rules apply:
+
+#### Own-boat offload (boat owner's machine)
+
+The simplest case: the boat owner sends their own data to their own hardware
+(e.g., a personal Mac running a transcription worker). This is functionally
+equivalent to processing on the Pi — the data stays under the boat owner's
+control. However:
+
+- **Crew PII obligations still apply.** Audio recordings contain crew voices.
+  If a crew member requests deletion of their voice data, the boat owner must
+  ensure the offload host also purges any cached copies (WAV files, transcript
+  segments, intermediate processing artifacts).
+- **The offload host must not retain data beyond the processing task.** Once
+  the result (transcript, analysis output) is returned to the Pi and stored in
+  SQLite, the offload host should delete the source file and any intermediate
+  artifacts. The Pi is the single source of truth — offload hosts are
+  ephemeral processors, not storage.
+
+#### Third-party offload (cloud services, shared infrastructure)
+
+If the boat owner uses a third-party service for processing (cloud
+transcription API, hosted ML inference, etc.):
+
+- The third-party service is a **data processor** (in GDPR terms) acting on
+  behalf of the boat owner (data controller). The boat owner is responsible
+  for ensuring the processor handles PII appropriately.
+- The platform should **warn the boat owner** when configuring an offload URL
+  that points outside the Tailscale network (i.e., to a public endpoint) that
+  PII will leave the private mesh.
+- The same crew deletion obligations apply — if a crew member requests voice
+  deletion, the boat owner must ensure the third-party has purged any copies.
+
+#### Co-op processing offload (future)
+
+Some co-op operations may benefit from offload to a designated machine:
+
+- **Current model computation**: querying all peers and running the aggregation
+  could run on a member's beefy hardware or a co-op-funded server
+- **Benchmark aggregation**: if the co-op grows large enough that each Pi
+  querying all peers is impractical, a designated aggregator could compute
+  benchmarks centrally
+
+Co-op processing offload introduces additional constraints:
+
+- The offload host sees **co-op data from multiple boats** — it is no longer
+  just own-boat data. The host must be treated as a co-op resource, not a
+  personal machine.
+- The offload host must **not retain raw per-boat data** beyond the
+  computation. Only the aggregated result (current model, benchmark
+  statistics) may persist.
+- The co-op must **approve the offload host** by vote (standard 2/3
+  supermajority) and the host must be identified in the co-op charter.
+- Audit logging of the offload host's data access is required.
+
+#### Transport security
+
+All processing offload traffic must be encrypted in transit. Tailscale
+provides this by default for traffic between Tailscale nodes. For offload
+to non-Tailscale endpoints, HTTPS (TLS 1.2+) is required.
 
 ---
 
@@ -1246,6 +1316,7 @@ launch) and **future** (needed as the platform matures).
 | Audit logging | Log all co-op data API access (who fetched which session, when) with **data volume** (points returned, bytes transferred) to detect extraction patterns. Rate-limit based on both request count and data volume — a peer scraping 1 Hz data for hundreds of sessions triggers auto-freeze even if request rate looks normal. Alert admin on anomalous patterns. Legitimate UI browsing must not trigger false positives |
 | Replay protection | Include a random nonce in every signed API request; reject duplicate nonces within the clock skew window. Prevents replay attacks even when NTP sync is stale |
 | Revocation broadcast | On membership revocation (departure or expulsion), actively push the signed revocation record to all online peers rather than relying on passive polling. Ensures rapid enforcement within minutes of signing |
+| Processing offload cleanup | When a processing task (transcription, analysis) completes on a remote host, the Pi should request deletion of the source file and intermediate artifacts from the offload host. Log offload events (what was sent, where, when) for PII audit trail |
 | AIS data filtering | Exclude AIS and proximity data from other vessels during capture; never store non-member tracking data |
 | Email PII handling | Scrub owner and crew email from records on departure; admin-only visibility by default |
 | Active/inactive member tracking | Heartbeat-based activity detection; manual inactive toggle; configurable inactivity threshold; quorum denominator adjustment |
@@ -1288,6 +1359,9 @@ launch) and **future** (needed as the platform matures).
 | Single moderator mode | Alternative to multi-admin for small co-ops; single moderator with designated backup |
 | Event-scoped Proof of Participation | When requesting full track data under event-scoped visibility, the requester provides a signed claim proving they raced the same event — neither boat exposes its private session list |
 | Maneuver detection | Detect tacks, gybes, mark roundings, starts, and acceleration events from instrument data for fleet benchmark computation; auto-calibrate thresholds from co-op data |
+| Third-party offload warning | Warn the boat owner when configuring an offload URL outside the Tailscale network; log that PII will leave the private mesh |
+| Co-op offload host approval | Track co-op vote approving a designated processing host; enforce audit logging on the offload host's co-op data access |
+| Photo/video analysis offload | Extend the transcription offload pattern to still photos (sail shape, rig tune) and video (maneuver analysis, start replay) with the same PII and cleanup obligations |
 
 ---
 
@@ -1335,3 +1409,4 @@ beyond what the AGPLv3 allows.
 | 2026-03-08 | Rev 17 — attack vector mitigations: coach access scoped to per-boat opt-in with session-level permissioning and "knowledge transfer reality" acknowledgment; anonymization disclaimer strengthened to "will almost certainly be identifiable" with specific examples (track shapes, start positions, tactical style); event-scoped session visibility (full detail only for events you participated in) with optional data aging tiers (current season full, previous season reduced, older summary only); membership eligibility criteria (active racing requirement, commercial actors must use coach access, observation-only grounds for expulsion) |
 | 2026-03-08 | Rev 18 — anonymous fleet benchmarking: fleet benchmark definition added to Definitions; new "Anonymous fleet benchmarking" subsection in Section 2 covering what benchmarks show (fleet statistics, percentile rank, condition binning), what they don't show (no identities, no tracks, no reverse-engineering tools), minimum 4-boat threshold per condition bin, benchmarks-are-not-ML clarification (descriptive stats don't require Section 8 governance), benchmark behavior on departure and during embargoes, network effect value proposition; MVP tech requirements for benchmark computation and embargo sync; future tech requirements for condition binning and historical trends; plain English summary updated |
 | 2026-03-08 | Rev 19 — protocol hardening from security review: audit logging expanded to track data volume (points returned, bytes transferred) for volume-based rate limiting; replay protection via request nonces with dedup; revocation broadcast (active push to all peers instead of passive polling); event-scoped Proof of Participation for track data requests; maneuver detection added to future tech requirements |
+| 2026-03-08 | Rev 20 — processing offload: new "Processing offload" subsection in Section 1 covering own-boat offload (PII obligations, ephemeral processing, no data retention on offload host), third-party offload (GDPR data processor role, public endpoint warning), co-op offload (designated host approved by 2/3 vote, no raw per-boat data retention, audit logging), and transport security (Tailscale default, TLS 1.2+ for non-Tailscale); MVP tech requirement for offload cleanup and audit trail; future requirements for third-party warning, co-op host approval, and photo/video analysis offload; plain English summary updated |
