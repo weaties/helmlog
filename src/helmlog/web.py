@@ -66,8 +66,11 @@ def _get_git_info() -> str:
             except Exception:  # noqa: BLE001
                 pass  # no upstream configured
 
+        import socket
+
+        hostname = socket.gethostname()
         status = "dirty" if dirty else "clean"
-        return f"{branch} @ {sha} · {status}"
+        return f"{hostname} · {branch} @ {sha} · {status}"
     except Exception:  # noqa: BLE001
         return ""
 
