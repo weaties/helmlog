@@ -848,28 +848,23 @@ src/helmlog/
 
 How does a Pi find other co-op members on the Tailscale network?
 
-**Option A: Tailscale API** (simplest)
+| Approach | Pros | Cons |
+|---|---|---|
+| **Option A: Tailscale API** — scan `/localapi/v0/status` for peers, probe each with `GET /co-op/identity` | Zero configuration — discovers peers automatically; handles IP changes and new members without admin action; works even if membership records are stale | Chatty — probes every Tailscale peer (not just co-op members); slower startup; doesn't work if Pis aren't on the same tailnet; small attack surface (port-scanning peers) |
+| **Option B: Membership record exchange** — admin distributes a member list with Tailscale hostnames/IPs | Instant discovery — you know exactly who to query; no probing; works across tailnets (via Funnel URLs); member list is signed and verifiable | Requires admin action when IPs change; stale if a Pi moves to a new Tailscale node; admin is in the critical path for peer updates |
 
-Tailscale's local API (`/localapi/v0/status`) returns all peers on the
-tailnet with their IPs and hostnames. Each Pi:
+**Decision: hybrid (Option B primary, Option A fallback).**
 
-1. Lists Tailscale peers
-2. Attempts `GET /co-op/identity` on each peer's IP (port 3002)
-3. If the peer responds with a boat card, checks for shared co-op
-   membership
-4. Caches discovered peers in `co_op_peers` table
+Use Option B (explicit member list from admin) as the primary mechanism.
+Each membership record includes the member's Tailscale hostname. Pis
+query known members directly — no scanning. If a known peer is unreachable
+at its last-known address, fall back to Option A (Tailscale API scan) to
+re-discover the peer at a new IP. This gives instant startup from the
+member list with self-healing when addresses change.
 
-This happens on startup and periodically (every 10 minutes).
-
-**Option B: Membership record exchange**
-
-When the admin signs a membership record, it includes the new member's
-Tailscale hostname (or IP). All members receive the full member list from
-the admin. No discovery needed — you know exactly who to query.
-
-**Recommendation:** Use Option B (explicit member list from admin) as the
-primary mechanism, with Option A as a fallback for discovering peers whose
-IPs have changed.
+Option A scanning runs on startup and every 10 minutes, but only probes
+Tailscale peers that aren't already in the `co_op_peers` table with a
+recent `last_seen` timestamp. This keeps the scan lightweight.
 
 ---
 
