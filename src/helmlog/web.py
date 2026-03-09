@@ -3195,4 +3195,182 @@ def create_app(
         deployments = await storage.list_deployments()
         return JSONResponse({"deployments": deployments})
 
+    # ------------------------------------------------------------------
+    # Admin: Federation
+    # ------------------------------------------------------------------
+
+    @app.get("/admin/federation", response_class=HTMLResponse, include_in_schema=False)
+    async def admin_federation_page(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> Response:
+        return _templates.TemplateResponse(
+            request, "admin/federation.html",
+            _tpl_ctx(request, "/admin/federation"),
+        )
+
+    @app.get("/api/federation/identity")
+    async def api_federation_identity(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        identity = await storage.get_boat_identity()
+        boat_card_json: str | None = None
+        if identity:
+            try:
+                from helmlog.federation import load_identity
+
+                _, card = load_identity()
+                boat_card_json = card.to_json()
+                identity["owner_email"] = card.owner_email
+            except FileNotFoundError:
+                pass
+        return JSONResponse({
+            "identity": identity,
+            "boat_card_json": boat_card_json,
+        })
+
+    @app.post("/api/federation/identity", status_code=201)
+    async def api_federation_identity_init(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        body = await request.json()
+        sail = body.get("sail_number", "").strip()
+        name = body.get("boat_name", "").strip()
+        email = body.get("owner_email") or None
+        if not sail or not name:
+            raise HTTPException(422, "sail_number and boat_name are required")
+
+        from helmlog.federation import identity_exists, init_identity
+
+        if identity_exists():
+            raise HTTPException(409, "Identity already exists")
+
+        card = init_identity(
+            sail_number=sail, boat_name=name, owner_email=email,
+        )
+        await storage.save_boat_identity(
+            pub_key=card.pub_key, fingerprint=card.fingerprint,
+            sail_number=card.sail_number, boat_name=card.boat_name,
+        )
+        await _audit(request, "federation.identity.init",
+                     detail=f"{card.boat_name} ({card.fingerprint})", user=_user)
+        return JSONResponse({
+            "pub_key": card.pub_key, "fingerprint": card.fingerprint,
+            "sail_number": card.sail_number, "boat_name": card.boat_name,
+        }, status_code=201)
+
+    @app.get("/api/federation/co-ops")
+    async def api_federation_coops(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        memberships = await storage.list_co_op_memberships()
+        result = []
+        for m in memberships:
+            peers = await storage.list_co_op_peers(m["co_op_id"])
+            result.append({**m, "peers": peers})
+        return JSONResponse({"co_ops": result})
+
+    @app.post("/api/federation/co-ops", status_code=201)
+    async def api_federation_coop_create(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.federation import create_co_op, load_identity
+
+        try:
+            private_key, card = load_identity()
+        except FileNotFoundError:
+            raise HTTPException(409, "Initialize identity first")  # noqa: B904
+
+        if not card.owner_email:
+            raise HTTPException(
+                422, "Co-op requires an owner email. "
+                "Re-initialize identity with an email address.",
+            )
+
+        body = await request.json()
+        name = body.get("name", "").strip()
+        if not name:
+            raise HTTPException(422, "Co-op name is required")
+        areas = body.get("areas") or []
+
+        charter = create_co_op(private_key, card, name=name, areas=areas)
+
+        from helmlog.federation import list_co_op_members
+
+        members = list_co_op_members(charter.co_op_id)
+        if members:
+            await storage.save_co_op_membership(
+                co_op_id=charter.co_op_id, co_op_name=charter.name,
+                co_op_pub=card.pub_key, membership_json=members[0].to_json(),
+                role="admin", joined_at=members[0].joined_at,
+            )
+        await _audit(request, "federation.co_op.create",
+                     detail=f"{charter.name} ({charter.co_op_id})", user=_user)
+        return JSONResponse(charter.to_dict(), status_code=201)
+
+    @app.post("/api/federation/co-ops/{co_op_id}/invite", status_code=201)
+    async def api_federation_invite(
+        request: Request,
+        co_op_id: str,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.federation import BoatCard, load_identity, sign_membership
+
+        try:
+            private_key, admin_card = load_identity()
+        except FileNotFoundError:
+            raise HTTPException(409, "Initialize identity first")  # noqa: B904
+
+        membership = await storage.get_co_op_membership(co_op_id)
+        if not membership or membership["role"] != "admin":
+            raise HTTPException(403, "You are not admin of this co-op")
+
+        body = await request.json()
+        required = ["pub", "fingerprint", "sail_number", "name"]
+        missing = [f for f in required if not body.get(f)]
+        if missing:
+            raise HTTPException(
+                422, f"Boat card missing required fields: {', '.join(missing)}",
+            )
+
+        invitee = BoatCard(
+            pub_key=body["pub"], fingerprint=body["fingerprint"],
+            sail_number=body["sail_number"], boat_name=body["name"],
+            owner_email=body.get("owner_email"),
+        )
+
+        record = sign_membership(
+            private_key, co_op_id=co_op_id, boat_card=invitee,
+        )
+
+        # Persist to filesystem
+        from pathlib import Path
+
+        identity_dir = Path.home() / ".helmlog" / "identity"
+        members_dir = identity_dir.parent / "co-ops" / co_op_id / "members"
+        members_dir.mkdir(parents=True, exist_ok=True)
+        member_file = members_dir / f"{invitee.fingerprint}.json"
+        member_file.write_text(record.to_json())
+
+        # Persist to SQLite as peer
+        await storage.save_co_op_peer(
+            co_op_id=co_op_id, boat_pub=invitee.pub_key,
+            fingerprint=invitee.fingerprint,
+            membership_json=record.to_json(),
+            sail_number=invitee.sail_number,
+            boat_name=invitee.boat_name,
+        )
+        await _audit(
+            request, "federation.invite",
+            detail=f"{invitee.boat_name} ({invitee.fingerprint}) → {co_op_id}",
+            user=_user,
+        )
+        return JSONResponse({
+            "boat_name": invitee.boat_name,
+            "fingerprint": invitee.fingerprint,
+            "membership": record.to_dict(),
+        }, status_code=201)
+
     return app
