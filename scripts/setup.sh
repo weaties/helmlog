@@ -829,6 +829,12 @@ ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status nginx
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status nginx.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/cp ${PROJECT_DIR}/scripts/nginx/helmlog.conf /etc/nginx/sites-available/helmlog
+
+# .git/ ownership repair (deploy.sh may need to fix files owned by helmlog)
+${CURRENT_USER} ALL=(ALL) NOPASSWD: /bin/chown -R ${CURRENT_USER}\:${CURRENT_USER} ${PROJECT_DIR}/.git/
+
+# helmlog service account — git as repo owner for web-triggered deploys
+helmlog ALL=(${CURRENT_USER}) NOPASSWD: /usr/bin/git
 EOF
 sudo chmod 440 "$SUDOERS_FILE"
 

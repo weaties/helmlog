@@ -76,6 +76,32 @@ class TestDeployWindow:
         assert in_deploy_window(config) is expected
 
 
+class TestRepoOwner:
+    def test_returns_current_user(self) -> None:
+        """_repo_owner() should return the owner of the project directory."""
+        from helmlog.deploy import _repo_owner
+
+        owner = _repo_owner()
+        assert isinstance(owner, str)
+        assert len(owner) > 0
+
+    def test_git_no_optional_locks_in_read_mode(self) -> None:
+        """Read-mode _git() should use --no-optional-locks."""
+        from helmlog.deploy import _git
+
+        # rev-parse is a pure read — should succeed with --no-optional-locks
+        sha = _git(["rev-parse", "--short=7", "HEAD"])
+        assert len(sha) == 7
+
+    def test_git_write_mode_same_user(self) -> None:
+        """Write-mode _git() should work when current user owns the repo."""
+        from helmlog.deploy import _git
+
+        # Should not use sudo when current user == repo owner
+        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], write=True)
+        assert branch  # non-empty
+
+
 class TestGetRunningVersion:
     def test_returns_dict(self) -> None:
         from helmlog.deploy import get_running_version

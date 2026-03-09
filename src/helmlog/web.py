@@ -44,7 +44,7 @@ def _get_git_info() -> str:
 
     try:
         _repo = str(Path(__file__).resolve().parents[2])
-        _git = ["git", "-c", f"safe.directory={_repo}"]
+        _git = ["git", "-c", f"safe.directory={_repo}", "--no-optional-locks"]
 
         def _run(args: list[str]) -> str:
             return subprocess.check_output(

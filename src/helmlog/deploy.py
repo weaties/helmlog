@@ -102,11 +102,54 @@ def _uv_bin() -> str:
     return "uv"  # last resort — let it fail with a clear error
 
 
-def _git(args: list[str]) -> str:
-    """Run a git command in the project directory and return stripped stdout."""
+def _repo_owner() -> str:
+    """Return the username that owns the project directory.
+
+    Git operations that write to .git/ must run as this user to avoid
+    ownership conflicts between the service account and the deploy user.
+    """
     repo = _repo_dir()
+    st = os.stat(repo)
+    try:
+        import pwd
+
+        return pwd.getpwuid(st.st_uid).pw_name
+    except (ImportError, KeyError):
+        return str(st.st_uid)
+
+
+def _git(args: list[str], *, write: bool = False) -> str:
+    """Run a git command in the project directory and return stripped stdout.
+
+    When *write* is False (default) ``--no-optional-locks`` is added so that
+    read-only commands do not refresh the index or create lock files.
+
+    When *write* is True the command is executed via ``sudo -u <owner>`` if
+    the current process is not the repo owner, preventing .git/ files from
+    being created with the wrong ownership.
+    """
+    repo = _repo_dir()
+    git_base = ["git", "-c", f"safe.directory={repo}"]
+
+    if write:
+        owner = _repo_owner()
+        current_user = os.environ.get("USER", "")
+        if not current_user:
+            try:
+                import pwd
+
+                current_user = pwd.getpwuid(os.getuid()).pw_name
+            except (ImportError, KeyError):
+                current_user = str(os.getuid())
+        if current_user != owner:
+            cmd = ["sudo", "-n", "-u", owner, *git_base, *args]
+        else:
+            cmd = [*git_base, *args]
+    else:
+        cmd = [*git_base, "--no-optional-locks", *args]
+
     return subprocess.check_output(
-        ["git", "-c", f"safe.directory={repo}", *args],
+        cmd,
         cwd=repo,
         stderr=subprocess.DEVNULL,
         text=True,
@@ -116,7 +159,7 @@ def _git(args: list[str]) -> str:
 async def list_remote_branches() -> list[str]:
     """Return sorted list of remote branch names from origin."""
     try:
-        await asyncio.to_thread(_git, ["fetch", "--prune", "origin"])
+        await asyncio.to_thread(_git, ["fetch", "--prune", "origin"], write=True)
         raw = await asyncio.to_thread(_git, ["branch", "-r", "--format=%(refname:short)"])
     except Exception:  # noqa: BLE001
         return []
@@ -151,7 +194,7 @@ async def fetch_latest(config: DeployConfig) -> dict[str, Any] | None:
     Returns None if the fetch fails (offline, no remote, etc.).
     """
     try:
-        await asyncio.to_thread(_git, ["fetch", "origin", config.branch])
+        await asyncio.to_thread(_git, ["fetch", "origin", config.branch], write=True)
         sha = _git(["rev-parse", f"origin/{config.branch}"])
         short_sha = _git(["rev-parse", "--short=7", f"origin/{config.branch}"])
         commit_ts = _git(["log", "-1", "--format=%cI", f"origin/{config.branch}"])
@@ -285,10 +328,10 @@ async def execute_deploy(config: DeployConfig) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
 
     try:
-        # git fetch + checkout + pull
-        await asyncio.to_thread(_git, ["fetch", "origin", config.branch])
-        await asyncio.to_thread(_git, ["checkout", config.branch])
-        await asyncio.to_thread(_git, ["pull", "origin", config.branch])
+        # git fetch + checkout + pull (as repo owner to preserve .git/ ownership)
+        await asyncio.to_thread(_git, ["fetch", "origin", config.branch], write=True)
+        await asyncio.to_thread(_git, ["checkout", config.branch], write=True)
+        await asyncio.to_thread(_git, ["pull", "origin", config.branch], write=True)
 
         # uv sync (best-effort — may fail on first run if deps changed)
         uv = _uv_bin()

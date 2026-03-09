@@ -50,6 +50,22 @@ done
 cd "$PROJECT_DIR"
 
 # ---------------------------------------------------------------------------
+# Ensure .git/ is owned by the current user (fixes ownership conflicts when
+# the helmlog service account has run git commands in this directory)
+# ---------------------------------------------------------------------------
+REPO_OWNER="$(stat -c '%U' "$PROJECT_DIR")"
+if [[ "$(whoami)" != "$REPO_OWNER" ]]; then
+    echo "ERROR: deploy.sh must run as '$REPO_OWNER' (the repo owner), not '$(whoami)'." >&2
+    exit 1
+fi
+
+# Fix any mis-owned .git/ files (e.g. from a previous service-account git op)
+if find .git -not -user "$(whoami)" -print -quit 2>/dev/null | grep -q .; then
+    echo "==> Fixing .git/ ownership (some files owned by wrong user)..."
+    sudo chown -R "$(whoami):$(whoami)" .git/
+fi
+
+# ---------------------------------------------------------------------------
 # Resolve uv — not on PATH in non-interactive SSH sessions
 # ---------------------------------------------------------------------------
 if command -v uv &>/dev/null; then
