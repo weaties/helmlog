@@ -807,6 +807,10 @@ ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl status promtail.service
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active helmlog
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active helmlog.service
 
+# Self-deploy — the helmlog service user needs to restart itself
+helmlog ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart helmlog
+helmlog ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart helmlog.service
+
 # Log access
 ${CURRENT_USER} ALL=(ALL) NOPASSWD: /usr/bin/journalctl
 
