@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from helmlog.audio import AudioSession
     from helmlog.external import TideReading, WeatherReading
     from helmlog.races import Race
+    from helmlog.synthesize import SynthRow
 
 from helmlog.nmea2000 import (
     COGSOGRecord,
@@ -1349,6 +1350,58 @@ class Storage:
         await db.commit()
         return len(pos_rows)
 
+    async def import_synthesized_data(
+        self,
+        rows: list[SynthRow],
+    ) -> int:
+        """Bulk-insert synthesized SynthRow data into all instrument tables.
+
+        Returns number of rows written per table.
+        """
+        db = self._conn()
+        src_gps = 3
+        src_inst = 7
+
+        def ts_iso(row: SynthRow) -> str:
+            return row.ts.isoformat()
+
+        await db.executemany(
+            "INSERT INTO positions (ts, source_addr, latitude_deg, longitude_deg)"
+            " VALUES (?, ?, ?, ?)",
+            [(ts_iso(r), src_gps, r.lat, r.lon) for r in rows],
+        )
+        await db.executemany(
+            "INSERT INTO headings (ts, source_addr, heading_deg, deviation_deg, variation_deg)"
+            " VALUES (?, ?, ?, ?, ?)",
+            [(ts_iso(r), src_inst, r.heading, None, None) for r in rows],
+        )
+        await db.executemany(
+            "INSERT INTO speeds (ts, source_addr, speed_kts) VALUES (?, ?, ?)",
+            [(ts_iso(r), src_inst, r.bsp) for r in rows],
+        )
+        await db.executemany(
+            "INSERT INTO cogsog (ts, source_addr, cog_deg, sog_kts) VALUES (?, ?, ?, ?)",
+            [(ts_iso(r), src_gps, r.cog, r.sog) for r in rows],
+        )
+        await db.executemany(
+            "INSERT INTO depths (ts, source_addr, depth_m, offset_m) VALUES (?, ?, ?, ?)",
+            [(ts_iso(r), src_inst, r.depth, None) for r in rows],
+        )
+        # True wind (reference=0: TWA relative to boat heading)
+        await db.executemany(
+            "INSERT INTO winds (ts, source_addr, wind_speed_kts, wind_angle_deg, reference)"
+            " VALUES (?, ?, ?, ?, ?)",
+            [(ts_iso(r), src_inst, r.tws, r.twa, 0) for r in rows],
+        )
+        # Apparent wind (reference=2)
+        await db.executemany(
+            "INSERT INTO winds (ts, source_addr, wind_speed_kts, wind_angle_deg, reference)"
+            " VALUES (?, ?, ?, ?, ?)",
+            [(ts_iso(r), src_inst, r.aws, r.awa, 2) for r in rows],
+        )
+        await db.commit()
+        return len(rows)
+
     async def get_race(self, race_id: int) -> Race | None:
         """Return the race with the given id, or None if not found."""
         from datetime import datetime as _datetime
@@ -1481,12 +1534,12 @@ class Storage:
         debriefs (from ``audio_sessions`` where ``session_type='debrief'``).
         Results are sorted newest-first.
 
-        *session_type* may be ``"race"``, ``"practice"``, ``"debrief"``, or
-        ``None`` for all types.
+        *session_type* may be ``"race"``, ``"practice"``, ``"synthesized"``,
+        ``"debrief"``, or ``None`` for all types.
         """
         db = self._conn()
 
-        include_races = session_type in (None, "race", "practice")
+        include_races = session_type in (None, "race", "practice", "synthesized")
         include_debriefs = session_type in (None, "debrief")
 
         parts: list[str] = []
@@ -1495,11 +1548,11 @@ class Storage:
         if include_races:
             race_where: list[str] = []
             race_params: list[Any] = []
-            if session_type in ("race", "practice"):
+            if session_type in ("race", "practice", "synthesized"):
                 race_where.append("r.session_type = ?")
                 race_params.append(session_type)
             else:
-                race_where.append("r.session_type IN ('race', 'practice')")
+                race_where.append("r.session_type IN ('race', 'practice', 'synthesized')")
             if q:
                 race_where.append("(r.name LIKE ? OR r.event LIKE ?)")
                 like = f"%{q}%"
@@ -1537,7 +1590,8 @@ class Storage:
                 f"   WHERE sn.race_id = r.id) AS has_notes"
                 f" FROM races r"
                 f" LEFT JOIN audio_sessions a"
-                f"   ON a.race_id = r.id AND a.session_type IN ('race', 'practice')"
+                f"   ON a.race_id = r.id"
+                f"   AND a.session_type IN ('race', 'practice', 'synthesized')"
                 f" {where}"
             )
             params.extend(race_params)
@@ -1626,7 +1680,7 @@ class Storage:
 
         # Attach crew to all session types (debriefs inherit from parent race)
         for session in result:
-            if session["type"] in ("race", "practice"):
+            if session["type"] in ("race", "practice", "synthesized"):
                 session["crew"] = await self.get_race_crew(session["id"])
             elif session["type"] == "debrief" and session.get("parent_race_id"):
                 session["crew"] = await self.get_race_crew(session["parent_race_id"])

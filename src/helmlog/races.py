@@ -32,7 +32,7 @@ class Race:
     date: str  # UTC date "YYYY-MM-DD"
     start_utc: datetime
     end_utc: datetime | None
-    session_type: str = "race"  # "race" | "practice"
+    session_type: str = "race"  # "race" | "practice" | "synthesized"
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +93,12 @@ def build_race_name(event: str, d: date, race_num: int, session_type: str = "rac
              build_race_name("BallardCup", date(2025, 8, 10), 1, "practice")
              → "20250810-BallardCup-P1"
     """
-    num_str = f"P{race_num}" if session_type == "practice" else str(race_num)
+    if session_type == "practice":
+        num_str = f"P{race_num}"
+    elif session_type == "synthesized":
+        num_str = f"S{race_num}"
+    else:
+        num_str = str(race_num)
     return f"{d.strftime('%Y%m%d')}-{event}-{num_str}"
 
 

@@ -2483,3 +2483,69 @@ async def test_camera_admin_page_loads(storage: Storage) -> None:
     assert resp.status_code == 200
     assert "Cameras" in resp.text
     assert "Add Camera" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Tests — synthesize session
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_default(storage: Storage) -> None:
+    """POST /api/sessions/synthesize with defaults creates a session."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/sessions/synthesize", json={})
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert "id" in data
+    assert data["points"] > 1000
+    assert data["duration_s"] > 0
+    assert "S" in data["name"]
+
+
+@pytest.mark.asyncio
+async def test_synthesize_custom_wind(storage: Storage) -> None:
+    """POST with non-zero wind direction works."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/sessions/synthesize",
+            json={"wind_direction": 180.0, "wind_speed_low": 10.0, "wind_speed_high": 12.0},
+        )
+
+    assert resp.status_code == 201
+    assert resp.json()["points"] > 0
+
+
+@pytest.mark.asyncio
+async def test_synthesize_appears_in_sessions(storage: Storage) -> None:
+    """Synthesized session appears in session list with type 'synthesized'."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post("/api/sessions/synthesize", json={})
+        resp = await client.get("/api/sessions", params={"type": "synthesized"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] >= 1
+    assert any(s["type"] == "synthesized" for s in data["sessions"])
+
+
+@pytest.mark.asyncio
+async def test_synthesize_invalid_course(storage: Storage) -> None:
+    """Unknown course_type returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/sessions/synthesize", json={"course_type": "invalid"})
+
+    assert resp.status_code == 422

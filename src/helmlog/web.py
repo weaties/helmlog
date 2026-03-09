@@ -1374,6 +1374,104 @@ def create_app(
         )
 
     # ------------------------------------------------------------------
+    # /api/sessions/synthesize
+    # ------------------------------------------------------------------
+
+    @app.post("/api/sessions/synthesize")
+    async def api_synthesize_session(
+        request: Request, _user: dict[str, Any] = Depends(require_auth("crew"))
+    ) -> JSONResponse:  # noqa: B008, E501
+        import asyncio
+        import uuid
+
+        from helmlog.courses import build_custom_course, build_triangle_course, build_wl_course
+        from helmlog.races import build_race_name, local_today
+        from helmlog.synthesize import SynthConfig, simulate
+
+        body = await request.json()
+        course_type = body.get("course_type", "windward_leeward")
+        wind_dir = float(body.get("wind_direction", 0.0))
+        tws_low = float(body.get("wind_speed_low", 8.0))
+        tws_high = float(body.get("wind_speed_high", 14.0))
+        shift_mag_lo = float(body.get("shift_magnitude_low", 5.0))
+        shift_mag_hi = float(body.get("shift_magnitude_high", 14.0))
+        start_lat = float(body.get("start_lat", 47.63))
+        start_lon = float(body.get("start_lon", -122.40))
+        leg_nm = float(body.get("leg_distance_nm", 1.0))
+        laps = int(body.get("laps", 2))
+        seed = int(body.get("seed", 42))
+        mark_sequence = body.get("mark_sequence", "")
+
+        if course_type == "windward_leeward":
+            legs = build_wl_course(start_lat, start_lon, wind_dir, leg_nm, laps)
+        elif course_type == "triangle":
+            legs = build_triangle_course(start_lat, start_lon, wind_dir, leg_nm)
+        elif course_type == "custom":
+            if not mark_sequence:
+                raise HTTPException(
+                    status_code=422, detail="mark_sequence required for custom course"
+                )
+            try:
+                legs = build_custom_course(mark_sequence, start_lat, start_lon, wind_dir, leg_nm)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        else:
+            raise HTTPException(status_code=422, detail=f"Unknown course_type: {course_type}")
+
+        now = datetime.now(UTC)
+        config = SynthConfig(
+            start_lat=start_lat,
+            start_lon=start_lon,
+            base_twd=wind_dir,
+            tws_low=tws_low,
+            tws_high=tws_high,
+            shift_interval=(600.0, 1200.0),
+            shift_magnitude=(shift_mag_lo, shift_mag_hi),
+            legs=legs,
+            seed=seed,
+            start_time=now,
+        )
+
+        rows = await asyncio.to_thread(simulate, config)
+
+        today = local_today()
+        date_str = today.isoformat()
+        race_num = await storage.count_sessions_for_date(date_str, "synthesized") + 1
+        source_id = str(uuid.uuid4())
+
+        rules = {r["weekday"]: r["event_name"] for r in await storage.list_event_rules()}
+        from helmlog.races import default_event_for_date
+
+        custom_event = await storage.get_daily_event(date_str)
+        default_event = default_event_for_date(today, rules)
+        event = custom_event or default_event or "Synthesized"
+
+        name = build_race_name(event, today, race_num, "synthesized")
+
+        start_utc = rows[0].ts
+        end_utc = rows[-1].ts
+
+        race_id = await storage.import_race(
+            name=name,
+            event=event,
+            race_num=race_num,
+            date_str=date_str,
+            start_utc=start_utc,
+            end_utc=end_utc,
+            session_type="synthesized",
+            source="synthesized",
+            source_id=source_id,
+        )
+        await storage.import_synthesized_data(rows)
+
+        duration_s = (end_utc - start_utc).total_seconds()
+        await _audit(request, "session.synthesize", detail=name, user=_user)
+        return JSONResponse(
+            {"id": race_id, "name": name, "points": len(rows), "duration_s": round(duration_s, 1)},
+            status_code=201,
+        )
+
+    # ------------------------------------------------------------------
     # /api/races/{id}/end
     # ------------------------------------------------------------------
 
@@ -1698,10 +1796,10 @@ def create_app(
         offset: int = 0,
         _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
     ) -> JSONResponse:
-        if type is not None and type not in ("race", "practice", "debrief"):
+        if type is not None and type not in ("race", "practice", "debrief", "synthesized"):
             raise HTTPException(
                 status_code=422,
-                detail="type must be 'race', 'practice', or 'debrief'",
+                detail="type must be 'race', 'practice', 'debrief', or 'synthesized'",
             )
         limit = max(1, min(limit, 200))
         total, sessions = await storage.list_sessions(

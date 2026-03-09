@@ -62,6 +62,8 @@ function render(s) {
     btnStartRace.classList.add('hidden');
     btnStartPractice.classList.add('hidden');
     btnDebriefLast.classList.add('hidden');
+    document.getElementById('btn-synthesize').classList.add('hidden');
+    document.getElementById('synth-panel').classList.add('hidden');
     document.getElementById('cur-name').textContent = cur.name;
     document.getElementById('cur-meta').textContent =
       'Started ' + fmtTime(cur.start_utc);
@@ -77,6 +79,7 @@ function render(s) {
     btnEnd.classList.add('hidden');
     btnStartRace.classList.remove('hidden');
     btnStartPractice.classList.remove('hidden');
+    document.getElementById('btn-synthesize').classList.remove('hidden');
     curRaceStartMs = null;
     _crewLoadedForRaceId = null;
     clearInterval(tickInterval);
@@ -930,6 +933,60 @@ async function loadPolar() {
       if (noData) noData.style.display = d.tws != null ? 'block' : 'none';
     }
   } catch(e) {}
+}
+
+// ---- Synthesize race ----
+
+function toggleSynthPanel() {
+  const panel = document.getElementById('synth-panel');
+  panel.classList.toggle('hidden');
+}
+
+function onSynthCourseChange() {
+  const v = document.getElementById('synth-course').value;
+  document.getElementById('synth-marks-field').classList.toggle('hidden', v !== 'custom');
+}
+
+async function runSynthesize() {
+  const btn = document.getElementById('synth-go');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  const result = document.getElementById('synth-result');
+  result.style.display = 'none';
+  try {
+    const body = {
+      course_type: document.getElementById('synth-course').value,
+      wind_direction: parseFloat(document.getElementById('synth-wind-dir').value) || 0,
+      wind_speed_low: parseFloat(document.getElementById('synth-tws-lo').value) || 8,
+      wind_speed_high: parseFloat(document.getElementById('synth-tws-hi').value) || 14,
+      laps: parseInt(document.getElementById('synth-laps').value) || 2,
+      start_lat: parseFloat(document.getElementById('synth-lat').value) || 47.63,
+      start_lon: parseFloat(document.getElementById('synth-lon').value) || -122.40,
+      seed: Math.floor(Math.random() * 100000),
+    };
+    const marks = document.getElementById('synth-marks').value.trim();
+    if (marks) body.mark_sequence = marks;
+    const resp = await fetch('/api/sessions/synthesize', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      const dur = Math.round(data.duration_s / 60);
+      result.textContent = data.name + ' — ' + data.points + ' points, ' + dur + ' min';
+      result.style.display = '';
+      await loadState();
+    } else {
+      const err = await resp.json().catch(() => null);
+      alert(err && err.detail ? err.detail : 'Synthesize failed');
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate';
+  }
 }
 
 loadState();
