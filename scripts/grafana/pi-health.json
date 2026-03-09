@@ -37,12 +37,13 @@
   ],
   "title": "Pi Health",
   "uid": "pi-health",
-  "description": "Raspberry Pi system health — CPU, memory, disk, temperature",
+  "description": "Raspberry Pi system health — CPU, memory, disk, temperature, fan speed",
   "tags": ["system", "pi"],
   "timezone": "browser",
   "refresh": "1m",
+  "graphTooltip": 1,
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "time": { "from": "now-6h", "to": "now" },
   "templating": {
     "list": [
@@ -64,7 +65,7 @@
       "type": "gauge",
       "title": "CPU Usage",
       "id": 1,
-      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 6 },
+      "gridPos": { "x": 0, "y": 0, "w": 5, "h": 6 },
       "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -99,7 +100,7 @@
       "type": "gauge",
       "title": "Memory Usage",
       "id": 2,
-      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 6 },
+      "gridPos": { "x": 5, "y": 0, "w": 5, "h": 6 },
       "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -134,7 +135,7 @@
       "type": "gauge",
       "title": "Disk Usage",
       "id": 3,
-      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 6 },
+      "gridPos": { "x": 10, "y": 0, "w": 5, "h": 6 },
       "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -169,7 +170,7 @@
       "type": "gauge",
       "title": "CPU Temperature",
       "id": 4,
-      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 6 },
+      "gridPos": { "x": 15, "y": 0, "w": 5, "h": 6 },
       "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -197,6 +198,42 @@
         {
           "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
           "query": "from(bucket: \"signalk\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"system_health\")\n  |> filter(fn: (r) => r[\"_field\"] == \"cpu_temp_c\")\n  |> last()",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "gauge",
+      "title": "Fan Speed",
+      "id": 9,
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 6 },
+      "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "rotrpm",
+          "min": 0,
+          "max": 8000,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1000 },
+              { "color": "yellow", "value": 5000 },
+              { "color": "red", "value": 7000 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+          "query": "from(bucket: \"signalk\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"system_health\")\n  |> filter(fn: (r) => r[\"_field\"] == \"fan_rpm\")\n  |> last()",
           "refId": "A"
         }
       ]
@@ -236,7 +273,7 @@
       "type": "timeseries",
       "title": "CPU Temperature Over Time",
       "id": 6,
-      "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 14, "w": 8, "h": 8 },
       "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom" },
@@ -267,9 +304,35 @@
     },
     {
       "type": "timeseries",
+      "title": "Fan Speed Over Time",
+      "id": 10,
+      "gridPos": { "x": 8, "y": 14, "w": 8, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "rotrpm",
+          "min": 0,
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "color": { "fixedColor": "blue", "mode": "fixed" }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+          "query": "from(bucket: \"signalk\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"system_health\")\n  |> filter(fn: (r) => r[\"_field\"] == \"fan_rpm\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> map(fn: (r) => ({r with _field: \"Fan RPM\"}))\n  |> yield(name: \"fan\")",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
       "title": "Disk Usage Over Time",
       "id": 7,
-      "gridPos": { "x": 12, "y": 14, "w": 12, "h": 8 },
+      "gridPos": { "x": 16, "y": 14, "w": 8, "h": 8 },
       "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom" },

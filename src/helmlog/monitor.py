@@ -50,6 +50,19 @@ def _collect_and_write() -> None:
                     temp_c = float(current)
                 break
 
+    # Fan speed (RPM) — available on Raspberry Pi 5 with active cooler
+    fan_rpm: float | None = None
+    get_fans = getattr(psutil, "sensors_fans", None)
+    if get_fans is not None:
+        fans: dict[str, list[object]] = get_fans()
+        for fan_entries in fans.values():
+            if fan_entries:
+                fan_first = fan_entries[0]
+                fan_current = getattr(fan_first, "current", None)
+                if fan_current is not None:
+                    fan_rpm = float(fan_current)
+                break
+
     # Network throughput: compute bytes/sec since the previous sample
     net_now: Any = psutil.net_io_counters()
     net_time_now: float = time.monotonic()
@@ -80,6 +93,8 @@ def _collect_and_write() -> None:
         )
         if temp_c is not None:
             p = p.field("cpu_temp_c", temp_c)
+        if fan_rpm is not None:
+            p = p.field("fan_rpm", fan_rpm)
         if net_bytes_sent_per_s is not None:
             p = p.field("net_bytes_sent_per_s", net_bytes_sent_per_s)
         if net_bytes_recv_per_s is not None:

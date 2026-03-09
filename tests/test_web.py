@@ -380,6 +380,25 @@ async def test_index_has_dynamic_signalk_link(storage: Storage) -> None:
 
 
 @pytest.mark.asyncio
+async def test_nav_has_hamburger_menu(storage: Storage) -> None:
+    """Base layout includes a hamburger toggle button for mobile nav."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/")
+
+    html = resp.text
+    # Hamburger button must be present with accessibility attributes
+    assert 'id="nav-hamburger"' in html
+    assert "aria-label=" in html
+    assert "aria-expanded=" in html
+    # Nav links must still all be present
+    assert 'href="/history"' in html
+    assert 'href="/admin/boats"' in html
+
+
+@pytest.mark.asyncio
 async def test_grafana_annotations_cors_header(storage: Storage) -> None:
     """GET /api/grafana/annotations returns Access-Control-Allow-Origin: *."""
     app = create_app(storage)
