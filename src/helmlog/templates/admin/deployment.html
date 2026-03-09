@@ -233,7 +233,11 @@ async function deploy(){
       showStatus('Deploy failed: '+(d.detail||'unknown error'),'err');
       btn.disabled=false;btn.textContent='Deploy Now';
     }
-  }catch(e){showStatus('Deploy failed: '+e.message,'err');btn.disabled=false;btn.textContent='Deploy Now'}
+  }catch(e){
+    // A network error is expected when the service restarts (kills the connection)
+    showStatus('Service restarting...','ok');
+    setTimeout(()=>{loadStatus();loadChangelog();loadHistory()},5000);
+  }
 }
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')}
 function showStatus(msg,cls){const el=document.getElementById('deploy-status');el.textContent=msg;el.className='status '+cls;if(cls==='ok')setTimeout(()=>{el.className='status'},5000)}
