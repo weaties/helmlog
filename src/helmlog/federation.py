@@ -13,6 +13,7 @@ import base64
 import hashlib
 import json
 import os
+import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,6 +53,7 @@ class BoatCard:
     sail_number: str
     boat_name: str
     owner_email: str | None = None  # required for co-op, optional standalone
+    tailscale_ip: str | None = None  # auto-detected Tailscale IPv4
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -62,10 +64,22 @@ class BoatCard:
         }
         if self.owner_email:
             d["owner_email"] = self.owner_email
+        if self.tailscale_ip:
+            d["tailscale_ip"] = self.tailscale_ip
         return d
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2)
+
+
+def get_tailscale_ip() -> str | None:
+    """Detect the local Tailscale IPv4 address, or None if unavailable."""
+    try:
+        return subprocess.check_output(
+            ["tailscale", "ip", "-4"], text=True, stderr=subprocess.DEVNULL,
+        ).strip() or None
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -294,6 +308,7 @@ def init_identity(
         sail_number=sail_number,
         boat_name=boat_name,
         owner_email=owner_email,
+        tailscale_ip=get_tailscale_ip(),
     )
     (identity_dir / "boat.json").write_text(card.to_json() + "\n")
 
@@ -325,6 +340,7 @@ def load_identity(identity_dir: Path | None = None) -> tuple[Ed25519PrivateKey, 
         sail_number=card_data["sail_number"],
         boat_name=card_data["name"],
         owner_email=card_data.get("owner_email"),
+        tailscale_ip=get_tailscale_ip(),
     )
 
     return private_key, card

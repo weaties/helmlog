@@ -75,10 +75,7 @@ select.field{appearance:auto}
     <textarea id="invite-card-json" class="field"
       placeholder='Paste the invitee boat card JSON (their boat.json contents)...'></textarea>
     <input id="invite-tailscale-ip" class="field"
-      placeholder="Invitee Tailscale IP (e.g. 100.64.1.2) — optional"
-      maxlength="45"/>
-    <input id="invite-admin-ts-ip" class="field"
-      placeholder="Your Tailscale IP (so invitee can reach you) — needed for sharing"
+      placeholder="Invitee Tailscale IP override (leave blank if included in boat card)"
       maxlength="45"/>
   </div>
   <button class="btn-add" onclick="inviteBoat()">Send Invitation</button>
@@ -285,8 +282,6 @@ async function inviteBoat(){
   }
   const tsIp=document.getElementById('invite-tailscale-ip').value.trim();
   if(tsIp) parsed.tailscale_ip=tsIp;
-  const adminTsIp=document.getElementById('invite-admin-ts-ip').value.trim();
-  if(adminTsIp) parsed.admin_tailscale_ip=adminTsIp;
   const r=await fetch('/api/federation/co-ops/'+encodeURIComponent(coopId)+'/invite',{
     method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(parsed)
@@ -311,7 +306,6 @@ async function inviteBoat(){
     }
     document.getElementById('invite-card-json').value='';
     document.getElementById('invite-tailscale-ip').value='';
-    document.getElementById('invite-admin-ts-ip').value='';
     setTimeout(()=>{loadCoops()},1200);
   }else{
     const d=await r.json().catch(()=>({}));

@@ -3408,7 +3408,7 @@ def create_app(
             "admin_pub": admin_card.pub_key,
             "admin_fingerprint": admin_card.fingerprint,
             "admin_boat_name": admin_card.boat_name,
-            "admin_tailscale_ip": body.get("admin_tailscale_ip", ""),
+            "admin_tailscale_ip": admin_card.tailscale_ip or "",
             "membership": record.to_dict(),
         }
         return JSONResponse({
