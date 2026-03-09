@@ -355,10 +355,14 @@ def create_co_op(
     """
     identity_dir = identity_dir or _DEFAULT_IDENTITY_DIR
 
-    # Co-op ID is the fingerprint of the admin boat's public key
-    co_op_id = boat_card.fingerprint
-
     now = datetime.now(UTC).isoformat()
+
+    # Co-op ID: unique per co-op (hash of admin fingerprint + name + timestamp)
+    id_input = f"{boat_card.fingerprint}:{name}:{now}"
+    co_op_id = (
+        base64.urlsafe_b64encode(hashlib.sha256(id_input.encode()).digest())[:16]
+        .decode()
+    )
 
     # Build charter (without sig first, then sign)
     charter = Charter(

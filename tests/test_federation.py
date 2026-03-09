@@ -239,7 +239,8 @@ class TestCoOp:
             areas=["Elliott Bay"], identity_dir=identity_dir,
         )
         assert charter.name == "Puget Sound J/105"
-        assert charter.co_op_id == boat_card.fingerprint
+        assert len(charter.co_op_id) == 16  # URL-safe base64 hash prefix
+        assert charter.co_op_id != boat_card.fingerprint
         assert charter.areas == ["Elliott Bay"]
         assert charter.admin_sig != ""
 
@@ -253,6 +254,19 @@ class TestCoOp:
         co_op_dir = identity_dir.parent / "co-ops" / charter.co_op_id
         assert (co_op_dir / "charter.json").exists()
         assert (co_op_dir / "members" / f"{boat_card.fingerprint}.json").exists()
+
+    def test_create_two_coops_different_ids(
+        self, identity_dir: Path, boat_card: BoatCard,
+    ) -> None:
+        """Same boat creating two co-ops should produce distinct IDs."""
+        priv, _ = load_identity(identity_dir)
+        c1 = create_co_op(
+            priv, boat_card, name="Fleet A", identity_dir=identity_dir,
+        )
+        c2 = create_co_op(
+            priv, boat_card, name="Fleet B", identity_dir=identity_dir,
+        )
+        assert c1.co_op_id != c2.co_op_id
 
     def test_create_co_op_self_membership(
         self, identity_dir: Path, boat_card: BoatCard
