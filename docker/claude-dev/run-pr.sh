@@ -18,7 +18,7 @@ TIMEOUT="${TIMEOUT:-1800}"
 : "${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY}"
 : "${GH_TOKEN:?Set GH_TOKEN}"
 
-PROMPT="You are working on the helmlog project (github.com/dweatbrook/helmlog).
+PROMPT="You are working on the helmlog project (github.com/weaties/helmlog).
 
 Your task: address feedback and fix issues on PR #${PR_NUM}.
 

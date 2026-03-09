@@ -8,7 +8,7 @@ git config --global user.email "${GIT_AUTHOR_EMAIL:-noreply@anthropic.com}"
 
 # ── Clone repo ───────────────────────────────────────────────────────────────
 
-REPO="${GITHUB_REPO:-dweatbrook/helmlog}"
+REPO="${GITHUB_REPO:-weaties/helmlog}"
 
 if [ ! -d "/workspace/helmlog/.git" ]; then
     echo "▸ Cloning ${REPO}..."
