@@ -86,8 +86,19 @@ helmlog/
 │           └── session.js  # Session detail page logic
 │
 ├── tests/                  # pytest suite — runs on any machine, no hardware required
+│   └── integration/        # Federation integration tests (two-boat simulation)
+│       ├── conftest.py     # Fleet fixture — two boats with real Ed25519 keypairs
+│       ├── seed.py         # Test data seeding (co-op, sessions, instrument data)
+│       ├── test_federation_e2e.py   # Co-op lifecycle, session list, track fetch
+│       ├── test_auth_e2e.py         # Signing, replay, forgery, non-member
+│       ├── test_embargo_e2e.py      # Embargo enforcement and sharing lifecycle
+│       ├── test_data_license_e2e.py # Field allowlist, PII protection, audit
+│       ├── Dockerfile       # Minimal helmlog image for Docker-based testing
+│       ├── docker-compose.yml  # Two-container boat-a + boat-b + test-runner
+│       └── serve.py         # Entry point for Docker container web server
 ├── data/                   # SQLite DB, WAV files, exports (gitignored)
 ├── scripts/                # deploy.sh, setup.sh, transcribe_worker.py
+│   └── integration_smoke.py  # Pi-to-Pi smoke tests over Tailscale
 └── docs/                   # Guides, policies, and technical specs
 ```
 
@@ -98,6 +109,7 @@ helmlog/
 ```bash
 uv sync                     # install dependencies
 uv run pytest               # run tests (coverage printed by default)
+uv run pytest tests/integration/ -v  # run federation integration tests
 uv run ruff check .         # lint check
 uv run ruff format --check .  # format check
 uv run mypy src/            # type check
@@ -211,6 +223,7 @@ Use `/data-license` to review code changes against the full policy.
 - **Follow TDD** — write a failing test before implementing new functionality (see `/tdd` skill)
 - **Commit and push every change** — after editing any file (code, config, scripts), always commit and push to the current branch immediately. This is especially critical for hotfixes on the Pi — uncommitted changes on the device will be lost on the next deploy. Never leave work uncommitted.
 - Write tests for all decoding and export logic
+- Run integration tests (`uv run pytest tests/integration/ -v`) for any federation/co-op/peer API changes
 - Use `uv add <package>` to add dependencies — never edit `pyproject.toml` manually for deps
 - Keep the SQLite schema versioned with simple integer migrations in `storage.py`
 - Log every read error and decode failure with `loguru` at `WARNING` or above
@@ -227,13 +240,54 @@ Use `/data-license` to review code changes against the full policy.
 
 ## Testing Strategy
 
-- Unit tests live in `tests/` and run on any machine (no Pi hardware required)
+### Unit tests (`tests/`)
+
+- Run on any machine (no Pi hardware required)
 - `conftest.py` provides in-memory SQLite fixtures and sample decoded data structures
 - Hardware-dependent modules are mocked in tests
 - `test_web.py` uses `httpx.AsyncClient` with `ASGITransport` to exercise all API routes
 - **Pre-existing mypy errors in `web.py`** (do not fix unless explicitly asked):
   - `Item "None" of "datetime | None" has no attribute "isoformat"`
   - `Item "None" of "AudioRecorder | None" has no attribute "stop"` (x2)
+
+### Integration tests (`tests/integration/`)
+
+Three-layer strategy for validating inter-Pi federation, co-op, and data licensing:
+
+**Layer 1 — In-process pytest** (runs in CI, ~5 seconds):
+Two boats with real Ed25519 keypairs and in-memory SQLite, communicating via
+`httpx.ASGITransport`. No mocking of crypto or auth — real signing, real
+verification, real nonce replay protection. 32 tests covering:
+- Co-op lifecycle (create, join, share, unshare, revoke)
+- Ed25519 request auth (valid, tampered, forged, replayed, non-member)
+- Embargo enforcement (blocked while active, accessible after lift)
+- Data licensing (field allowlist, PII exclusion, private session isolation, audit)
+
+```bash
+uv run pytest tests/integration/ -v
+```
+
+**Layer 2 — Pi smoke tests** (corvopi-tst1 → corvopi-live over Tailscale):
+Lightweight script that runs on one Pi and tests the real running helmlog
+service on a peer Pi. Validates Tailscale networking, systemd, NTP sync.
+
+```bash
+ssh weaties@corvopi-tst1 "cd ~/helmlog && uv run python scripts/integration_smoke.py --peer corvopi-live"
+```
+
+**Layer 3 — Docker compose** (two containers on Mac, arm64 capable):
+Two real helmlog instances on an isolated Docker network. Useful for testing
+process isolation, network failure scenarios, and Pi-matching architecture.
+
+```bash
+docker compose -f tests/integration/docker-compose.yml up --build --abort-on-container-exit
+```
+
+**When to run integration tests:**
+- Any PR touching `federation.py`, `peer_api.py`, `peer_auth.py`, `peer_client.py`,
+  or federation-related storage code → Layer 1 runs automatically in CI
+- Federation PRs before merge → Layer 2 (Pi smoke) as manual validation
+- Use `/integration-test` skill to run the appropriate layer
 
 ---
 
@@ -247,3 +301,4 @@ Use `/data-license` to review code changes against the full policy.
 | `/deploy-pi` | Pi deployment reference and service architecture |
 | `/pr-checklist` | Pre-PR verification (tests, lint, types, docs) |
 | `/data-license` | Review changes against the data licensing policy |
+| `/integration-test` | Run federation integration tests (Layer 1/2/3) |
