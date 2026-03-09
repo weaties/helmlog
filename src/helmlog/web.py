@@ -3449,6 +3449,22 @@ def create_app(
             role="member",
         )
 
+        # Save ourselves as a peer (so we show in the members list)
+        try:
+            from helmlog.federation import load_identity
+
+            _, my_card = load_identity()
+            await storage.save_co_op_peer(
+                co_op_id=co_op_id, boat_pub=my_card.pub_key,
+                fingerprint=my_card.fingerprint,
+                membership_json=membership_str,
+                sail_number=my_card.sail_number,
+                boat_name=my_card.boat_name,
+                tailscale_ip=my_card.tailscale_ip,
+            )
+        except FileNotFoundError:
+            pass
+
         # Save the admin as a peer so we can query them
         admin_tailscale_ip = body.get("admin_tailscale_ip", "").strip() or None
         admin_boat_name = body.get("admin_boat_name", "").strip()
