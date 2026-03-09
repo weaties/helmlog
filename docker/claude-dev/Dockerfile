@@ -41,11 +41,16 @@ RUN npm install -g @anthropic-ai/claude-code || \
      && apt-get install -y nodejs \
      && npm install -g @anthropic-ai/claude-code)
 
+# ── Non-root user ────────────────────────────────────────────────────────────
+# Claude Code refuses --dangerously-skip-permissions as root.
+
+RUN useradd -m -s /bin/bash claude && mkdir -p /workspace && chown claude:claude /workspace
+
+COPY --chmod=755 entrypoint.sh /entrypoint.sh
+
 # ── Workspace ────────────────────────────────────────────────────────────────
 
 WORKDIR /workspace
-
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+USER claude
 
 ENTRYPOINT ["/entrypoint.sh"]
