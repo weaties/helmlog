@@ -165,15 +165,36 @@ def detect_gybes(
     return _detect(hdg, bsp, twa, "gybe", _GYBE_HDG_THRESHOLD, upwind=False)
 
 
+def detect_course_changes(
+    cog: list[tuple[datetime, float]],
+    sog: list[tuple[datetime, float]],
+) -> list[Maneuver]:
+    """Detect significant course changes when no true wind data is available.
+
+    Uses COG and SOG (GPS-derived) instead of compass heading and boat speed.
+    Maneuvers are typed as ``"maneuver"`` because tack/gybe classification
+    requires TWA, which is absent in GPS-only sessions.
+
+    Uses the lower of the tack/gybe heading thresholds so that both types
+    of maneuver are captured.
+    """
+    threshold = min(_TACK_HDG_THRESHOLD, _GYBE_HDG_THRESHOLD)
+    return _detect(cog, sog, [], "maneuver", threshold, upwind=None)
+
+
 def _detect(
     hdg: list[tuple[datetime, float]],
     bsp: list[tuple[datetime, float]],
     twa: list[tuple[datetime, float]],
     maneuver_type: str,
     threshold: float,
-    upwind: bool,
+    upwind: bool | None,
 ) -> list[Maneuver]:
-    """Shared sliding-window detector for tacks and gybes."""
+    """Shared sliding-window detector for tacks and gybes.
+
+    When *upwind* is None no wind-angle filter is applied — use this when
+    true wind data is unavailable and only course changes can be detected.
+    """
     if len(hdg) < _DETECTION_WINDOW_S + 2:
         return []
 
@@ -196,19 +217,21 @@ def _detect(
             i += 1
             continue
 
-        # Check wind angle: upwind (TWA < 90°) for tacks, downwind (TWA > 90°) for gybes
-        window_twa = [twa_by_ts[ts] for ts in window_ts if ts in twa_by_ts]
-        if not window_twa:
-            i += 1
-            continue
+        # Check wind angle: upwind (TWA < 90°) for tacks, downwind (TWA > 90°) for gybes.
+        # When upwind is None (no wind data), skip the wind-angle filter entirely.
+        if upwind is not None:
+            window_twa = [twa_by_ts[ts] for ts in window_ts if ts in twa_by_ts]
+            if not window_twa:
+                i += 1
+                continue
 
-        mean_twa = sum(window_twa) / len(window_twa)
-        if upwind and mean_twa >= 90.0:
-            i += 1
-            continue
-        if not upwind and mean_twa <= 90.0:
-            i += 1
-            continue
+            mean_twa = sum(window_twa) / len(window_twa)
+            if upwind and mean_twa >= 90.0:
+                i += 1
+                continue
+            if not upwind and mean_twa <= 90.0:
+                i += 1
+                continue
 
         # Enforce gap between consecutive maneuvers
         maneuver_start_ts = window_ts[0]
@@ -296,31 +319,61 @@ async def detect_maneuvers(storage: Storage, session_id: int) -> list[Maneuver]:
         logger.warning("detect_maneuvers: session {} has invalid timestamps", session_id)
         return []
 
-    # Load instrument data
+    # Load instrument data; fall back to cogsog (GPS) when direct sensor data absent
     headings_raw = await storage.query_range("headings", start, end)
     speeds_raw = await storage.query_range("speeds", start, end)
     winds_raw = await storage.query_range("winds", start, end)
 
+    # Fetch cogsog only if needed — avoids unnecessary query when instruments are present
+    cogsog_raw: list[dict[str, Any]] = []
     if not headings_raw or not speeds_raw:
+        cogsog_raw = await storage.query_range("cogsog", start, end)
+
+    if not headings_raw and not cogsog_raw:
         logger.info(
-            "detect_maneuvers: session {} has insufficient data (hdg={}, bsp={})",
+            "detect_maneuvers: session {} has no heading or COG data",
             session_id,
-            len(headings_raw),
-            len(speeds_raw),
         )
         await storage.write_maneuvers(session_id, [])
         return []
 
-    # Build time-keyed series (first record per second wins)
+    if not speeds_raw and not cogsog_raw:
+        logger.info(
+            "detect_maneuvers: session {} has no speed or SOG data",
+            session_id,
+        )
+        await storage.write_maneuvers(session_id, [])
+        return []
+
+    # Build time-keyed series (first record per second wins); prefer instrument
+    # data and fall back to GPS-derived cogsog when instruments are absent.
     hdg_series: dict[str, float] = {}
-    for r in headings_raw:
-        key = str(r["ts"])[:19]
-        hdg_series.setdefault(key, float(r["heading_deg"]))
+    if headings_raw:
+        for r in headings_raw:
+            key = str(r["ts"])[:19]
+            hdg_series.setdefault(key, float(r["heading_deg"]))
+    else:
+        logger.info(
+            "detect_maneuvers: session {} using COG as heading fallback (no HDG data)",
+            session_id,
+        )
+        for r in cogsog_raw:
+            key = str(r["ts"])[:19]
+            hdg_series.setdefault(key, float(r["cog_deg"]))
 
     bsp_series: dict[str, float] = {}
-    for r in speeds_raw:
-        key = str(r["ts"])[:19]
-        bsp_series.setdefault(key, float(r["speed_kts"]))
+    if speeds_raw:
+        for r in speeds_raw:
+            key = str(r["ts"])[:19]
+            bsp_series.setdefault(key, float(r["speed_kts"]))
+    else:
+        logger.info(
+            "detect_maneuvers: session {} using SOG as speed fallback (no BSP data)",
+            session_id,
+        )
+        for r in cogsog_raw:
+            key = str(r["ts"])[:19]
+            bsp_series.setdefault(key, float(r["sog_kts"]))
 
     # Winds: filter to true-wind references only
     twa_series: dict[str, float] = {}
@@ -371,10 +424,22 @@ async def detect_maneuvers(storage: Storage, session_id: int) -> list[Maneuver]:
             twa_filled[k] = last_twa
         twa_list = [(_parse_key(k), twa_filled[k]) for k in all_keys]
     else:
-        # No true wind data — skip maneuver detection
-        logger.info("detect_maneuvers: session {} has no true wind data, skipping", session_id)
-        await storage.write_maneuvers(session_id, [])
-        return []
+        # No true wind data — detect course changes without tack/gybe classification
+        logger.info(
+            "detect_maneuvers: session {} has no true wind data, "
+            "detecting course changes from {} only",
+            session_id,
+            "COG" if not headings_raw else "HDG",
+        )
+        course_changes = detect_course_changes(hdg_list, bsp_list)
+        course_changes.sort(key=lambda m: m.ts)
+        await storage.write_maneuvers(session_id, course_changes)
+        logger.info(
+            "detect_maneuvers: session {} → {} course changes (no wind data)",
+            session_id,
+            len(course_changes),
+        )
+        return course_changes
 
     tacks = detect_tacks(hdg_list, bsp_list, twa_list)
     gybes = detect_gybes(hdg_list, bsp_list, twa_list)

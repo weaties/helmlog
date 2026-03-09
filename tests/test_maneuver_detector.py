@@ -450,3 +450,58 @@ async def test_detect_maneuvers_twd_reference4(storage: Storage) -> None:
     maneuvers = await detect_maneuvers(storage, session_id)
     tacks = [m for m in maneuvers if m.type == "tack"]
     assert len(tacks) >= 1, "Expected at least one tack when wind is stored as TWD (reference=4)"
+
+
+# ---------------------------------------------------------------------------
+# detect_maneuvers — COG/SOG fallback (GPS-only sessions)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_detect_maneuvers_falls_back_to_cogsog(storage: Storage) -> None:
+    """When headings/speeds tables are empty, falls back to COG/SOG from cogsog.
+
+    This covers real-world sessions where only GPS data is available (no B&G
+    instruments connected) — HDG, BSP, and TWA columns are all empty.  The
+    detector must still identify significant course changes using COG/SOG and
+    return them typed as 'maneuver' (tack/gybe classification requires TWA).
+    """
+    from helmlog.nmea2000 import PGN_COG_SOG_RAPID, COGSOGRecord
+
+    base = datetime(2024, 6, 15, 14, 0, 0, tzinfo=UTC)
+    session_end = base + timedelta(seconds=120)
+
+    db = storage._conn()
+    await db.execute(
+        "INSERT INTO races (name, event, race_num, date, start_utc, end_utc)"
+        " VALUES ('COGOnly-R1', 'TestEvent', 4, '2024-06-15', ?, ?)",
+        (base.isoformat(), session_end.isoformat()),
+    )
+    await db.commit()
+    cur = await db.execute("SELECT last_insert_rowid()")
+    row = await cur.fetchone()
+    session_id = int(row[0])
+
+    # Pre-maneuver: COG=40°, SOG=6.5 kts (30 seconds)
+    for i in range(30):
+        ts = base + timedelta(seconds=i)
+        await storage.write(COGSOGRecord(PGN_COG_SOG_RAPID, 5, ts, 40.0, 6.5))
+
+    # Course change: COG sweeps 40°→320° (80° through north) over 10 seconds
+    for i in range(10):
+        ts = base + timedelta(seconds=30 + i)
+        frac = i / 9
+        diff = ((320.0 - 40.0 + 180) % 360) - 180  # = -80°
+        cog = (40.0 + frac * diff) % 360
+        await storage.write(COGSOGRecord(PGN_COG_SOG_RAPID, 5, ts, cog, 5.0))
+
+    # Post-maneuver: COG=320°, SOG=6.5 kts (80 seconds)
+    for i in range(80):
+        ts = base + timedelta(seconds=40 + i)
+        await storage.write(COGSOGRecord(PGN_COG_SOG_RAPID, 5, ts, 320.0, 6.5))
+
+    maneuvers = await detect_maneuvers(storage, session_id)
+    assert len(maneuvers) >= 1, "Should detect course change using COG/SOG fallback"
+    assert all(m.type == "maneuver" for m in maneuvers), (
+        "Without TWA, maneuvers should be typed 'maneuver' not 'tack'/'gybe'"
+    )
