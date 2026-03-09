@@ -384,3 +384,69 @@ async def test_get_session_maneuvers_returns_list(storage: Storage) -> None:
 
     result = await storage.get_session_maneuvers(session_id)
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_detect_maneuvers_twd_reference4(storage: Storage) -> None:
+    """Wind stored as TWD (reference=4, B&G fallback) → tack still detected.
+
+    B&G instruments via Signal K often send environment.wind.directionTrue
+    (north-referenced TWD, reference=4) rather than environment.wind.angleTrue
+    (boat-referenced TWA, reference=0).  The detector must convert TWD→TWA
+    using heading so tacks are not silently skipped.
+    """
+    from helmlog.nmea2000 import (
+        PGN_SPEED_THROUGH_WATER,
+        PGN_VESSEL_HEADING,
+        PGN_WIND_DATA,
+        HeadingRecord,
+        SpeedRecord,
+        WindRecord,
+    )
+
+    base = datetime(2024, 6, 15, 14, 0, 0, tzinfo=UTC)
+    session_end = base + timedelta(seconds=120)
+
+    db = storage._conn()
+    await db.execute(
+        "INSERT INTO races (name, event, race_num, date, start_utc, end_utc)"
+        " VALUES ('TWD-R1', 'TestEvent', 3, '2024-06-15', ?, ?)",
+        (base.isoformat(), session_end.isoformat()),
+    )
+    await db.commit()
+    cur = await db.execute("SELECT last_insert_rowid()")
+    row = await cur.fetchone()
+    session_id = int(row[0])
+
+    # TWD=355° — wind from NNW.  Pre-tack HDG=40 → TWA≈45° (upwind, port tack).
+    # Post-tack HDG=320 → TWA≈35° (upwind, starboard tack).
+    TWD = 355.0
+
+    # Pre-tack steady sailing (t=0..29): HDG=40, BSP=6.5, TWD=355 (ref=4)
+    for i in range(30):
+        ts = base + timedelta(seconds=i)
+        await storage.write(HeadingRecord(PGN_VESSEL_HEADING, 5, ts, 40.0, None, None))
+        await storage.write(SpeedRecord(PGN_SPEED_THROUGH_WATER, 5, ts, 6.5))
+        await storage.write(WindRecord(PGN_WIND_DATA, 5, ts, 12.0, TWD, 4))
+
+    # Tack (t=30..39): HDG sweeps 40→320 over 10 seconds, BSP dips
+    for i in range(10):
+        ts = base + timedelta(seconds=30 + i)
+        frac = i / 9
+        diff = ((320.0 - 40.0 + 180) % 360) - 180  # = -80°
+        tack_hdg = (40.0 + frac * diff) % 360
+        bsp = 4.5 if 2 <= i <= 8 else 6.5
+        await storage.write(HeadingRecord(PGN_VESSEL_HEADING, 5, ts, tack_hdg, None, None))
+        await storage.write(SpeedRecord(PGN_SPEED_THROUGH_WATER, 5, ts, bsp))
+        await storage.write(WindRecord(PGN_WIND_DATA, 5, ts, 12.0, TWD, 4))
+
+    # Post-tack recovery (t=40..119): HDG=320, BSP=6.5, TWD=355 (ref=4)
+    for i in range(80):
+        ts = base + timedelta(seconds=40 + i)
+        await storage.write(HeadingRecord(PGN_VESSEL_HEADING, 5, ts, 320.0, None, None))
+        await storage.write(SpeedRecord(PGN_SPEED_THROUGH_WATER, 5, ts, 6.5))
+        await storage.write(WindRecord(PGN_WIND_DATA, 5, ts, 12.0, TWD, 4))
+
+    maneuvers = await detect_maneuvers(storage, session_id)
+    tacks = [m for m in maneuvers if m.type == "tack"]
+    assert len(tacks) >= 1, "Expected at least one tack when wind is stored as TWD (reference=4)"

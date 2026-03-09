@@ -333,6 +333,15 @@ async def detect_maneuvers(storage: Storage, session_id: int) -> list[Maneuver]:
         if ref == _WIND_REF_BOAT:
             twa_series.setdefault(key, abs(float(r["wind_angle_deg"])))
             tws_series.setdefault(key, float(r["wind_speed_kts"]))
+        else:
+            # reference=4: north-referenced TWD — convert to TWA using heading
+            twd = float(r["wind_angle_deg"]) % 360
+            hdg_val = hdg_series.get(key)
+            if hdg_val is not None:
+                raw_twa = (twd - hdg_val + 360) % 360
+                twa = raw_twa if raw_twa <= 180 else 360 - raw_twa
+                twa_series.setdefault(key, twa)
+            tws_series.setdefault(key, float(r["wind_speed_kts"]))
 
     # Build aligned sorted series
     all_keys = sorted(set(hdg_series) & set(bsp_series))
