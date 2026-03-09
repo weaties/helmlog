@@ -71,7 +71,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 27
+_CURRENT_VERSION: int = 28
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -574,6 +574,80 @@ _MIGRATIONS: dict[int, str] = {
         );
         CREATE INDEX IF NOT EXISTS idx_deployment_log_started
             ON deployment_log(started_at);
+    """,
+    28: """
+        -- Federation Phase 1: identity, co-op membership, session sharing
+
+        -- This boat's keypair reference (key material in filesystem, not DB)
+        CREATE TABLE IF NOT EXISTS boat_identity (
+            id          INTEGER PRIMARY KEY CHECK (id = 1),
+            pub_key     TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            sail_number TEXT NOT NULL,
+            boat_name   TEXT,
+            created_at  TEXT NOT NULL
+        );
+
+        -- Co-ops this boat belongs to
+        CREATE TABLE IF NOT EXISTS co_op_memberships (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            co_op_id        TEXT NOT NULL,
+            co_op_name      TEXT NOT NULL,
+            co_op_pub       TEXT NOT NULL,
+            membership_json TEXT NOT NULL,
+            role            TEXT NOT NULL DEFAULT 'member',
+            joined_at       TEXT NOT NULL,
+            status          TEXT NOT NULL DEFAULT 'active',
+            UNIQUE(co_op_id)
+        );
+
+        -- Per-session co-op sharing decisions
+        CREATE TABLE IF NOT EXISTS session_sharing (
+            session_id  INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+            co_op_id    TEXT NOT NULL,
+            shared_at   TEXT NOT NULL,
+            shared_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            embargo_until TEXT,
+            event_name  TEXT,
+            PRIMARY KEY (session_id, co_op_id)
+        );
+
+        -- Known peers (other boats in co-ops we belong to)
+        CREATE TABLE IF NOT EXISTS co_op_peers (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            co_op_id        TEXT NOT NULL,
+            boat_pub        TEXT NOT NULL,
+            fingerprint     TEXT NOT NULL,
+            sail_number     TEXT,
+            boat_name       TEXT,
+            tailscale_ip    TEXT,
+            last_seen       TEXT,
+            membership_json TEXT NOT NULL,
+            UNIQUE(co_op_id, fingerprint)
+        );
+
+        -- Co-op data access audit trail
+        CREATE TABLE IF NOT EXISTS co_op_audit (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            co_op_id        TEXT NOT NULL,
+            accessor_fp     TEXT NOT NULL,
+            action          TEXT NOT NULL,
+            resource        TEXT,
+            timestamp       TEXT NOT NULL,
+            ip              TEXT,
+            points_count    INTEGER,
+            bytes_transferred INTEGER,
+            nonce_hash      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_co_op_audit_ts ON co_op_audit(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_co_op_audit_accessor ON co_op_audit(accessor_fp);
+
+        -- Nonce deduplication for replay protection
+        CREATE TABLE IF NOT EXISTS request_nonces (
+            nonce_hash  TEXT PRIMARY KEY,
+            timestamp   TEXT NOT NULL,
+            boat_fp     TEXT NOT NULL
+        );
     """,
 }
 
@@ -3217,6 +3291,199 @@ class Storage:
         )
         row = await cur.fetchone()
         return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Federation — identity & co-op
+    # ------------------------------------------------------------------
+
+    async def save_boat_identity(
+        self,
+        pub_key: str,
+        fingerprint: str,
+        sail_number: str,
+        boat_name: str,
+    ) -> None:
+        """Store (or update) this boat's identity reference in SQLite."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        now = _datetime.now(UTC).isoformat()
+        await db.execute(
+            "INSERT INTO boat_identity"
+            " (id, pub_key, fingerprint, sail_number, boat_name, created_at)"
+            " VALUES (1, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(id) DO UPDATE SET"
+            "   pub_key = excluded.pub_key,"
+            "   fingerprint = excluded.fingerprint,"
+            "   sail_number = excluded.sail_number,"
+            "   boat_name = excluded.boat_name",
+            (pub_key, fingerprint, sail_number, boat_name, now),
+        )
+        await db.commit()
+
+    async def get_boat_identity(self) -> dict[str, Any] | None:
+        """Return this boat's identity row, or None."""
+        cur = await self._conn().execute(
+            "SELECT pub_key, fingerprint, sail_number, boat_name, created_at"
+            " FROM boat_identity WHERE id = 1"
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def save_co_op_membership(
+        self,
+        co_op_id: str,
+        co_op_name: str,
+        co_op_pub: str,
+        membership_json: str,
+        role: str = "member",
+        joined_at: str | None = None,
+    ) -> int:
+        """Store a co-op membership record. Returns the row id."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        if joined_at is None:
+            joined_at = _datetime.now(UTC).isoformat()
+        cur = await db.execute(
+            "INSERT INTO co_op_memberships"
+            " (co_op_id, co_op_name, co_op_pub, membership_json, role, joined_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(co_op_id) DO UPDATE SET"
+            "   co_op_name = excluded.co_op_name,"
+            "   co_op_pub = excluded.co_op_pub,"
+            "   membership_json = excluded.membership_json,"
+            "   role = excluded.role,"
+            "   joined_at = excluded.joined_at,"
+            "   status = 'active'",
+            (co_op_id, co_op_name, co_op_pub, membership_json, role, joined_at),
+        )
+        await db.commit()
+        return cur.lastrowid or 0
+
+    async def list_co_op_memberships(self) -> list[dict[str, Any]]:
+        """Return all co-op memberships for this boat."""
+        cur = await self._conn().execute(
+            "SELECT id, co_op_id, co_op_name, co_op_pub, membership_json,"
+            " role, joined_at, status"
+            " FROM co_op_memberships ORDER BY joined_at"
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def get_co_op_membership(self, co_op_id: str) -> dict[str, Any] | None:
+        """Return a specific co-op membership, or None."""
+        cur = await self._conn().execute(
+            "SELECT id, co_op_id, co_op_name, co_op_pub, membership_json,"
+            " role, joined_at, status"
+            " FROM co_op_memberships WHERE co_op_id = ?",
+            (co_op_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def share_session(
+        self,
+        session_id: int,
+        co_op_id: str,
+        *,
+        user_id: int | None = None,
+        embargo_until: str | None = None,
+        event_name: str | None = None,
+    ) -> None:
+        """Mark a session as shared with a co-op."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        now = _datetime.now(UTC).isoformat()
+        await db.execute(
+            "INSERT INTO session_sharing"
+            " (session_id, co_op_id, shared_at, shared_by, embargo_until, event_name)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(session_id, co_op_id) DO UPDATE SET"
+            "   shared_at = excluded.shared_at,"
+            "   shared_by = excluded.shared_by,"
+            "   embargo_until = excluded.embargo_until,"
+            "   event_name = excluded.event_name",
+            (session_id, co_op_id, now, user_id, embargo_until, event_name),
+        )
+        await db.commit()
+
+    async def unshare_session(self, session_id: int, co_op_id: str) -> bool:
+        """Remove a session's co-op sharing. Returns True if a row was deleted."""
+        db = self._conn()
+        cur = await db.execute(
+            "DELETE FROM session_sharing WHERE session_id = ? AND co_op_id = ?",
+            (session_id, co_op_id),
+        )
+        await db.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def get_session_sharing(self, session_id: int) -> list[dict[str, Any]]:
+        """Return all co-op sharing records for a session."""
+        cur = await self._conn().execute(
+            "SELECT ss.session_id, ss.co_op_id, ss.shared_at, ss.shared_by,"
+            " ss.embargo_until, ss.event_name, cm.co_op_name"
+            " FROM session_sharing ss"
+            " LEFT JOIN co_op_memberships cm ON ss.co_op_id = cm.co_op_id"
+            " WHERE ss.session_id = ?",
+            (session_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def is_session_shared(self, session_id: int, co_op_id: str) -> bool:
+        """Check if a session is shared with a specific co-op."""
+        cur = await self._conn().execute(
+            "SELECT 1 FROM session_sharing WHERE session_id = ? AND co_op_id = ?",
+            (session_id, co_op_id),
+        )
+        return await cur.fetchone() is not None
+
+    async def save_co_op_peer(
+        self,
+        co_op_id: str,
+        boat_pub: str,
+        fingerprint: str,
+        membership_json: str,
+        *,
+        sail_number: str | None = None,
+        boat_name: str | None = None,
+        tailscale_ip: str | None = None,
+    ) -> None:
+        """Store or update a known co-op peer."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        now = _datetime.now(UTC).isoformat()
+        await db.execute(
+            "INSERT INTO co_op_peers"
+            " (co_op_id, boat_pub, fingerprint, sail_number, boat_name,"
+            "  tailscale_ip, last_seen, membership_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(co_op_id, fingerprint) DO UPDATE SET"
+            "   boat_pub = excluded.boat_pub,"
+            "   sail_number = excluded.sail_number,"
+            "   boat_name = excluded.boat_name,"
+            "   tailscale_ip = excluded.tailscale_ip,"
+            "   last_seen = excluded.last_seen,"
+            "   membership_json = excluded.membership_json",
+            (co_op_id, boat_pub, fingerprint, sail_number, boat_name,
+             tailscale_ip, now, membership_json),
+        )
+        await db.commit()
+
+    async def list_co_op_peers(self, co_op_id: str) -> list[dict[str, Any]]:
+        """Return all known peers for a co-op."""
+        cur = await self._conn().execute(
+            "SELECT id, co_op_id, boat_pub, fingerprint, sail_number,"
+            " boat_name, tailscale_ip, last_seen, membership_json"
+            " FROM co_op_peers WHERE co_op_id = ? ORDER BY boat_name",
+            (co_op_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
 
     # ------------------------------------------------------------------
     # Helpers
