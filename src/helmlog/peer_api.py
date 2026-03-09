@@ -334,33 +334,33 @@ async def peer_session_track(
     track: list[dict[str, Any]] = []
     t = start
     while t <= end:
-        sec = t.isoformat()
+        sec = t.isoformat()[:19]  # truncate to match _by_second index keys
         p = pos_idx.get(sec, {})
         if not p:
             t += timedelta(seconds=1)
             continue
 
         row: dict[str, Any] = {"timestamp": sec}
-        row["LAT"] = p.get("latitude")
-        row["LON"] = p.get("longitude")
+        row["LAT"] = p.get("latitude_deg")
+        row["LON"] = p.get("longitude_deg")
 
         h = hdg_idx.get(sec, {})
-        row["HDG"] = h.get("heading_true")
+        row["HDG"] = h.get("heading_deg")
 
         b = bsp_idx.get(sec, {})
-        row["BSP"] = b.get("speed_kn")
+        row["BSP"] = b.get("speed_kts")
 
         c = cs_idx.get(sec, {})
-        row["COG"] = c.get("cog_true")
-        row["SOG"] = c.get("sog_kn")
+        row["COG"] = c.get("cog_deg")
+        row["SOG"] = c.get("sog_kts")
 
         tw = tw_idx.get(sec, {})
-        row["TWS"] = tw.get("speed_kn")
-        row["TWA"] = tw.get("angle_deg")
+        row["TWS"] = tw.get("wind_speed_kts")
+        row["TWA"] = tw.get("wind_angle_deg")
 
         aw = aw_idx.get(sec, {})
-        row["AWS"] = aw.get("speed_kn")
-        row["AWA"] = aw.get("angle_deg")
+        row["AWS"] = aw.get("wind_speed_kts")
+        row["AWA"] = aw.get("wind_angle_deg")
 
         track.append(row)
         t += timedelta(seconds=1)
