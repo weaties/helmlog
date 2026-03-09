@@ -81,12 +81,13 @@ _STARTUP_SHA: str = ""
 try:
     import subprocess as _sp
 
+    _repo_dir = str(Path(__file__).resolve().parents[2])
     _STARTUP_SHA = _sp.check_output(  # noqa: S603, S607
-        ["git", "rev-parse", "HEAD"],
-        cwd=str(Path(__file__).resolve().parents[2]),
+        ["git", "-c", f"safe.directory={_repo_dir}", "rev-parse", "HEAD"],
+        cwd=_repo_dir,
         text=True, stderr=_sp.DEVNULL,
     ).strip()
-    del _sp
+    del _sp, _repo_dir
 except Exception:  # noqa: BLE001
     pass
 
