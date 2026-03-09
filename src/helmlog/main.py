@@ -973,6 +973,39 @@ async def _build_polar(min_sessions: int) -> None:
         await storage.close()
 
 
+async def _detect_maneuvers(session_id: int | None, all_sessions: bool) -> None:
+    """Detect tacks and gybes for one session or all completed sessions."""
+    from helmlog.maneuver_detector import detect_maneuvers
+    from helmlog.storage import Storage, StorageConfig
+
+    storage = Storage(StorageConfig())
+    await storage.connect()
+    try:
+        if session_id is not None:
+            maneuvers = await detect_maneuvers(storage, session_id)
+            tacks = sum(1 for m in maneuvers if m.type == "tack")
+            gybes = sum(1 for m in maneuvers if m.type == "gybe")
+            print(f"Session {session_id}: {tacks} tacks, {gybes} gybes detected")
+        else:
+            db = storage._conn()
+            cur = await db.execute(
+                "SELECT id, name FROM races WHERE end_utc IS NOT NULL ORDER BY date"
+            )
+            races = [dict(r) for r in await cur.fetchall()]
+            total_tacks = 0
+            total_gybes = 0
+            for race in races:
+                maneuvers = await detect_maneuvers(storage, int(race["id"]))
+                tacks = sum(1 for m in maneuvers if m.type == "tack")
+                gybes = sum(1 for m in maneuvers if m.type == "gybe")
+                total_tacks += tacks
+                total_gybes += gybes
+                print(f"  {race['name']}: {tacks} tacks, {gybes} gybes")
+            print(f"Total: {len(races)} sessions, {total_tacks} tacks, {total_gybes} gybes")
+    finally:
+        await storage.close()
+
+
 async def _scan_transcript(session_id: int | None, scan_all: bool) -> None:
     """Scan transcripts for trigger keywords and create auto-notes."""
     import json as _json
@@ -1378,6 +1411,13 @@ def _build_parser() -> argparse.ArgumentParser:
     bp = sub.add_parser("build-polar", help="Rebuild polar baseline from historical session data")
     bp.add_argument("--min-sessions", type=int, default=3, metavar="N")
 
+    dm = sub.add_parser("detect-maneuvers", help="Detect tacks and gybes in session data")
+    dm_target = dm.add_mutually_exclusive_group(required=True)
+    dm_target.add_argument("--session", type=int, metavar="ID", help="Session ID to analyse")
+    dm_target.add_argument(
+        "--all", action="store_true", help="Re-detect maneuvers for all completed sessions"
+    )
+
     st = sub.add_parser(
         "scan-transcript",
         help="Scan transcripts for trigger keywords and create auto-notes",
@@ -1476,6 +1516,8 @@ def main() -> None:
                 asyncio.run(_add_user(args.email, args.name, args.role))
             case "build-polar":
                 asyncio.run(_build_polar(args.min_sessions))
+            case "detect-maneuvers":
+                asyncio.run(_detect_maneuvers(args.session, getattr(args, "all", False)))
             case "scan-transcript":
                 asyncio.run(_scan_transcript(args.session, getattr(args, "all", False)))
             case "identity":

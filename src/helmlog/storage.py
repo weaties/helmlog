@@ -71,7 +71,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 28
+_CURRENT_VERSION: int = 29
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -648,6 +648,24 @@ _MIGRATIONS: dict[int, str] = {
             timestamp   TEXT NOT NULL,
             boat_fp     TEXT NOT NULL
         );
+    """,
+    29: """
+        -- Maneuver detection (#232)
+        CREATE TABLE IF NOT EXISTS maneuvers (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id   INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+            type         TEXT NOT NULL,
+            ts           TEXT NOT NULL,
+            end_ts       TEXT,
+            duration_sec REAL,
+            loss_kts     REAL,
+            vmg_loss_kts REAL,
+            tws_bin      INTEGER,
+            twa_bin      INTEGER,
+            details      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_maneuvers_session ON maneuvers(session_id);
+        CREATE INDEX IF NOT EXISTS idx_maneuvers_type ON maneuvers(type);
     """,
 }
 
@@ -2605,6 +2623,48 @@ class Storage:
                 ),
             )
         await db.commit()
+
+    # ------------------------------------------------------------------
+    # Maneuvers
+    # ------------------------------------------------------------------
+
+    async def write_maneuvers(self, session_id: int, maneuvers: list[Any]) -> None:
+        """Replace all maneuvers for a session with the new list (idempotent)."""
+        import json
+
+        db = self._conn()
+        await db.execute("DELETE FROM maneuvers WHERE session_id = ?", (session_id,))
+        for m in maneuvers:
+            await db.execute(
+                "INSERT INTO maneuvers"
+                " (session_id, type, ts, end_ts, duration_sec, loss_kts,"
+                "  vmg_loss_kts, tws_bin, twa_bin, details)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session_id,
+                    m.type,
+                    m.ts.isoformat(),
+                    m.end_ts.isoformat() if m.end_ts is not None else None,
+                    m.duration_sec,
+                    m.loss_kts,
+                    m.vmg_loss_kts,
+                    m.tws_bin,
+                    m.twa_bin,
+                    json.dumps(m.details) if m.details else None,
+                ),
+            )
+        await db.commit()
+
+    async def get_session_maneuvers(self, session_id: int) -> list[dict[str, Any]]:
+        """Return all stored maneuvers for a session, ordered by timestamp."""
+        cur = await self._conn().execute(
+            "SELECT id, session_id, type, ts, end_ts, duration_sec, loss_kts,"
+            " vmg_loss_kts, tws_bin, twa_bin, details"
+            " FROM maneuvers WHERE session_id = ? ORDER BY ts",
+            (session_id,),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Auth: users, invite tokens, sessions

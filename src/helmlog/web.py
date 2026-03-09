@@ -1685,6 +1685,71 @@ def create_app(
         )
 
     # ------------------------------------------------------------------
+    # /api/sessions/{id}/maneuvers  (maneuver detection)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/sessions/{session_id}/maneuvers")
+    async def api_session_maneuvers(
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return detected maneuvers for a session, with nearest GPS position."""
+        import json as _json
+
+        rows = await storage.get_session_maneuvers(session_id)
+
+        # Enrich with nearest position so the front end can place map markers
+        db = storage._conn()
+        enriched = []
+        for row in rows:
+            d = dict(row)
+            ts_str = str(d["ts"])[:19]
+            pos_cur = await db.execute(
+                "SELECT latitude_deg, longitude_deg FROM positions"
+                " WHERE ts >= ? ORDER BY ts LIMIT 1",
+                (ts_str,),
+            )
+            pos = await pos_cur.fetchone()
+            d["lat"] = float(pos["latitude_deg"]) if pos else None
+            d["lon"] = float(pos["longitude_deg"]) if pos else None
+            if d.get("details") and isinstance(d["details"], str):
+                try:
+                    d["details"] = _json.loads(d["details"])
+                except Exception:
+                    d["details"] = {}
+            enriched.append(d)
+
+        return JSONResponse(enriched)
+
+    @app.post("/api/sessions/{session_id}/detect-maneuvers", status_code=202)
+    async def api_detect_maneuvers(
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Trigger maneuver detection (or re-detection) for a session.
+
+        Returns immediately with the count of detected maneuvers.
+        """
+        from helmlog.maneuver_detector import detect_maneuvers
+
+        # Verify session exists
+        db = storage._conn()
+        cur = await db.execute("SELECT id FROM races WHERE id = ?", (session_id,))
+        if await cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        maneuvers = await detect_maneuvers(storage, session_id)
+        return JSONResponse(
+            {
+                "session_id": session_id,
+                "detected": len(maneuvers),
+                "tacks": sum(1 for m in maneuvers if m.type == "tack"),
+                "gybes": sum(1 for m in maneuvers if m.type == "gybe"),
+            },
+            status_code=202,
+        )
+
+    # ------------------------------------------------------------------
     # /api/sessions  (history browser)
     # ------------------------------------------------------------------
 
