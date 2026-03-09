@@ -53,3 +53,4 @@ htmlcov/
 # macOS
 .DS_Store
 **/.DS_Store
+.env.claude-dev
