@@ -81,8 +81,6 @@ select.field{appearance:auto}
 {% endblock %}
 {% block scripts %}
 <script>
-const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-
 /* ──────────────── Identity ──────────────── */
 let HAS_IDENTITY=false;
 async function loadIdentity(){
