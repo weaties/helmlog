@@ -1,6 +1,82 @@
 # Release Notes
 
-## Unreleased (main, 2026-03-08)
+## Pending promotion to live (main, 2026-03-10)
+
+### Synthesize race sessions with interactive Leaflet map (#245, #252)
+
+Generate synthetic J/105 sailing sessions for testing and demo purposes:
+
+- **Interactive course builder** — Leaflet map with CYC mark pins; click to
+  place the race committee boat, auto-compute windward/leeward marks
+- **Simulation engine** — J/105 polar interpolation, wind shifts, VMG-aware
+  tack selection, and 1 Hz instrument data generation
+- **Land avoidance** — real OSM coastline data for Puget Sound; computed marks
+  that fall on land are automatically pulled to navigable water
+- **Segment-based land crossing detection** — intermediate point sampling
+  catches peninsula/island clips even when both endpoints are in water
+- Synthesized session type with amber badge in UI, filterable on history page
+
+### Federation phase 1 — identity, co-op data model, session sharing (#224)
+
+Boat-to-boat federation with cryptographic identity:
+
+- **Ed25519 keypair generation** — `helmlog identity init` creates a boat card
+  with public key and fingerprint
+- **Co-op data model** — create, join, and manage cooperative groups of boats
+- **Session sharing** — share/unshare sessions with co-op members, with embargo
+  enforcement and audit logging
+- **Peer API** — inter-boat HTTP endpoints with request signing and verification
+- 32 integration tests covering co-op lifecycle, auth, embargo, and data licensing
+
+### Deployment management and promotion workflow (#222, #223)
+
+Structured release process with stage/live branches:
+
+- **Admin deploy page** — view current version, trigger updates, and monitor
+  deploy status from the web UI
+- **Evergreen mode** — opt-in automatic deployment on push to the tracked branch
+- **Promotion workflow** — `main` → `stage` → `live` branch promotion with
+  safety checks
+
+### Data policy compliance — privacy, auth, and deletion controls (#194–#211, #215)
+
+Comprehensive data licensing policy enforcement:
+
+- **PII deletion** — audio, photos, transcripts, and diarized content can be
+  deleted per data policy requirements
+- **Field allowlists** — co-op API endpoints enforce strict field filtering
+- **Audit logging** — all data access and sharing events are logged
+- **Private session isolation** — unshared sessions are invisible to co-op peers
+
+### Configurable Pi health monitor interval (#249, #250)
+
+- Default collection interval changed from 60 s to 2 s for smoother dashboards
+- Non-blocking CPU measurement via `psutil.cpu_percent(interval=None)`
+- `MONITOR_INTERVAL_S` env var and admin settings page for runtime tuning
+
+### Mobile navigation overhaul (#230, #231)
+
+- **Hamburger menu** replaces tab navigation for better mobile usability
+
+### Infrastructure and developer experience
+
+- **GitHub Actions CI** — tests, lint, and type checking on every PR (#219)
+- **Docker dev container** — Claude Code development environment (#229)
+- **Community contribution infrastructure** — CONTRIBUTING.md, issue templates,
+  PR template (#174, #218)
+- **Fan speed** added to Pi Health Grafana dashboard with shared crosshairs (#225)
+- **Hostname in footer** — version info now includes the Pi hostname (#175, #221)
+- **reset-pi.sh** — restore a Pi to pre-setup state for reimaging (#242)
+- **Git ownership fix** — prevent `.git/` conflicts between helmlog service and
+  deploy user (#239, #240)
+- **Bootstrap add-user fix** — run as correct user to avoid read-only DB (#244)
+- **Documentation** — approachability guides, fleet quickstart, operator updates,
+  federation protocol gaps (#216, #217, #220)
+- **CLAUDE.md** — added `uv sync` dependency guidance (#251)
+
+---
+
+## 2026-03-08
 
 ### Embedded YouTube player with track sync (#183, #185)
 
