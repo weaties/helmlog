@@ -377,10 +377,35 @@ def simulate(config: SynthConfig) -> list[SynthRow]:
                 # Recalculate position with new heading
                 hdg_r = math.radians(heading)
                 new_lat = lat + spd_deg_s * math.cos(hdg_r) * dt
-                new_lon = lon + spd_deg_s * math.sin(hdg_r) * dt / math.cos(math.radians(lat))
-                # If still on land after tacking, stay put this tick
+                new_lon = lon + spd_deg_s * math.sin(hdg_r) * dt / math.cos(
+                    math.radians(lat)
+                )
                 if not is_in_water(new_lat, new_lon):
-                    new_lat, new_lon = lat, lon
+                    # Both tacks hit land — scan headings to find the best
+                    # escape route toward the mark
+                    brg_mark = _bearing(lat, lon, leg.target.lat, leg.target.lon)
+                    best_hdg = None
+                    best_diff = 360.0
+                    for probe in range(0, 360, 10):
+                        pr = math.radians(probe)
+                        tl = lat + spd_deg_s * math.cos(pr) * dt
+                        tn = lon + spd_deg_s * math.sin(pr) * dt / math.cos(
+                            math.radians(lat)
+                        )
+                        if is_in_water(tl, tn):
+                            diff = abs(((probe - brg_mark + 180) % 360) - 180)
+                            if diff < best_diff:
+                                best_diff = diff
+                                best_hdg = probe
+                    if best_hdg is not None:
+                        heading = float(best_hdg)
+                        hdg_r = math.radians(heading)
+                        new_lat = lat + spd_deg_s * math.cos(hdg_r) * dt
+                        new_lon = lon + spd_deg_s * math.sin(hdg_r) * dt / math.cos(
+                            math.radians(lat)
+                        )
+                    else:
+                        new_lat, new_lon = lat, lon
 
             lat, lon = new_lat, new_lon
 
