@@ -168,9 +168,7 @@ def _is_upwind(
 # ---------------------------------------------------------------------------
 
 
-def _pull_to_water(
-    lat: float, lon: float, rc_lat: float, rc_lon: float
-) -> tuple[float, float]:
+def _pull_to_water(lat: float, lon: float, rc_lat: float, rc_lon: float) -> tuple[float, float]:
     """If a position is on land, pull it back toward the RC until it is in water.
 
     Uses binary search along the line from the mark to the RC, stepping back
@@ -248,14 +246,21 @@ def build_wl_course(
     leg_nm: float = 1.0,
     laps: int = 2,
 ) -> list[CourseLeg]:
-    """Build a windward/leeward course: Start -> A -> X -> ... -> A -> F (finish at RC)."""
+    """Build a windward/leeward course: Start -> (A -> X) × (laps-1) -> A -> F.
+
+    `laps` is the number of times the boat rounds the windward mark.
+    The finish is a run from the last windward rounding back to the RC.
+    E.g. laps=1: A -> F, laps=2: A -> X -> A -> F.
+    """
     marks = compute_buoy_marks(rc_lat, rc_lon, wind_dir, leg_nm)
     legs: list[CourseLeg] = []
-    for _ in range(laps):
-        legs.append(CourseLeg(marks["A"], upwind=True))
-        legs.append(CourseLeg(marks["X"], upwind=False))
-    # Final beat to windward mark then finish at RC
+    # First beat to windward
     legs.append(CourseLeg(marks["A"], upwind=True))
+    # Subsequent laps: downwind to X, then back upwind to A
+    for _ in range(laps - 1):
+        legs.append(CourseLeg(marks["X"], upwind=False))
+        legs.append(CourseLeg(marks["A"], upwind=True))
+    # Finish: run back to RC
     legs.append(CourseLeg(marks["F"], upwind=False))
     return legs
 
