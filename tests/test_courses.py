@@ -42,9 +42,10 @@ class TestComputeBuoyMarks:
 
 
 class TestBuildWLCourse:
-    def test_two_laps_four_legs(self) -> None:
+    def test_two_laps_plus_finish(self) -> None:
         legs = build_wl_course(47.63, -122.40, 0.0, laps=2)
-        assert len(legs) == 4
+        # 2 laps × 2 legs + final beat to A + finish leg to F = 6
+        assert len(legs) == 6
         assert all(isinstance(leg, CourseLeg) for leg in legs)
 
     def test_alternating_upwind_downwind(self) -> None:
@@ -53,12 +54,23 @@ class TestBuildWLCourse:
         assert legs[1].upwind is False
         assert legs[2].upwind is True
         assert legs[3].upwind is False
+        # Final beat + finish
+        assert legs[4].upwind is True
+        assert legs[5].upwind is False
+
+    def test_finishes_at_rc(self) -> None:
+        legs = build_wl_course(47.63, -122.40, 0.0, laps=2)
+        assert legs[-1].target.name == "Finish"
+        assert legs[-1].target.lat == 47.63
+        assert legs[-1].target.lon == -122.40
 
 
 class TestBuildTriangleCourse:
-    def test_three_legs(self) -> None:
+    def test_four_legs_with_finish(self) -> None:
         legs = build_triangle_course(47.63, -122.40, 0.0)
-        assert len(legs) == 3
+        # A -> G -> X -> F
+        assert len(legs) == 4
+        assert legs[-1].target.name == "Finish"
 
 
 class TestBuildCustomCourse:

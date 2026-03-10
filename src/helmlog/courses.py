@@ -140,12 +140,15 @@ def build_wl_course(
     leg_nm: float = 1.0,
     laps: int = 2,
 ) -> list[CourseLeg]:
-    """Build a windward/leeward course: Start -> A -> X -> ... -> X (finish)."""
+    """Build a windward/leeward course: Start -> A -> X -> ... -> A -> F (finish at RC)."""
     marks = compute_buoy_marks(rc_lat, rc_lon, wind_dir, leg_nm)
     legs: list[CourseLeg] = []
     for _ in range(laps):
         legs.append(CourseLeg(marks["A"], upwind=True))
         legs.append(CourseLeg(marks["X"], upwind=False))
+    # Final beat to windward mark then finish at RC
+    legs.append(CourseLeg(marks["A"], upwind=True))
+    legs.append(CourseLeg(marks["F"], upwind=False))
     return legs
 
 
@@ -155,12 +158,22 @@ def build_triangle_course(
     wind_dir: float,
     leg_nm: float = 1.0,
 ) -> list[CourseLeg]:
-    """Build a triangle course: Start -> A -> G -> X."""
+    """Build a triangle course: Start -> A -> G -> X -> F (finish at RC)."""
     marks = compute_buoy_marks(rc_lat, rc_lon, wind_dir, leg_nm)
     return [
         CourseLeg(marks["A"], upwind=True),
         CourseLeg(marks["G"], upwind=False),
         CourseLeg(marks["X"], upwind=False),
+        CourseLeg(
+            marks["F"],
+            upwind=_is_upwind(
+                marks["X"].lat,
+                marks["X"].lon,
+                rc_lat,
+                rc_lon,
+                wind_dir,
+            ),
+        ),
     ]
 
 

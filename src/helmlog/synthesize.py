@@ -318,14 +318,19 @@ def simulate(config: SynthConfig) -> list[SynthRow]:
                     tack_timer = 0.0
                     next_tack = rng.uniform(120, 300)
             else:
-                # Near mark: pick the tack/gybe that VMGs best toward it
+                # Pick the tack/gybe with better VMG toward the mark
+                brg = _bearing(lat, lon, leg.target.lat, leg.target.lon)
+                stbd_hdg = (twd - opt_twa + 360) % 360
+                port_hdg = (twd - (360.0 - opt_twa) + 360) % 360
+                stbd_off = abs(((brg - stbd_hdg + 180) % 360) - 180)
+                port_off = abs(((brg - port_hdg + 180) % 360) - 180)
+                best_stbd = stbd_off <= port_off
+
+                # When far from mark, allow staying on the non-optimal tack
+                # for variety (simulates tactical choices), but tack to the
+                # favoured side when the timer fires.
                 if dist < 0.15:
-                    brg = _bearing(lat, lon, leg.target.lat, leg.target.lon)
-                    stbd_hdg = (twd - opt_twa + 360) % 360
-                    port_hdg = (twd - (360.0 - opt_twa) + 360) % 360
-                    stbd_off = abs(((brg - stbd_hdg + 180) % 360) - 180)
-                    port_off = abs(((brg - port_hdg + 180) % 360) - 180)
-                    on_stbd = stbd_off <= port_off
+                    on_stbd = best_stbd
 
                 twa_target = opt_twa if on_stbd else (360.0 - opt_twa) % 360
                 heading = (twd - twa_target + 360) % 360
@@ -334,17 +339,24 @@ def simulate(config: SynthConfig) -> list[SynthRow]:
 
                 tack_timer += dt
                 if tack_timer >= next_tack and not in_maneuver and dist >= 0.15:
-                    on_stbd = not on_stbd
-                    new_twa = opt_twa if on_stbd else (360.0 - opt_twa) % 360
-                    new_heading = (twd - new_twa + 360) % 360
+                    # Tack to the side with better VMG toward the mark
+                    want_stbd = best_stbd
+                    if want_stbd == on_stbd:
+                        # Already on the favoured tack; reset timer and wait
+                        tack_timer = 0.0
+                        next_tack = rng.uniform(120, 300)
+                    else:
+                        on_stbd = want_stbd
+                        new_twa = opt_twa if on_stbd else (360.0 - opt_twa) % 360
+                        new_heading = (twd - new_twa + 360) % 360
 
-                    in_maneuver = True
-                    man_elapsed = 0.0
-                    man_start_hdg = heading
-                    man_target_hdg = new_heading
-                    man_start_bsp = bsp
-                    man_is_tack = leg.upwind
-                    man_duration = rng.uniform(8, 12) if leg.upwind else rng.uniform(5, 8)
+                        in_maneuver = True
+                        man_elapsed = 0.0
+                        man_start_hdg = heading
+                        man_target_hdg = new_heading
+                        man_start_bsp = bsp
+                        man_is_tack = leg.upwind
+                        man_duration = rng.uniform(8, 12) if leg.upwind else rng.uniform(5, 8)
 
             # Update position
             hdg_r = math.radians(heading)

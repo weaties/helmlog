@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from helmlog.courses import build_wl_course
+import pytest
+
+from helmlog.courses import build_triangle_course, build_wl_course
 from helmlog.synthesize import (
     _DEPTH_FLOOR,
     SynthConfig,
     SynthRow,
     WindModel,
+    _distance_nm,
     apparent_wind,
     interpolate_polar,
     simulate,
@@ -142,3 +145,92 @@ class TestSimulate:
         assert len(rows1) == len(rows2)
         assert rows1[0].lat == rows2[0].lat
         assert rows1[-1].lat == rows2[-1].lat
+
+
+class TestSimulateWindAngles:
+    """Verify the simulation produces valid tracks at various wind angles."""
+
+    _START = (47.63, -122.40)
+    _MAX_DRIFT_NM = 0.35  # max acceptable drift from start at finish
+
+    def _run(self, wind_dir: float, laps: int = 1) -> list[SynthRow]:
+        legs = build_wl_course(*self._START, wind_dir, 1.0, laps)
+        config = SynthConfig(
+            start_lat=self._START[0],
+            start_lon=self._START[1],
+            base_twd=wind_dir,
+            tws_low=10.0,
+            tws_high=12.0,
+            shift_interval=(600.0, 1200.0),
+            shift_magnitude=(5.0, 10.0),
+            legs=legs,
+            seed=42,
+            start_time=datetime(2025, 8, 10, 18, 0, 0, tzinfo=UTC),
+        )
+        return simulate(config)
+
+    @pytest.mark.parametrize("wind_dir", [0, 45, 90, 135, 180, 225, 270, 315])
+    def test_finishes_near_start(self, wind_dir: int) -> None:
+        """Track should finish within MAX_DRIFT_NM of the start position."""
+        rows = self._run(wind_dir)
+        drift = _distance_nm(rows[-1].lat, rows[-1].lon, *self._START)
+        assert drift < self._MAX_DRIFT_NM, (
+            f"Wind {wind_dir}°: finish drifted {drift:.3f} nm from start"
+        )
+
+    @pytest.mark.parametrize("wind_dir", [0, 90, 180, 270])
+    def test_rounds_marks_sequentially(self, wind_dir: int) -> None:
+        """Boat should pass within 0.15 nm of each mark in leg order."""
+        legs = build_wl_course(*self._START, wind_dir, 1.0, 1)
+        config = SynthConfig(
+            start_lat=self._START[0],
+            start_lon=self._START[1],
+            base_twd=wind_dir,
+            tws_low=10.0,
+            tws_high=12.0,
+            shift_interval=(600.0, 1200.0),
+            shift_magnitude=(5.0, 10.0),
+            legs=legs,
+            seed=42,
+            start_time=datetime(2025, 8, 10, 18, 0, 0, tzinfo=UTC),
+        )
+        rows = simulate(config)
+        search_from = 0
+        for i, leg in enumerate(legs):
+            m = leg.target
+            min_dist = float("inf")
+            min_idx = search_from
+            for j in range(search_from, len(rows)):
+                d = _distance_nm(rows[j].lat, rows[j].lon, m.lat, m.lon)
+                if d < min_dist:
+                    min_dist = d
+                    min_idx = j
+                if d > min_dist + 0.1 and min_dist < 0.15:
+                    break
+            assert min_dist < 0.15, (
+                f"Wind {wind_dir}° leg {i}: closest approach to "
+                f"{m.name} was {min_dist:.3f} nm (> 0.15)"
+            )
+            search_from = min_idx + 1
+
+    @pytest.mark.parametrize("wind_dir", [0, 90, 180, 270])
+    def test_triangle_finishes_near_start(self, wind_dir: int) -> None:
+        """Triangle course should also finish near start."""
+        legs = build_triangle_course(*self._START, wind_dir, 1.0)
+        config = SynthConfig(
+            start_lat=self._START[0],
+            start_lon=self._START[1],
+            base_twd=wind_dir,
+            tws_low=10.0,
+            tws_high=12.0,
+            shift_interval=(600.0, 1200.0),
+            shift_magnitude=(5.0, 10.0),
+            legs=legs,
+            seed=42,
+            start_time=datetime(2025, 8, 10, 18, 0, 0, tzinfo=UTC),
+        )
+        rows = simulate(config)
+        drift = _distance_nm(rows[-1].lat, rows[-1].lon, *self._START)
+        assert drift < self._MAX_DRIFT_NM, (
+            f"Triangle wind {wind_dir}°: drifted {drift:.3f} nm from start"
+        )
