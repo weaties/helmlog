@@ -237,6 +237,64 @@ class TestSimulateWindAngles:
         )
 
 
+class TestLaylineOverstand:
+    """Verify the boat doesn't overstand the layline excessively."""
+
+    _START = (47.70, -122.44)
+
+    @pytest.mark.parametrize("wind_dir", [0, 90, 180, 270])
+    def test_no_excessive_overstand(self, wind_dir: int) -> None:
+        """Boat should not overstand the layline by more than ~8 boat lengths.
+
+        We allow a generous 8 BL margin (vs the 4 BL target) to account
+        for wind shifts and maneuver timing in the simulation.
+        """
+        legs = build_wl_course(*self._START, wind_dir, 1.0, laps=1)
+        config = SynthConfig(
+            start_lat=self._START[0],
+            start_lon=self._START[1],
+            base_twd=wind_dir,
+            tws_low=10.0,
+            tws_high=12.0,
+            shift_interval=(600.0, 1200.0),
+            shift_magnitude=(5.0, 10.0),
+            legs=legs,
+            seed=42,
+            start_time=datetime(2025, 8, 10, 18, 0, 0, tzinfo=UTC),
+        )
+        rows = simulate(config)
+        mark_a = legs[0].target
+
+        # Find tacks near the mark (heading change > 50°) within 0.3 nm
+        max_overstand_nm = 0.0
+        for i in range(1, len(rows)):
+            hdiff = abs(rows[i].heading - rows[i - 1].heading)
+            if hdiff > 180:
+                hdiff = 360 - hdiff
+            if hdiff < 50:
+                continue
+            d = _distance_nm(rows[i].lat, rows[i].lon, mark_a.lat, mark_a.lon)
+            if d > 0.3:
+                continue
+            # Settled heading after tack
+            settled = rows[min(i + 15, len(rows) - 1)]
+            brg = _distance_nm.__module__  # just need _bearing
+            from helmlog.synthesize import _bearing as brg_fn
+
+            brg = brg_fn(settled.lat, settled.lon, mark_a.lat, mark_a.lon)
+            hdg_diff = abs(((settled.heading - brg + 180) % 360) - 180)
+            # Only count when heading is within TWA range (upwind approach)
+            if hdg_diff < 60:
+                overstand = d * abs(hdg_diff - 42) / 57.3 * d  # rough cross-track
+                max_overstand_nm = max(max_overstand_nm, overstand)
+
+        # 8 boat lengths = 8 * 35ft * 0.000165nm/ft ≈ 0.046 nm
+        max_bl = max_overstand_nm / 0.006
+        assert max_bl < 8, (
+            f"Wind {wind_dir}°: max overstand {max_bl:.1f} BL (> 8)"
+        )
+
+
 class TestLandAvoidance:
     """Verify the simulation avoids sailing over land."""
 
