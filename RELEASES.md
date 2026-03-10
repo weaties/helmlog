@@ -1,6 +1,6 @@
 # Release Notes
 
-## Pending promotion to live (main, 2026-03-10)
+## Promoted to live and stage from main, 2026-03-10
 
 ### Synthesize race sessions with interactive Leaflet map (#245, #252)
 
