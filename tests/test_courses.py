@@ -7,10 +7,12 @@ import pytest
 from helmlog.courses import (
     CYC_MARKS,
     CourseLeg,
+    CourseMark,
     build_custom_course,
     build_triangle_course,
     build_wl_course,
     compute_buoy_marks,
+    validate_course_marks,
 )
 
 
@@ -89,3 +91,41 @@ class TestBuildCustomCourse:
     def test_mixed_buoy_and_cyc(self) -> None:
         legs = build_custom_course("S-A-K-F", 47.63, -122.40, 0.0)
         assert len(legs) == 3
+
+
+class TestValidateCourseMarks:
+    def test_marks_in_water_pass(self) -> None:
+        """Buoy marks in the middle of Puget Sound should produce no warnings."""
+        marks = compute_buoy_marks(47.63, -122.42, 0.0)
+        warnings = validate_course_marks(marks)
+        assert warnings == []
+
+    def test_cyc_marks_all_in_water(self) -> None:
+        """All predefined CYC marks should be in navigable water."""
+        warnings = validate_course_marks(CYC_MARKS)
+        assert warnings == [], f"CYC marks failed validation: {warnings}"
+
+    def test_mark_on_land_warns(self) -> None:
+        """A mark placed on land (downtown Seattle) should produce a warning."""
+        land_marks = {"X": CourseMark("On Land", 47.61, -122.33)}
+        warnings = validate_course_marks(land_marks)
+        assert len(warnings) == 1
+        assert "X" in warnings[0]
+        assert "shallow water" in warnings[0] or "land" in warnings[0]
+
+    def test_mark_on_bainbridge_warns(self) -> None:
+        """A mark on Bainbridge Island should produce a warning."""
+        land_marks = {"B": CourseMark("Bainbridge", 47.63, -122.54)}
+        warnings = validate_course_marks(land_marks)
+        assert len(warnings) == 1
+        assert "B" in warnings[0]
+
+    def test_mixed_valid_and_invalid(self) -> None:
+        """Only invalid marks produce warnings."""
+        marks = {
+            "A": CourseMark("In Water", 47.65, -122.42),
+            "Z": CourseMark("On Land", 47.61, -122.33),
+        }
+        warnings = validate_course_marks(marks)
+        assert len(warnings) == 1
+        assert "Z" in warnings[0]

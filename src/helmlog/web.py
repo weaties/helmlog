@@ -1613,7 +1613,13 @@ def create_app(
         request: Request,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> JSONResponse:
-        from helmlog.courses import build_custom_course, build_triangle_course, build_wl_course
+        from helmlog.courses import (
+            build_custom_course,
+            build_triangle_course,
+            build_wl_course,
+            compute_buoy_marks,
+            validate_course_marks,
+        )
         from helmlog.races import build_race_name, local_today
         from helmlog.synthesize import SynthConfig, simulate
 
@@ -1648,6 +1654,13 @@ def create_app(
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
         else:
             raise HTTPException(status_code=422, detail=f"Unknown course_type: {course_type}")
+
+        # Validate all course marks are in navigable water (>6 ft deep)
+        all_marks = {leg.target.name[:1]: leg.target for leg in legs}
+        if course_type != "custom":
+            buoy_marks = compute_buoy_marks(start_lat, start_lon, wind_dir, leg_nm)
+            all_marks.update(buoy_marks)
+        mark_warnings = validate_course_marks(all_marks)
 
         now = datetime.now(UTC)
         config = SynthConfig(
@@ -1709,6 +1722,8 @@ def create_app(
             "points": len(rows),
             "duration_s": round(duration_s, 1),
         }
+        if mark_warnings:
+            resp["mark_warnings"] = mark_warnings
         return JSONResponse(resp, status_code=201)
 
     # ------------------------------------------------------------------

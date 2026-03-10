@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from helmlog.courses import CourseLeg
 
+from helmlog.courses import is_in_water
+
 # ---------------------------------------------------------------------------
 # J/105 polar performance table
 # TWS (kts) -> (upwind_twa deg, upwind_bsp, downwind_twa deg, downwind_bsp)
@@ -358,11 +360,29 @@ def simulate(config: SynthConfig) -> list[SynthRow]:
                         man_is_tack = leg.upwind
                         man_duration = rng.uniform(8, 12) if leg.upwind else rng.uniform(5, 8)
 
-            # Update position
+            # Update position — with land avoidance
             hdg_r = math.radians(heading)
             spd_deg_s = bsp / 3600.0 / 60.0  # kts -> deg_lat/sec
-            lat += spd_deg_s * math.cos(hdg_r) * dt
-            lon += spd_deg_s * math.sin(hdg_r) * dt / math.cos(math.radians(lat))
+            new_lat = lat + spd_deg_s * math.cos(hdg_r) * dt
+            new_lon = lon + spd_deg_s * math.sin(hdg_r) * dt / math.cos(math.radians(lat))
+
+            if not is_in_water(new_lat, new_lon):
+                # About to sail onto land — force immediate tack away
+                on_stbd = not on_stbd
+                twa_target = opt_twa if on_stbd else (360.0 - opt_twa) % 360
+                heading = (twd - twa_target + 360) % 360
+                in_maneuver = False
+                tack_timer = 0.0
+                next_tack = rng.uniform(60, 120)
+                # Recalculate position with new heading
+                hdg_r = math.radians(heading)
+                new_lat = lat + spd_deg_s * math.cos(hdg_r) * dt
+                new_lon = lon + spd_deg_s * math.sin(hdg_r) * dt / math.cos(math.radians(lat))
+                # If still on land after tacking, stay put this tick
+                if not is_in_water(new_lat, new_lon):
+                    new_lat, new_lon = lat, lon
+
+            lat, lon = new_lat, new_lon
 
             # Compute TWA and apparent wind
             twa_actual = (twd - heading + 360) % 360
@@ -429,8 +449,10 @@ def simulate(config: SynthConfig) -> list[SynthRow]:
 
                 hdg_r = math.radians(heading)
                 spd_deg_s = bsp / 3600.0 / 60.0
-                lat += spd_deg_s * math.cos(hdg_r) * dt
-                lon += spd_deg_s * math.sin(hdg_r) * dt / math.cos(math.radians(lat))
+                new_lat = lat + spd_deg_s * math.cos(hdg_r) * dt
+                new_lon = lon + spd_deg_s * math.sin(hdg_r) * dt / math.cos(math.radians(lat))
+                if is_in_water(new_lat, new_lon):
+                    lat, lon = new_lat, new_lon
 
                 twa_actual = (twd - heading + 360) % 360
                 aws, awa = apparent_wind(tws, twa_actual, bsp)

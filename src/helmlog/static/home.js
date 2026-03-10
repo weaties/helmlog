@@ -1232,8 +1232,18 @@ async function runSynthesize() {
       const data = await resp.json();
       const dur = Math.round(data.duration_s / 60);
       let msg = data.name + ' \u2014 ' + data.points + ' points, ' + dur + ' min';
+      if (data.mark_warnings && data.mark_warnings.length > 0) {
+        msg += '\n\u26a0\ufe0f ' + data.mark_warnings.join('\n\u26a0\ufe0f ');
+      }
       result.textContent = msg;
       result.style.display = '';
+      if (data.mark_warnings && data.mark_warnings.length > 0) {
+        result.style.whiteSpace = 'pre-line';
+        result.classList.add('synth-warning');
+      } else {
+        result.style.whiteSpace = '';
+        result.classList.remove('synth-warning');
+      }
       await loadState();
     } else {
       const err = await resp.json().catch(() => null);

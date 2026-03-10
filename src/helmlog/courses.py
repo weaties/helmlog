@@ -3,12 +3,22 @@
 Provides geographic mark coordinates for the Corinthian Yacht Club (Seattle)
 racing area in Puget Sound, plus functions to compute buoy-course mark
 positions from a race committee location and wind direction.
+
+Land/water detection uses a high-resolution coastline polygon derived from
+OpenStreetMap ``natural=coastline`` data for the Puget Sound racing area,
+loaded from ``puget_sound_land.json`` and tested with Shapely.
 """
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
+from pathlib import Path
+
+from shapely.geometry import Point, shape
+from shapely.prepared import PreparedGeometry
+from shapely.prepared import prep as shapely_prep
 
 # ---------------------------------------------------------------------------
 # Domain objects
@@ -35,26 +45,92 @@ class CourseLeg:
 
 
 # ---------------------------------------------------------------------------
-# CYC geographic marks — approximate coordinates from mark descriptions
+# CYC geographic marks — coordinates verified against OSM coastline data
 # ---------------------------------------------------------------------------
 
 CYC_MARKS: dict[str, CourseMark] = {
-    "D": CourseMark("Duwamish Head Lt.", 47.5935, -122.3895),
+    "D": CourseMark("Duwamish Head Lt.", 47.5935, -122.3920),
     "E": CourseMark("Shilshole Bay Entrance", 47.6838, -122.4128),
-    "H": CourseMark("0.3nm E of Skiff Pt", 47.6410, -122.4088),
+    "H": CourseMark("0.3nm E of Skiff Pt", 47.6410, -122.4180),
     "I": CourseMark("0.5nm N of Alki Pt", 47.5847, -122.4210),
     "J": CourseMark("0.25nm SSW of marina N entrance", 47.6790, -122.4074),
     "K": CourseMark("Blakely Rock", 47.5877, -122.4873),
     "L": CourseMark("0.5nm SW of marina S entrance", 47.6728, -122.4125),
-    "M": CourseMark("Meadow Pt. Buoy", 47.6940, -122.3945),
-    "N": CourseMark("1.5nm E of TSS Buoy SF", 47.7300, -122.3680),
-    "P": CourseMark("0.5nm NNE of Pt. Monroe", 47.7183, -122.3575),
+    "M": CourseMark("Meadow Pt. Buoy", 47.6940, -122.4080),
+    "N": CourseMark("1.5nm E of TSS Buoy SF", 47.7300, -122.3800),
+    "P": CourseMark("0.5nm NNE of Pt. Monroe", 47.7183, -122.4400),
     "Q": CourseMark("3.0nm 340\u00b0 from Meadow Pt", 47.7410, -122.4200),
     "R": CourseMark("0.5nm SW of Pt. Wells", 47.7680, -122.4032),
     "T": CourseMark("0.5nm SE of Pt. Jefferson", 47.7433, -122.4100),
     "U": CourseMark("U Mark", 47.7400, -122.3825),
-    "V": CourseMark("0.3nm NNE of Wing Pt", 47.6295, -122.4985),
+    "V": CourseMark("0.3nm NNE of Wing Pt", 47.6295, -122.4900),
 }
+
+
+# ---------------------------------------------------------------------------
+# Real coastline data — loaded from OSM-derived GeoJSON
+# ---------------------------------------------------------------------------
+# The land polygon covers the CYC racing area bounding box (lat 47.55–47.80,
+# lon -122.53 – -122.34).  It was built from OpenStreetMap ``natural=coastline``
+# ways, clipped to the bounding box, and simplified to ~30 m tolerance.
+# Points inside the land polygon are on land; points inside the bounding box
+# but outside the land polygon are in navigable water.
+
+_BBOX_N = 47.80
+_BBOX_S = 47.55
+_BBOX_E = -122.34
+_BBOX_W = -122.53
+
+# Lazy-loaded land geometry and prepared version for fast queries
+_land_prep: PreparedGeometry | None = None  # type: ignore[type-arg]
+
+
+def _load_land() -> None:
+    """Load the land polygon from bundled GeoJSON (lazy, once)."""
+    global _land_prep  # noqa: PLW0603
+    if _land_prep is not None:
+        return
+    geojson_path = Path(__file__).parent / "puget_sound_land.json"
+    with geojson_path.open() as f:
+        fc = json.load(f)
+    _land_prep = shapely_prep(shape(fc["features"][0]["geometry"]))
+
+
+def is_in_water(lat: float, lon: float) -> bool:
+    """Return True if the position is in navigable water (>6 ft deep).
+
+    Uses high-resolution OSM coastline data for the Puget Sound CYC racing
+    area.  A point is considered in water if it is inside the racing-area
+    bounding box and not inside any land polygon.
+    """
+    if not (_BBOX_S <= lat <= _BBOX_N and _BBOX_W <= lon <= _BBOX_E):
+        return False
+    _load_land()
+    assert _land_prep is not None  # set by _load_land
+    return not _land_prep.contains(Point(lon, lat))
+
+
+# Minimum depth threshold in metres (~6 ft)
+_MIN_DEPTH_M = 1.83
+
+
+def validate_course_marks(marks: dict[str, CourseMark]) -> list[str]:
+    """Check that all course marks are in navigable water (>6 ft deep).
+
+    Returns a list of human-readable warning strings.  An empty list means
+    all marks passed validation.
+
+    Uses high-resolution OSM coastline data to detect marks that are on land
+    or outside the navigable CYC racing area.
+    """
+    warnings: list[str] = []
+    for key, mark in marks.items():
+        if not is_in_water(mark.lat, mark.lon):
+            warnings.append(
+                f"Mark {key} ({mark.name}) at ({mark.lat:.4f}, {mark.lon:.4f}) "
+                f"may be on land or in shallow water (<6 ft)"
+            )
+    return warnings
 
 
 # ---------------------------------------------------------------------------

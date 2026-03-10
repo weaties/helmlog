@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from helmlog.courses import build_triangle_course, build_wl_course
+from helmlog.courses import build_triangle_course, build_wl_course, is_in_water
 from helmlog.synthesize import (
     _DEPTH_FLOOR,
     SynthConfig,
@@ -150,7 +150,8 @@ class TestSimulate:
 class TestSimulateWindAngles:
     """Verify the simulation produces valid tracks at various wind angles."""
 
-    _START = (47.63, -122.40)
+    # Start in open water mid-Sound to avoid land avoidance interference
+    _START = (47.70, -122.44)
     _MAX_DRIFT_NM = 0.35  # max acceptable drift from start at finish
 
     def _run(self, wind_dir: float, laps: int = 1) -> list[SynthRow]:
@@ -233,4 +234,32 @@ class TestSimulateWindAngles:
         drift = _distance_nm(rows[-1].lat, rows[-1].lon, *self._START)
         assert drift < self._MAX_DRIFT_NM, (
             f"Triangle wind {wind_dir}°: drifted {drift:.3f} nm from start"
+        )
+
+
+class TestLandAvoidance:
+    """Verify the simulation avoids sailing over land."""
+
+    def test_track_stays_in_water(self) -> None:
+        """Near-shore start: every position must be in navigable water."""
+        # Start near Magnolia where land avoidance will be exercised
+        start = (47.64, -122.42)
+        legs = build_wl_course(*start, 0.0, 0.8, laps=1)
+        config = SynthConfig(
+            start_lat=start[0],
+            start_lon=start[1],
+            base_twd=0.0,
+            tws_low=10.0,
+            tws_high=12.0,
+            shift_interval=(600.0, 1200.0),
+            shift_magnitude=(5.0, 10.0),
+            legs=legs,
+            seed=42,
+            start_time=datetime(2025, 8, 10, 18, 0, 0, tzinfo=UTC),
+        )
+        rows = simulate(config)
+        on_land = [(i, r.lat, r.lon) for i, r in enumerate(rows) if not is_in_water(r.lat, r.lon)]
+        assert on_land == [], (
+            f"{len(on_land)} points on land, first: t={on_land[0][0]}s "
+            f"({on_land[0][1]:.5f}, {on_land[0][2]:.5f})"
         )

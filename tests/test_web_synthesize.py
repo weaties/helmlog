@@ -117,6 +117,59 @@ async def test_course_marks_endpoint(storage: Storage) -> None:
 
 
 @pytest.mark.asyncio
+async def test_synthesize_returns_mark_warnings_for_bad_position(storage: Storage) -> None:
+    """Synthesize with RC on land should return mark_warnings in response."""
+    await storage.set_daily_event("2026-03-10", "TestRegatta")
+
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/sessions/synthesize",
+            json={
+                "course_type": "windward_leeward",
+                "wind_direction": 90,
+                "start_lat": 47.61,
+                "start_lon": -122.34,  # downtown Seattle — on land
+                "laps": 1,
+                "seed": 42,
+            },
+        )
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert "mark_warnings" in data
+    assert len(data["mark_warnings"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_synthesize_no_warnings_for_valid_position(storage: Storage) -> None:
+    """Synthesize with RC in open water should have no mark_warnings."""
+    await storage.set_daily_event("2026-03-10", "TestRegatta")
+
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/sessions/synthesize",
+            json={
+                "course_type": "windward_leeward",
+                "wind_direction": 180,
+                "start_lat": 47.70,
+                "start_lon": -122.44,
+                "laps": 1,
+                "seed": 42,
+            },
+        )
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert "mark_warnings" not in data
+
+
+@pytest.mark.asyncio
 async def test_sessions_filter_synthesized(storage: Storage) -> None:
     """GET /api/sessions?type=synthesized is accepted."""
     app = create_app(storage)
