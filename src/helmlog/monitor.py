@@ -9,11 +9,22 @@ from typing import Any
 
 from loguru import logger
 
-_INTERVAL_S = 60  # collect every minute
+_DEFAULT_INTERVAL_S = 2
 
 # Previous network counters for rate calculation (updated each collection cycle)
 _prev_net: Any = None
 _prev_net_time: float | None = None
+
+
+def _get_interval() -> int:
+    """Read monitor interval from env, clamp to 1–300, default to _DEFAULT_INTERVAL_S."""
+    raw = os.environ.get("MONITOR_INTERVAL_S", "")
+    if not raw:
+        return _DEFAULT_INTERVAL_S
+    try:
+        return max(1, min(300, int(raw)))
+    except ValueError:
+        return _DEFAULT_INTERVAL_S
 
 
 async def monitor_loop() -> None:
@@ -23,7 +34,7 @@ async def monitor_loop() -> None:
             await asyncio.to_thread(_collect_and_write)
         except Exception as exc:  # noqa: BLE001
             logger.warning("monitor_loop error (non-fatal): {}", exc)
-        await asyncio.sleep(_INTERVAL_S)
+        await asyncio.sleep(_get_interval())
 
 
 def _collect_and_write() -> None:
@@ -33,7 +44,7 @@ def _collect_and_write() -> None:
 
     from helmlog.influx import _client
 
-    cpu_pct: float = psutil.cpu_percent(interval=1)
+    cpu_pct: float = psutil.cpu_percent(interval=None)
     mem = psutil.virtual_memory()
     db_path = os.environ.get("DB_PATH", "data/logger.db")
     disk_root = db_path.split("/")[0] or "/"

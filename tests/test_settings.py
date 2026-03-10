@@ -174,6 +174,17 @@ async def test_sensitive_field_masked(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_monitor_interval_setting_exists(client: httpx.AsyncClient) -> None:
+    """MONITOR_INTERVAL_S is listed with correct default and type."""
+    resp = await client.get("/api/settings")
+    settings = {s["key"]: s for s in resp.json()["settings"]}
+    assert "MONITOR_INTERVAL_S" in settings
+    s = settings["MONITOR_INTERVAL_S"]
+    assert s["effective_value"] == "2"
+    assert s["input_type"] == "number"
+
+
+@pytest.mark.asyncio
 async def test_settings_page_returns_200(client: httpx.AsyncClient) -> None:
     """GET /admin/settings returns the HTML page."""
     resp = await client.get("/admin/settings")

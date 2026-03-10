@@ -183,6 +183,13 @@ _SETTINGS_DEFS: tuple[_SettingDef, ...] = (
         default="10",
         help_text="Timeout in seconds for camera start/stop HTTP commands.",
     ),
+    _SettingDef(
+        key="MONITOR_INTERVAL_S",
+        label="Health monitor interval (seconds)",
+        input_type="number",
+        default="2",
+        help_text="How often to collect Pi health metrics for the dashboard (1\u2013300 seconds).",
+    ),
 )
 
 _SETTINGS_BY_KEY: dict[str, _SettingDef] = {s.key: s for s in _SETTINGS_DEFS}
