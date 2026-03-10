@@ -239,12 +239,27 @@ def compute_buoy_marks(
 # ---------------------------------------------------------------------------
 
 
+def _apply_overrides(
+    marks: dict[str, CourseMark],
+    overrides: dict[str, tuple[float, float]] | None,
+) -> dict[str, CourseMark]:
+    """Apply user-dragged mark position overrides to computed buoy marks."""
+    if not overrides:
+        return marks
+    out = dict(marks)
+    for key, (lat, lon) in overrides.items():
+        if key in out:
+            out[key] = CourseMark(out[key].name, lat, lon)
+    return out
+
+
 def build_wl_course(
     rc_lat: float,
     rc_lon: float,
     wind_dir: float,
     leg_nm: float = 1.0,
     laps: int = 2,
+    mark_overrides: dict[str, tuple[float, float]] | None = None,
 ) -> list[CourseLeg]:
     """Build a windward/leeward course: (A -> X) × laps -> F.
 
@@ -252,7 +267,7 @@ def build_wl_course(
     After all laps, the boat beats from X back to the finish at RC.
     E.g. laps=1: A -> X -> F, laps=2: A -> X -> A -> X -> F.
     """
-    marks = compute_buoy_marks(rc_lat, rc_lon, wind_dir, leg_nm)
+    marks = _apply_overrides(compute_buoy_marks(rc_lat, rc_lon, wind_dir, leg_nm), mark_overrides)
     legs: list[CourseLeg] = []
     for _ in range(laps):
         legs.append(CourseLeg(marks["A"], upwind=True))
@@ -267,9 +282,10 @@ def build_triangle_course(
     rc_lon: float,
     wind_dir: float,
     leg_nm: float = 1.0,
+    mark_overrides: dict[str, tuple[float, float]] | None = None,
 ) -> list[CourseLeg]:
     """Build a triangle course: Start -> A -> G -> X -> F (finish at RC)."""
-    marks = compute_buoy_marks(rc_lat, rc_lon, wind_dir, leg_nm)
+    marks = _apply_overrides(compute_buoy_marks(rc_lat, rc_lon, wind_dir, leg_nm), mark_overrides)
     return [
         CourseLeg(marks["A"], upwind=True),
         CourseLeg(marks["G"], upwind=False),

@@ -1639,10 +1639,16 @@ def create_app(
         peer_fingerprint: str | None = body.get("peer_fingerprint") or None
         peer_co_op_id: str | None = body.get("peer_co_op_id") or None
 
+        # Parse optional mark position overrides from user-dragged map markers
+        raw_overrides = body.get("mark_overrides")
+        mark_overrides: dict[str, tuple[float, float]] | None = None
+        if isinstance(raw_overrides, dict):
+            mark_overrides = {k: (float(v["lat"]), float(v["lon"])) for k, v in raw_overrides.items() if isinstance(v, dict) and "lat" in v and "lon" in v}
+
         if course_type == "windward_leeward":
-            legs = build_wl_course(start_lat, start_lon, wind_dir, leg_nm, laps)
+            legs = build_wl_course(start_lat, start_lon, wind_dir, leg_nm, laps, mark_overrides)
         elif course_type == "triangle":
-            legs = build_triangle_course(start_lat, start_lon, wind_dir, leg_nm)
+            legs = build_triangle_course(start_lat, start_lon, wind_dir, leg_nm, mark_overrides)
         elif course_type == "custom":
             if not mark_sequence:
                 raise HTTPException(

@@ -73,6 +73,23 @@ class TestBuildWLCourse:
         assert legs[-1].target.lon == -122.40
 
 
+    def test_mark_overrides_respected(self) -> None:
+        """Dragged mark positions should override computed positions."""
+        default_legs = build_wl_course(47.63, -122.40, 0.0, laps=1)
+        default_a = default_legs[0].target
+        # Move windward mark A to a custom position
+        custom_lat, custom_lon = 47.66, -122.41
+        legs = build_wl_course(
+            47.63, -122.40, 0.0, laps=1,
+            mark_overrides={"A": (custom_lat, custom_lon)},
+        )
+        assert legs[0].target.lat == custom_lat
+        assert legs[0].target.lon == custom_lon
+        assert legs[0].target.lat != default_a.lat
+        # X mark should be unchanged
+        assert legs[1].target.lat == default_legs[1].target.lat
+
+
 class TestBuildTriangleCourse:
     def test_four_legs_with_finish(self) -> None:
         legs = build_triangle_course(47.63, -122.40, 0.0)

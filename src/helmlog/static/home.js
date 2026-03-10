@@ -945,6 +945,7 @@ let _synthCycMarkers = [];
 let _synthCourseLine = null;
 let _synthWindArrow = null;
 let _synthCustomSequence = [];
+let _synthMarkOverrides = {};
 
 function _synthMapReady() {
   return typeof L !== 'undefined' && _synthMap !== null;
@@ -1051,9 +1052,10 @@ async function updateSynthMarks() {
 
   updateWindArrow(lat, lon);
 
-  // Clear old buoy markers
+  // Clear old buoy markers and drag overrides
   _synthBuoyMarkers.forEach(m => _synthMap.removeLayer(m));
   _synthBuoyMarkers = [];
+  _synthMarkOverrides = {};
   if (_synthCourseLine) {
     _synthMap.removeLayer(_synthCourseLine);
     _synthCourseLine = null;
@@ -1091,6 +1093,12 @@ async function updateSynthMarks() {
         }),
       }).addTo(_synthMap);
       marker.bindTooltip(key + ': ' + m.name, {direction: 'top', offset: [0, -12]});
+      marker._markKey = key;
+      marker.on('dragend', function() {
+        const pos = marker.getLatLng();
+        _synthMarkOverrides[key] = {lat: pos.lat, lon: pos.lng};
+        _updateCourseLine();
+      });
       _synthBuoyMarkers.push(marker);
       lineCoords.push([m.lat, m.lon]);
     }
@@ -1170,6 +1178,23 @@ async function drawCustomCourseLine() {
   } catch (_) {}
 }
 
+function _updateCourseLine() {
+  if (!_synthMapReady()) return;
+  if (_synthCourseLine) {
+    _synthMap.removeLayer(_synthCourseLine);
+    _synthCourseLine = null;
+  }
+  const coords = _synthBuoyMarkers.map(m => {
+    const pos = m.getLatLng();
+    return [pos.lat, pos.lng];
+  });
+  if (coords.length > 1) {
+    _synthCourseLine = L.polyline(coords, {
+      color: '#7eb8f7', weight: 2, opacity: 0.7, dashArray: '4,6',
+    }).addTo(_synthMap);
+  }
+}
+
 function onSynthCourseChange() {
   const v = document.getElementById('synth-course').value;
   document.getElementById('synth-marks-field').classList.toggle('hidden', v !== 'custom');
@@ -1213,6 +1238,9 @@ async function runSynthesize() {
       start_lon: parseFloat(document.getElementById('synth-lon').value) || -122.40,
       seed: Math.floor(Math.random() * 100000),
     };
+    if (Object.keys(_synthMarkOverrides).length > 0) {
+      body.mark_overrides = _synthMarkOverrides;
+    }
     const marks = document.getElementById('synth-marks').value.trim();
     if (marks) body.mark_sequence = marks;
     const peerVal = document.getElementById('synth-peer').value;
