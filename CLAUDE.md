@@ -235,6 +235,8 @@ Use `/data-license` to review code changes against the full policy.
 - Write tests for all decoding and export logic
 - Run integration tests (`uv run pytest tests/integration/ -v`) for any federation/co-op/peer API changes
 - Use `uv add <package>` to add dependencies — never edit `pyproject.toml` manually for deps
+- **After adding a dependency**, always run `uv sync` to install it, then verify the import works. On the Pi, also restart the helmlog service (`sudo systemctl restart helmlog`). Never use `uv pip install` for project dependencies — it bypasses the lockfile
+- **After pulling or switching branches**, always run `uv sync` (or `./scripts/deploy.sh` on the Pi) to ensure new dependencies are installed. The helmlog service runs with `--no-sync` and trusts the venv is already correct
 - Keep the SQLite schema versioned with simple integer migrations in `storage.py`
 - Log every read error and decode failure with `loguru` at `WARNING` or above
 
@@ -245,6 +247,7 @@ Use `/data-license` to review code changes against the full policy.
 - Don't hardcode device paths (e.g., `/dev/can0`) — use config or environment variables
 - Don't mix business logic into `main.py` — it should only wire things together and start the loop
 - Don't commit the `data/` directory or any `.db` files
+- Don't use `uv pip install` to install project dependencies — always use `uv add` (to add) or `uv sync` (to install from lockfile). `uv pip install` bypasses the lockfile and won't persist across `uv sync` runs
 
 ---
 

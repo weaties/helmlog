@@ -92,7 +92,14 @@ Key items to check:
 - No gambling/betting facilitation
 - Audit logging on co-op data access
 
-## 8. Documentation updates
+## 8. Dependency check
+
+If any dependencies were added (via `uv add`), verify:
+- The dependency is in `pyproject.toml` and `uv.lock`
+- `uv sync` installs it cleanly (the import works)
+- **Never** use `uv pip install` for project dependencies — it bypasses the lockfile and won't persist. The helmlog service runs with `--no-sync`, so the venv must be correct at deploy time.
+
+## 9. Documentation updates
 
 If the change involved any of these, update accordingly:
 - **New module** → update project structure tree in `CLAUDE.md`
@@ -101,8 +108,9 @@ If the change involved any of these, update accordingly:
 - **New stack tool** → update Stack & Tooling table in `CLAUDE.md`
 - **Schema migration** → update schema version in `CLAUDE.md` Stack table
 - **Data handling changes** → verify against `docs/data-licensing.md`
+- **New dependency** → verify it's in `pyproject.toml` and installs via `uv sync`
 
-## 9. Commit and push
+## 10. Commit and push
 
 ```bash
 git add <files>
@@ -110,7 +118,7 @@ git commit -m "feat: description (#issue)"
 git push -u origin <branch>
 ```
 
-## 10. Create PR
+## 11. Create PR
 
 ```bash
 gh pr create --title "..." --body "..."

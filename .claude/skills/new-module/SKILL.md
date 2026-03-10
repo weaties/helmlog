@@ -43,8 +43,14 @@ If the module needs API endpoints or admin UI:
 - Pass to `_web_loop()` / `create_app()` if needed
 - Add CLI subcommand if applicable
 
-### 6. Update config
+### 6. Sync dependencies
+If the module requires new packages:
+- Add with `uv add <package>` (never edit pyproject.toml manually for deps)
+- Run `uv sync` and verify the import works
+- Never use `uv pip install` — it bypasses the lockfile and won't persist
+
+### 7. Update config
 - Add new env vars to `.env.example` with comments
 - Update `CLAUDE.md` project structure tree
 
-### 7. Run `/pr-checklist`
+### 8. Run `/pr-checklist`
