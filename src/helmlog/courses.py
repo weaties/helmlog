@@ -168,6 +168,31 @@ def _is_upwind(
 # ---------------------------------------------------------------------------
 
 
+def _pull_to_water(
+    lat: float, lon: float, rc_lat: float, rc_lon: float
+) -> tuple[float, float]:
+    """If a position is on land, pull it back toward the RC until it is in water.
+
+    Uses binary search along the line from the mark to the RC, stepping back
+    until the mark is in navigable water with a small safety margin (~50 m).
+    """
+    if is_in_water(lat, lon):
+        return lat, lon
+    # Binary search: find the furthest point from RC that is still in water
+    lo, hi = 0.0, 1.0  # 0 = at mark (on land), 1 = at RC (should be in water)
+    for _ in range(30):
+        mid = (lo + hi) / 2
+        test_lat = lat + mid * (rc_lat - lat)
+        test_lon = lon + mid * (rc_lon - lon)
+        if is_in_water(test_lat, test_lon):
+            hi = mid
+        else:
+            lo = mid
+    # Use `hi` (the first water point) with a small inward margin (~50 m)
+    margin = min(hi + 0.02, 0.95)
+    return lat + margin * (rc_lat - lat), lon + margin * (rc_lon - lon)
+
+
 def compute_buoy_marks(
     rc_lat: float,
     rc_lon: float,
@@ -178,21 +203,28 @@ def compute_buoy_marks(
 
     Returns dict with keys: S, A, O, G, X, F.
     Wind direction is degrees true (direction wind comes FROM).
+    Any computed mark that would land on shore is pulled back toward the
+    RC position until it is in navigable water.
     """
     # A: windward mark — upwind of RC
     a_lat, a_lon = _offset(rc_lat, rc_lon, wind_dir, leg_distance_nm)
+    a_lat, a_lon = _pull_to_water(a_lat, a_lon, rc_lat, rc_lon)
     # X: leeward mark — downwind of RC
     downwind = (wind_dir + 180) % 360
     x_lat, x_lon = _offset(rc_lat, rc_lon, downwind, leg_distance_nm)
+    x_lat, x_lon = _pull_to_water(x_lat, x_lon, rc_lat, rc_lon)
     # O: offset mark — slightly below A (0.1 nm downwind of A)
     o_lat, o_lon = _offset(a_lat, a_lon, downwind, 0.1)
+    o_lat, o_lon = _pull_to_water(o_lat, o_lon, rc_lat, rc_lon)
     # G: gybe mark — downwind + 0.5 nm perpendicular offset to starboard
     g_base_lat, g_base_lon = _offset(rc_lat, rc_lon, downwind, leg_distance_nm * 0.7)
     stbd_bearing = (wind_dir + 90) % 360
     g_lat, g_lon = _offset(g_base_lat, g_base_lon, stbd_bearing, leg_distance_nm * 0.5)
+    g_lat, g_lon = _pull_to_water(g_lat, g_lon, rc_lat, rc_lon)
     # S: start mark — slightly to port of RC on the start line
     port_bearing = (wind_dir - 90) % 360
     s_lat, s_lon = _offset(rc_lat, rc_lon, port_bearing, 0.05)
+    s_lat, s_lon = _pull_to_water(s_lat, s_lon, rc_lat, rc_lon)
     # F: finish mark — at RC position
     return {
         "S": CourseMark("Start", s_lat, s_lon),
