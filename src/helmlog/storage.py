@@ -71,7 +71,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 26
+_CURRENT_VERSION: int = 30
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -559,6 +559,103 @@ _MIGRATIONS: dict[int, str] = {
         DROP TABLE race_videos;
         ALTER TABLE race_videos_new RENAME TO race_videos;
         CREATE INDEX IF NOT EXISTS idx_race_videos_race_id ON race_videos(race_id);
+    """,
+    27: """
+        -- Deployment management (#125)
+        CREATE TABLE IF NOT EXISTS deployment_log (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_sha   TEXT NOT NULL,
+            to_sha     TEXT NOT NULL,
+            trigger    TEXT NOT NULL DEFAULT 'manual',
+            status     TEXT NOT NULL DEFAULT 'success',
+            error      TEXT,
+            started_at TEXT NOT NULL,
+            user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_deployment_log_started
+            ON deployment_log(started_at);
+    """,
+    28: """
+        -- Federation Phase 1: identity, co-op membership, session sharing
+
+        -- This boat's keypair reference (key material in filesystem, not DB)
+        CREATE TABLE IF NOT EXISTS boat_identity (
+            id          INTEGER PRIMARY KEY CHECK (id = 1),
+            pub_key     TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            sail_number TEXT NOT NULL,
+            boat_name   TEXT,
+            created_at  TEXT NOT NULL
+        );
+
+        -- Co-ops this boat belongs to
+        CREATE TABLE IF NOT EXISTS co_op_memberships (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            co_op_id        TEXT NOT NULL,
+            co_op_name      TEXT NOT NULL,
+            co_op_pub       TEXT NOT NULL,
+            membership_json TEXT NOT NULL,
+            role            TEXT NOT NULL DEFAULT 'member',
+            joined_at       TEXT NOT NULL,
+            status          TEXT NOT NULL DEFAULT 'active',
+            UNIQUE(co_op_id)
+        );
+
+        -- Per-session co-op sharing decisions
+        CREATE TABLE IF NOT EXISTS session_sharing (
+            session_id  INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+            co_op_id    TEXT NOT NULL,
+            shared_at   TEXT NOT NULL,
+            shared_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            embargo_until TEXT,
+            event_name  TEXT,
+            PRIMARY KEY (session_id, co_op_id)
+        );
+
+        -- Known peers (other boats in co-ops we belong to)
+        CREATE TABLE IF NOT EXISTS co_op_peers (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            co_op_id        TEXT NOT NULL,
+            boat_pub        TEXT NOT NULL,
+            fingerprint     TEXT NOT NULL,
+            sail_number     TEXT,
+            boat_name       TEXT,
+            tailscale_ip    TEXT,
+            last_seen       TEXT,
+            membership_json TEXT NOT NULL,
+            UNIQUE(co_op_id, fingerprint)
+        );
+
+        -- Co-op data access audit trail
+        CREATE TABLE IF NOT EXISTS co_op_audit (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            co_op_id        TEXT NOT NULL,
+            accessor_fp     TEXT NOT NULL,
+            action          TEXT NOT NULL,
+            resource        TEXT,
+            timestamp       TEXT NOT NULL,
+            ip              TEXT,
+            points_count    INTEGER,
+            bytes_transferred INTEGER,
+            nonce_hash      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_co_op_audit_ts ON co_op_audit(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_co_op_audit_accessor ON co_op_audit(accessor_fp);
+
+        -- Nonce deduplication for replay protection
+        CREATE TABLE IF NOT EXISTS request_nonces (
+            nonce_hash  TEXT PRIMARY KEY,
+            timestamp   TEXT NOT NULL,
+            boat_fp     TEXT NOT NULL
+        );
+    """,
+    29: """
+        ALTER TABLE races ADD COLUMN peer_fingerprint TEXT;
+        ALTER TABLE races ADD COLUMN peer_co_op_id TEXT;
+    """,
+    30: """
+        ALTER TABLE positions ADD COLUMN race_id INTEGER REFERENCES races(id);
+        CREATE INDEX IF NOT EXISTS idx_positions_race_id ON positions (race_id);
     """,
 }
 
@@ -1198,6 +1295,8 @@ class Storage:
         session_type: str,
         source: str,
         source_id: str,
+        peer_fingerprint: str | None = None,
+        peer_co_op_id: str | None = None,
     ) -> int:
         """Insert a backfilled race row with provenance metadata. Returns race_id."""
         from datetime import UTC as _UTC
@@ -1208,8 +1307,9 @@ class Storage:
         cur = await db.execute(
             "INSERT INTO races"
             " (name, event, race_num, date, start_utc, end_utc,"
-            "  session_type, source, source_id, imported_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  session_type, source, source_id, imported_at,"
+            "  peer_fingerprint, peer_co_op_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 name,
                 event,
@@ -1221,6 +1321,8 @@ class Storage:
                 source,
                 source_id,
                 now,
+                peer_fingerprint,
+                peer_co_op_id,
             ),
         )
         await db.commit()
@@ -1228,6 +1330,62 @@ class Storage:
         assert race_id is not None
         logger.info("Imported race {} (source={}, source_id={})", race_id, source, source_id)
         return race_id
+
+    async def import_synthesized_data(self, rows: list[Any], *, race_id: int) -> int:
+        """Bulk-insert synthesized instrument data from SynthRow objects.
+
+        Writes to: positions, headings, speeds, cogsog, depths, winds
+        (both true and apparent). Returns the number of rows written.
+        """
+        db = self._conn()
+        src_gps = 3  # synthetic GPS source address
+        src_inst = 7  # synthetic instrument source address
+
+        pos_rows = [(r.ts.isoformat(), src_gps, r.lat, r.lon, race_id) for r in rows]
+        hdg_rows = [(r.ts.isoformat(), src_inst, r.heading, None, None) for r in rows]
+        spd_rows = [(r.ts.isoformat(), src_inst, r.bsp) for r in rows]
+        cs_rows = [(r.ts.isoformat(), src_gps, r.cog, r.sog) for r in rows]
+        dep_rows = [(r.ts.isoformat(), src_inst, r.depth, None) for r in rows]
+        # True wind (reference=0 = boat-referenced TWA)
+        tw_rows = [(r.ts.isoformat(), src_inst, r.tws, r.twa, 0) for r in rows]
+        # Apparent wind (reference=2)
+        aw_rows = [(r.ts.isoformat(), src_inst, r.aws, r.awa, 2) for r in rows]
+
+        await db.executemany(
+            "INSERT INTO positions (ts, source_addr, latitude_deg, longitude_deg, race_id)"
+            " VALUES (?, ?, ?, ?, ?)",
+            pos_rows,
+        )
+        await db.executemany(
+            "INSERT INTO headings (ts, source_addr, heading_deg, deviation_deg, variation_deg)"
+            " VALUES (?, ?, ?, ?, ?)",
+            hdg_rows,
+        )
+        await db.executemany(
+            "INSERT INTO speeds (ts, source_addr, speed_kts) VALUES (?, ?, ?)",
+            spd_rows,
+        )
+        await db.executemany(
+            "INSERT INTO cogsog (ts, source_addr, cog_deg, sog_kts) VALUES (?, ?, ?, ?)",
+            cs_rows,
+        )
+        await db.executemany(
+            "INSERT INTO depths (ts, source_addr, depth_m, offset_m) VALUES (?, ?, ?, ?)",
+            dep_rows,
+        )
+        await db.executemany(
+            "INSERT INTO winds (ts, source_addr, wind_speed_kts, wind_angle_deg, reference)"
+            " VALUES (?, ?, ?, ?, ?)",
+            tw_rows,
+        )
+        await db.executemany(
+            "INSERT INTO winds (ts, source_addr, wind_speed_kts, wind_angle_deg, reference)"
+            " VALUES (?, ?, ?, ?, ?)",
+            aw_rows,
+        )
+        await db.commit()
+        logger.info("Imported {} synthesized data points", len(rows))
+        return len(rows)
 
     async def import_track_points(
         self,
@@ -1397,7 +1555,7 @@ class Storage:
         """
         db = self._conn()
 
-        include_races = session_type in (None, "race", "practice")
+        include_races = session_type in (None, "race", "practice", "synthesized")
         include_debriefs = session_type in (None, "debrief")
 
         parts: list[str] = []
@@ -1406,11 +1564,11 @@ class Storage:
         if include_races:
             race_where: list[str] = []
             race_params: list[Any] = []
-            if session_type in ("race", "practice"):
+            if session_type in ("race", "practice", "synthesized"):
                 race_where.append("r.session_type = ?")
                 race_params.append(session_type)
             else:
-                race_where.append("r.session_type IN ('race', 'practice')")
+                race_where.append("r.session_type IN ('race', 'practice', 'synthesized')")
             if q:
                 race_where.append("(r.name LIKE ? OR r.event LIKE ?)")
                 like = f"%{q}%"
@@ -3149,6 +3307,334 @@ class Storage:
         await db.commit()
         logger.info("Sailor {!r} anonymized to {!r} ({} rows)", sailor_name, replacement, count)
         return count
+
+    # ------------------------------------------------------------------
+    # Deployment log (#125)
+    # ------------------------------------------------------------------
+
+    async def log_deployment(
+        self,
+        from_sha: str,
+        to_sha: str,
+        trigger: str = "manual",
+        status: str = "success",
+        error: str | None = None,
+        user_id: int | None = None,
+    ) -> int:
+        """Record a deployment event. Returns the new row id."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        now = _datetime.now(UTC).isoformat()
+        cur = await db.execute(
+            "INSERT INTO deployment_log"
+            " (from_sha, to_sha, trigger, status, error, started_at, user_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (from_sha, to_sha, trigger, status, error, now, user_id),
+        )
+        await db.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+
+    async def list_deployments(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent deployment log entries, newest first."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT d.*, u.email AS user_email"
+            " FROM deployment_log d"
+            " LEFT JOIN users u ON d.user_id = u.id"
+            " ORDER BY d.started_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+    async def last_deployment(self) -> dict[str, Any] | None:
+        """Return the most recent successful deployment, or None."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT d.*, u.email AS user_email"
+            " FROM deployment_log d"
+            " LEFT JOIN users u ON d.user_id = u.id"
+            " WHERE d.status = 'success'"
+            " ORDER BY d.started_at DESC LIMIT 1",
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Federation — identity & co-op
+    # ------------------------------------------------------------------
+
+    async def save_boat_identity(
+        self,
+        pub_key: str,
+        fingerprint: str,
+        sail_number: str,
+        boat_name: str,
+    ) -> None:
+        """Store (or update) this boat's identity reference in SQLite."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        now = _datetime.now(UTC).isoformat()
+        await db.execute(
+            "INSERT INTO boat_identity"
+            " (id, pub_key, fingerprint, sail_number, boat_name, created_at)"
+            " VALUES (1, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(id) DO UPDATE SET"
+            "   pub_key = excluded.pub_key,"
+            "   fingerprint = excluded.fingerprint,"
+            "   sail_number = excluded.sail_number,"
+            "   boat_name = excluded.boat_name",
+            (pub_key, fingerprint, sail_number, boat_name, now),
+        )
+        await db.commit()
+
+    async def get_boat_identity(self) -> dict[str, Any] | None:
+        """Return this boat's identity row, or None."""
+        cur = await self._conn().execute(
+            "SELECT pub_key, fingerprint, sail_number, boat_name, created_at"
+            " FROM boat_identity WHERE id = 1"
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def save_co_op_membership(
+        self,
+        co_op_id: str,
+        co_op_name: str,
+        co_op_pub: str,
+        membership_json: str,
+        role: str = "member",
+        joined_at: str | None = None,
+    ) -> int:
+        """Store a co-op membership record. Returns the row id."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        if joined_at is None:
+            joined_at = _datetime.now(UTC).isoformat()
+        cur = await db.execute(
+            "INSERT INTO co_op_memberships"
+            " (co_op_id, co_op_name, co_op_pub, membership_json, role, joined_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(co_op_id) DO UPDATE SET"
+            "   co_op_name = excluded.co_op_name,"
+            "   co_op_pub = excluded.co_op_pub,"
+            "   membership_json = excluded.membership_json,"
+            "   role = excluded.role,"
+            "   joined_at = excluded.joined_at,"
+            "   status = 'active'",
+            (co_op_id, co_op_name, co_op_pub, membership_json, role, joined_at),
+        )
+        await db.commit()
+        return cur.lastrowid or 0
+
+    async def list_co_op_memberships(self) -> list[dict[str, Any]]:
+        """Return all co-op memberships for this boat."""
+        cur = await self._conn().execute(
+            "SELECT id, co_op_id, co_op_name, co_op_pub, membership_json,"
+            " role, joined_at, status"
+            " FROM co_op_memberships ORDER BY joined_at"
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def get_co_op_membership(self, co_op_id: str) -> dict[str, Any] | None:
+        """Return a specific co-op membership, or None."""
+        cur = await self._conn().execute(
+            "SELECT id, co_op_id, co_op_name, co_op_pub, membership_json,"
+            " role, joined_at, status"
+            " FROM co_op_memberships WHERE co_op_id = ?",
+            (co_op_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def share_session(
+        self,
+        session_id: int,
+        co_op_id: str,
+        *,
+        user_id: int | None = None,
+        embargo_until: str | None = None,
+        event_name: str | None = None,
+    ) -> None:
+        """Mark a session as shared with a co-op."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        now = _datetime.now(UTC).isoformat()
+        await db.execute(
+            "INSERT INTO session_sharing"
+            " (session_id, co_op_id, shared_at, shared_by, embargo_until, event_name)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(session_id, co_op_id) DO UPDATE SET"
+            "   shared_at = excluded.shared_at,"
+            "   shared_by = excluded.shared_by,"
+            "   embargo_until = excluded.embargo_until,"
+            "   event_name = excluded.event_name",
+            (session_id, co_op_id, now, user_id, embargo_until, event_name),
+        )
+        await db.commit()
+
+    async def unshare_session(self, session_id: int, co_op_id: str) -> bool:
+        """Remove a session's co-op sharing. Returns True if a row was deleted."""
+        db = self._conn()
+        cur = await db.execute(
+            "DELETE FROM session_sharing WHERE session_id = ? AND co_op_id = ?",
+            (session_id, co_op_id),
+        )
+        await db.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def get_session_sharing(self, session_id: int) -> list[dict[str, Any]]:
+        """Return all co-op sharing records for a session."""
+        cur = await self._conn().execute(
+            "SELECT ss.session_id, ss.co_op_id, ss.shared_at, ss.shared_by,"
+            " ss.embargo_until, ss.event_name, cm.co_op_name"
+            " FROM session_sharing ss"
+            " LEFT JOIN co_op_memberships cm ON ss.co_op_id = cm.co_op_id"
+            " WHERE ss.session_id = ?",
+            (session_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def is_session_shared(self, session_id: int, co_op_id: str) -> bool:
+        """Check if a session is shared with a specific co-op."""
+        cur = await self._conn().execute(
+            "SELECT 1 FROM session_sharing WHERE session_id = ? AND co_op_id = ?",
+            (session_id, co_op_id),
+        )
+        return await cur.fetchone() is not None
+
+    async def save_co_op_peer(
+        self,
+        co_op_id: str,
+        boat_pub: str,
+        fingerprint: str,
+        membership_json: str,
+        *,
+        sail_number: str | None = None,
+        boat_name: str | None = None,
+        tailscale_ip: str | None = None,
+    ) -> None:
+        """Store or update a known co-op peer."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        now = _datetime.now(UTC).isoformat()
+        await db.execute(
+            "INSERT INTO co_op_peers"
+            " (co_op_id, boat_pub, fingerprint, sail_number, boat_name,"
+            "  tailscale_ip, last_seen, membership_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(co_op_id, fingerprint) DO UPDATE SET"
+            "   boat_pub = excluded.boat_pub,"
+            "   sail_number = excluded.sail_number,"
+            "   boat_name = excluded.boat_name,"
+            "   tailscale_ip = excluded.tailscale_ip,"
+            "   last_seen = excluded.last_seen,"
+            "   membership_json = excluded.membership_json",
+            (
+                co_op_id,
+                boat_pub,
+                fingerprint,
+                sail_number,
+                boat_name,
+                tailscale_ip,
+                now,
+                membership_json,
+            ),
+        )
+        await db.commit()
+
+    async def list_co_op_peers(self, co_op_id: str) -> list[dict[str, Any]]:
+        """Return all known peers for a co-op."""
+        cur = await self._conn().execute(
+            "SELECT id, co_op_id, boat_pub, fingerprint, sail_number,"
+            " boat_name, tailscale_ip, last_seen, membership_json"
+            " FROM co_op_peers WHERE co_op_id = ? ORDER BY boat_name",
+            (co_op_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def get_co_op_peer(
+        self,
+        co_op_id: str,
+        fingerprint: str,
+    ) -> dict[str, Any] | None:
+        """Return a specific peer by co-op and fingerprint."""
+        cur = await self._conn().execute(
+            "SELECT id, co_op_id, boat_pub, fingerprint, sail_number,"
+            " boat_name, tailscale_ip, last_seen, membership_json"
+            " FROM co_op_peers WHERE co_op_id = ? AND fingerprint = ?",
+            (co_op_id, fingerprint),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Federation — nonce replay protection
+    # ------------------------------------------------------------------
+
+    async def check_nonce(self, nonce_hash: str) -> bool:
+        """Return True if this nonce has already been used."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        # Prune expired nonces (older than 20 minutes)
+        cutoff = _datetime.now(UTC).isoformat()[:-6]  # rough cutoff
+        await db.execute("DELETE FROM request_nonces WHERE timestamp < ?", (cutoff,))
+        cur = await db.execute("SELECT 1 FROM request_nonces WHERE nonce_hash = ?", (nonce_hash,))
+        return await cur.fetchone() is not None
+
+    async def save_nonce(self, nonce_hash: str, boat_fp: str) -> None:
+        """Record a nonce as used for replay protection."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        now = _datetime.now(UTC).isoformat()
+        await db.execute(
+            "INSERT OR IGNORE INTO request_nonces (nonce_hash, timestamp, boat_fp)"
+            " VALUES (?, ?, ?)",
+            (nonce_hash, now, boat_fp),
+        )
+        await db.commit()
+
+    # ------------------------------------------------------------------
+    # Federation — co-op audit logging
+    # ------------------------------------------------------------------
+
+    async def log_co_op_audit(
+        self,
+        co_op_id: str,
+        accessor_fp: str,
+        action: str,
+        *,
+        resource: str | None = None,
+        ip: str | None = None,
+        points_count: int | None = None,
+    ) -> int:
+        """Write a co-op data access event to the co_op_audit table."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        now = _datetime.now(UTC).isoformat()
+        cur = await db.execute(
+            "INSERT INTO co_op_audit"
+            " (co_op_id, accessor_fp, action, resource, timestamp, ip, points_count)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (co_op_id, accessor_fp, action, resource, now, ip, points_count),
+        )
+        await db.commit()
+        return cur.lastrowid or 0
 
     # ------------------------------------------------------------------
     # Helpers

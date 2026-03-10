@@ -1,0 +1,38 @@
+name: Integration Tests
+
+on:
+  pull_request:
+    paths:
+      - "src/helmlog/federation.py"
+      - "src/helmlog/peer_api.py"
+      - "src/helmlog/peer_auth.py"
+      - "src/helmlog/peer_client.py"
+      - "src/helmlog/storage.py"
+      - "tests/integration/**"
+      - ".github/workflows/integration.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2 libsndfile1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run integration tests
+        run: uv run pytest tests/integration/ -v --tb=short
+        env:
+          AUTH_DISABLED: "true"

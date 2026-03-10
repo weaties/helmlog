@@ -1,0 +1,410 @@
+{% extends "base.html" %}
+{% block title %}Federation — HelmLog{% endblock %}
+{% block extra_css %}
+<style>
+h1{font-size:1.3rem;font-weight:700;color:#7eb8f7}
+h2{font-size:1rem;font-weight:600;color:#7eb8f7;margin:0 0 10px}
+.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:12px}
+.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#8892a4;margin-bottom:8px}
+.field{background:#0a1628;border:1px solid #2563eb;border-radius:6px;
+padding:9px 12px;color:#e8eaf0;font-size:.9rem;width:100%;box-sizing:border-box}
+textarea.field{min-height:100px;font-family:monospace;font-size:.8rem;resize:vertical}
+.btn-add{padding:9px 16px;border:none;border-radius:6px;background:#2563eb;
+color:#fff;font-weight:700;cursor:pointer;font-size:.9rem}
+.btn-add:disabled{opacity:.5;cursor:not-allowed}
+.btn-sm{padding:8px 12px;border:1px solid #374151;border-radius:4px;
+background:#0a1628;font-size:.78rem;cursor:pointer;min-height:36px}
+.btn-copy{color:#7eb8f7;border-color:#2563eb}
+.btn-del{color:#ef4444;border-color:#7f1d1d}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:.87rem}
+th{text-align:left;color:#8892a4;font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;
+padding:6px 8px;border-bottom:1px solid #1e3a5f}
+td{padding:7px 8px;border-bottom:1px solid #0d1a2e;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+.empty{color:#8892a4;text-align:center;padding:20px 0}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:.9rem;align-items:baseline}
+.kv dt{color:#8892a4;font-size:.8rem;text-align:right;white-space:nowrap}
+.kv dd{margin:0;word-break:break-all}
+.mono{font-family:monospace;font-size:.82rem}
+.badge{display:inline-block;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;
+padding:2px 7px;border-radius:3px;margin-left:6px}
+.badge-admin{background:#1e3a5f;color:#60a5fa}
+.badge-member{background:#1a3329;color:#4ade80}
+.badge-active{background:#0d2818;color:#4ade80}
+.badge-inactive{background:#1f1215;color:#f87171}
+.status{margin-top:12px;padding:8px;border-radius:6px;font-size:.85rem;display:none}
+.status.ok{display:block;background:#0d2818;color:#4ade80;border:1px solid #16a34a}
+.status.err{display:block;background:#1f1215;color:#f87171;border:1px solid #7f1d1d}
+.form-grid{display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:10px}
+.peer-section{margin-top:12px;padding-top:10px;border-top:1px solid #1e3a5f}
+select.field{appearance:auto}
+</style>
+{% endblock %}
+{% block content %}
+<h1 style="margin-bottom:12px">Federation</h1>
+
+<!-- ═══════════════════ Identity ═══════════════════ -->
+<div class="card">
+  <div class="label">Boat Identity</div>
+  <div id="identity-section">Loading...</div>
+</div>
+
+<!-- ═══════════════════ Co-ops ═══════════════════ -->
+<div class="card">
+  <div class="label">Co-op Memberships</div>
+  <div id="coops-section">Loading...</div>
+</div>
+
+<!-- ═══════════════════ Create co-op ═══════════════════ -->
+<div class="card" id="create-coop-card" style="display:none">
+  <div class="label">Create Co-op</div>
+  <div class="form-grid">
+    <input id="coop-name" class="field" placeholder="Co-op name *" maxlength="60"/>
+    <input id="coop-areas" class="field" placeholder="Areas (comma-separated, optional)" maxlength="200"/>
+  </div>
+  <button class="btn-add" onclick="createCoop()">Create Co-op</button>
+  <div id="create-coop-status" class="status"></div>
+</div>
+
+<!-- ═══════════════════ Invite ═══════════════════ -->
+<div class="card" id="invite-card" style="display:none">
+  <div class="label">Invite Boat to Co-op</div>
+  <div class="form-grid">
+    <select id="invite-coop" class="field"></select>
+    <textarea id="invite-card-json" class="field"
+      placeholder='Paste the invitee boat card JSON (their boat.json contents)...'></textarea>
+    <input id="invite-tailscale-ip" class="field"
+      placeholder="Invitee Tailscale IP override (leave blank if included in boat card)"
+      maxlength="45"/>
+  </div>
+  <button class="btn-add" onclick="inviteBoat()">Send Invitation</button>
+  <div id="invite-status" class="status"></div>
+</div>
+
+<!-- ═══════════════════ Join Co-op ═══════════════════ -->
+<div class="card" id="join-card" style="display:none">
+  <div class="label">Join a Co-op</div>
+  <p style="font-size:.8rem;color:#8892a4;margin:0 0 8px">Paste the invite bundle JSON that the co-op admin sent you.</p>
+  <div class="form-grid">
+    <textarea id="join-bundle-json" class="field"
+      placeholder='Paste the invite bundle JSON here...'></textarea>
+  </div>
+  <button class="btn-add" onclick="joinCoop()">Join Co-op</button>
+  <div id="join-status" class="status"></div>
+</div>
+
+<!-- ═══════════════════ Peer Sessions ═══════════════════ -->
+<div class="card" id="peer-sessions-card" style="display:none">
+  <div class="label">Co-op Peer Sessions</div>
+  <div id="peer-sessions-section"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+/* ──────────────── Identity ──────────────── */
+let HAS_IDENTITY=false;
+async function loadIdentity(){
+  const el=document.getElementById('identity-section');
+  try{
+    const r=await fetch('/api/federation/identity');
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const data=await r.json();
+    if(!data.identity){
+      HAS_IDENTITY=false;
+      el.innerHTML=`
+        <p style="color:#8892a4;margin-bottom:12px">No identity initialized yet.</p>
+        <div class="form-grid">
+          <input id="id-sail" class="field" placeholder="Sail number *" maxlength="30"/>
+          <input id="id-name" class="field" placeholder="Boat name *" maxlength="60"/>
+          <input id="id-email" class="field" placeholder="Owner email (required for co-ops)" maxlength="120"/>
+        </div>
+        <button class="btn-add" onclick="initIdentity()">Initialize Identity</button>
+        <div id="id-status" class="status"></div>`;
+      return;
+    }
+    HAS_IDENTITY=true;
+    const id=data.identity;
+    const trunc=id.pub_key.length>40?id.pub_key.slice(0,40)+'...':id.pub_key;
+    el.innerHTML=`
+      <dl class="kv">
+        <dt>Boat</dt><dd>${esc(id.boat_name)}</dd>
+        <dt>Sail #</dt><dd>${esc(id.sail_number)}</dd>
+        <dt>Fingerprint</dt><dd class="mono">${esc(id.fingerprint)}</dd>
+        <dt>Public key</dt><dd class="mono" title="${esc(id.pub_key)}">${esc(trunc)}</dd>
+        ${id.owner_email?'<dt>Email</dt><dd>'+esc(id.owner_email)+'</dd>':''}
+        <dt>Created</dt><dd>${id.created_at||'\u2014'}</dd>
+      </dl>
+      <div style="margin-top:10px">
+        <button class="btn-sm btn-copy" onclick="copyBoatCard()">Copy boat card JSON</button>
+      </div>`;
+    document.getElementById('create-coop-card').style.display='';
+    document.getElementById('join-card').style.display='';
+  }catch(e){
+    el.innerHTML='<div class="empty" style="color:#ef4444">Failed to load identity: '+esc(e.message)+'</div>';
+  }
+}
+
+async function initIdentity(){
+  const sail=document.getElementById('id-sail').value.trim();
+  const name=document.getElementById('id-name').value.trim();
+  const email=document.getElementById('id-email').value.trim()||null;
+  if(!sail||!name){alert('Sail number and boat name are required');return}
+  const r=await fetch('/api/federation/identity',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sail_number:sail,boat_name:name,owner_email:email})
+  });
+  const st=document.getElementById('id-status');
+  if(r.ok){
+    st.textContent='Identity created!';st.className='status ok';
+    setTimeout(()=>location.reload(),800);
+  }else{
+    const d=await r.json().catch(()=>({}));
+    st.textContent=d.detail||'Failed to create identity';st.className='status err';
+  }
+}
+
+async function copyBoatCard(){
+  const r=await fetch('/api/federation/identity');
+  if(!r.ok)return;
+  const data=await r.json();
+  if(!data.boat_card_json)return;
+  try{
+    if(navigator.clipboard){await navigator.clipboard.writeText(data.boat_card_json)}
+    else{throw new Error('no clipboard API')}
+  }catch(e){
+    const ta=document.createElement('textarea');
+    ta.value=data.boat_card_json;document.body.appendChild(ta);
+    ta.select();document.execCommand('copy');ta.remove();
+  }
+  alert('Boat card JSON copied to clipboard');
+}
+
+/* ──────────────── Co-ops ──────────────── */
+let COOPS=[];
+async function loadCoops(){
+  const el=document.getElementById('coops-section');
+  try{
+    const r=await fetch('/api/federation/co-ops');
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const data=await r.json();
+    COOPS=data.co_ops||[];
+    if(!COOPS.length){
+      el.innerHTML='<div class="empty">Not a member of any co-op yet.</div>';
+      updateInviteDropdown();
+      return;
+    }
+    let html='';
+    for(const c of COOPS){
+      const roleBadge=c.role==='admin'
+        ?'<span class="badge badge-admin">admin</span>'
+        :'<span class="badge badge-member">member</span>';
+      const statusBadge=c.status==='active'
+        ?'<span class="badge badge-active">active</span>'
+        :'<span class="badge badge-inactive">'+esc(c.status)+'</span>';
+      html+=`<div style="margin-bottom:16px">
+        <h2>${esc(c.co_op_name)} ${roleBadge} ${statusBadge}</h2>
+        <dl class="kv">
+          <dt>Co-op ID</dt><dd class="mono">${esc(c.co_op_id)}</dd>
+          <dt>Joined</dt><dd>${esc(c.joined_at)}</dd>
+        </dl>`;
+      const peers=c.peers||[];
+      if(peers.length){
+        html+=`<div class="peer-section">
+          <div class="label">Members (${peers.length})</div>
+          <div class="table-wrap"><table><thead>
+            <tr><th>Sail #</th><th>Boat</th><th>Fingerprint</th><th>Last seen</th></tr>
+          </thead><tbody>`;
+        for(const p of peers){
+          html+=`<tr>
+            <td>${esc(p.sail_number)||'\u2014'}</td>
+            <td>${esc(p.boat_name)||'\u2014'}</td>
+            <td class="mono">${esc(p.fingerprint)}</td>
+            <td>${esc(p.last_seen)||'\u2014'}</td>
+          </tr>`;
+        }
+        html+='</tbody></table></div></div>';
+      }else{
+        html+='<div class="peer-section"><div class="empty">No peers yet</div></div>';
+      }
+      html+='</div>';
+    }
+    el.innerHTML=html;
+    updateInviteDropdown();
+  }catch(e){
+    el.innerHTML='<div class="empty" style="color:#ef4444">Failed to load co-ops: '+esc(e.message)+'</div>';
+  }
+}
+
+function updateInviteDropdown(){
+  const adminCoops=COOPS.filter(c=>c.role==='admin');
+  const card=document.getElementById('invite-card');
+  if(!adminCoops.length||!HAS_IDENTITY){card.style.display='none';return}
+  card.style.display='';
+  const sel=document.getElementById('invite-coop');
+  sel.innerHTML=adminCoops.map(c=>
+    '<option value="'+esc(c.co_op_id)+'">'+esc(c.co_op_name)+'</option>'
+  ).join('');
+}
+
+/* ──────────────── Create co-op ──────────────── */
+async function createCoop(){
+  const name=document.getElementById('coop-name').value.trim();
+  if(!name){alert('Co-op name is required');return}
+  const areasRaw=document.getElementById('coop-areas').value.trim();
+  const areas=areasRaw?areasRaw.split(',').map(s=>s.trim()).filter(Boolean):[];
+  const r=await fetch('/api/federation/co-ops',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name,areas})
+  });
+  const st=document.getElementById('create-coop-status');
+  if(r.ok){
+    st.textContent='Co-op created!';st.className='status ok';
+    document.getElementById('coop-name').value='';
+    document.getElementById('coop-areas').value='';
+    setTimeout(()=>{st.className='status';loadCoops()},800);
+  }else{
+    const d=await r.json().catch(()=>({}));
+    st.textContent=d.detail||'Failed to create co-op';st.className='status err';
+  }
+}
+
+/* ──────────────── Invite ──────────────── */
+async function inviteBoat(){
+  const coopId=document.getElementById('invite-coop').value;
+  const cardJson=document.getElementById('invite-card-json').value.trim();
+  const st=document.getElementById('invite-status');
+  if(!coopId){st.textContent='Select a co-op';st.className='status err';return}
+  if(!cardJson){st.textContent='Paste the boat card JSON';st.className='status err';return}
+  let parsed;
+  try{parsed=JSON.parse(cardJson)}catch(e){
+    st.textContent='Invalid JSON: '+e.message;st.className='status err';return;
+  }
+  const tsIp=document.getElementById('invite-tailscale-ip').value.trim();
+  if(tsIp) parsed.tailscale_ip=tsIp;
+  const r=await fetch('/api/federation/co-ops/'+encodeURIComponent(coopId)+'/invite',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(parsed)
+  });
+  if(r.ok){
+    const d=await r.json();
+    st.className='status ok';
+    if(d.invite_bundle){
+      st.innerHTML='Invited '+esc(d.boat_name||'boat')+' successfully!<br>'
+        +'<strong>Copy the invite bundle below and send it to them so they can join:</strong>';
+      const ta=document.createElement('textarea');
+      ta.className='field';ta.style.marginTop='8px';ta.readOnly=true;
+      ta.value=JSON.stringify(d.invite_bundle,null,2);
+      st.appendChild(ta);
+      const btn2=document.createElement('button');
+      btn2.className='btn-sm btn-copy';btn2.style.marginTop='6px';
+      btn2.textContent='Copy invite bundle';
+      btn2.onclick=()=>{if(navigator.clipboard){navigator.clipboard.writeText(ta.value).then(()=>btn2.textContent='Copied!').catch(()=>{ta.select();document.execCommand('copy');btn2.textContent='Copied!'})}else{ta.select();document.execCommand('copy');btn2.textContent='Copied!'}};
+      st.appendChild(btn2);
+    }else{
+      st.textContent='Invited '+esc(d.boat_name||'boat')+' successfully!';
+    }
+    document.getElementById('invite-card-json').value='';
+    document.getElementById('invite-tailscale-ip').value='';
+    setTimeout(()=>{loadCoops()},1200);
+  }else{
+    const d=await r.json().catch(()=>({}));
+    st.textContent=d.detail||'Invitation failed';st.className='status err';
+  }
+}
+
+/* ──────────────── Join Co-op ──────────────── */
+async function joinCoop(){
+  const bundleJson=document.getElementById('join-bundle-json').value.trim();
+  const st=document.getElementById('join-status');
+  if(!bundleJson){st.textContent='Paste the invite bundle JSON';st.className='status err';return}
+  let parsed;
+  try{parsed=JSON.parse(bundleJson)}catch(e){
+    st.textContent='Invalid JSON: '+e.message;st.className='status err';return;
+  }
+  const r=await fetch('/api/federation/join',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(parsed)
+  });
+  if(r.ok){
+    const d=await r.json();
+    st.textContent='Joined '+esc(d.co_op_name||'co-op')+' successfully!';
+    st.className='status ok';
+    document.getElementById('join-bundle-json').value='';
+    setTimeout(()=>{st.className='status';loadCoops().then(loadPeerSessions)},800);
+  }else{
+    const d=await r.json().catch(()=>({}));
+    st.textContent=d.detail||'Failed to join';st.className='status err';
+  }
+}
+
+/* ──────────────── Peer Sessions ──────────────── */
+async function loadPeerSessions(){
+  if(!COOPS.length||!HAS_IDENTITY) return;
+  const card=document.getElementById('peer-sessions-card');
+  card.style.display='';
+  const el=document.getElementById('peer-sessions-section');
+
+  // Build dropdown + button per co-op
+  let html='';
+  for(const c of COOPS){
+    html+='<div style="margin-bottom:16px">';
+    html+='<h2>'+esc(c.co_op_name)+'</h2>';
+    html+='<button class="btn-add" style="font-size:.8rem;padding:6px 12px" '
+      +'onclick="queryPeers(\''+esc(c.co_op_id)+'\',this)">Load Peer Sessions</button>';
+    html+='<div id="peers-'+esc(c.co_op_id)+'" style="margin-top:8px"></div>';
+    html+='</div>';
+  }
+  el.innerHTML=html;
+}
+
+async function queryPeers(coopId,btn){
+  btn.disabled=true;btn.textContent='Loading...';
+  const el=document.getElementById('peers-'+coopId);
+  try{
+    const r=await fetch('/api/federation/co-ops/'+encodeURIComponent(coopId)+'/peer-sessions');
+    if(!r.ok){el.innerHTML='<div class="empty" style="color:#ef4444">Failed to load</div>';return}
+    const data=await r.json();
+    const peers=data.peers||[];
+    if(!peers.length){el.innerHTML='<div class="empty">No peers responded</div>';return}
+    let html='';
+    for(const p of peers){
+      const statusBadge=p.online
+        ?'<span class="badge badge-active">online</span>'
+        :'<span class="badge badge-inactive">offline</span>';
+      html+='<div style="margin-bottom:12px">';
+      html+='<div style="font-weight:600;font-size:.9rem">'+esc(p.boat_name||p.fingerprint)
+        +' <span style="color:#8892a4">#'+esc(p.sail_number||'')+'</span> '+statusBadge+'</div>';
+      if(p.sessions&&p.sessions.length){
+        html+='<div class="table-wrap"><table><thead>'
+          +'<tr><th>Session</th><th>Type</th><th>Date</th><th>Status</th></tr>'
+          +'</thead><tbody>';
+        for(const s of p.sessions){
+          if(s.status==='embargoed'){
+            html+='<tr><td colspan="3" style="color:#8892a4">Embargoed</td>'
+              +'<td>Available '+esc(s.available_at||'').slice(0,10)+'</td></tr>';
+          }else{
+            html+='<tr><td>'+esc(s.name||'')+'</td>'
+              +'<td>'+esc(s.session_type||'')+'</td>'
+              +'<td>'+esc(s.date||'')+'</td>'
+              +'<td><span class="badge badge-active">available</span></td></tr>';
+          }
+        }
+        html+='</tbody></table></div>';
+      }else if(p.online){
+        html+='<div class="empty">No shared sessions</div>';
+      }
+      html+='</div>';
+    }
+    el.innerHTML=html;
+  }catch(e){
+    el.innerHTML='<div class="empty" style="color:#ef4444">Error: '+esc(e.message)+'</div>';
+  }finally{
+    btn.disabled=false;btn.textContent='Load Peer Sessions';
+  }
+}
+
+/* ──────────────── Init ──────────────── */
+loadIdentity().then(loadCoops).then(loadPeerSessions).catch(e=>console.error('Federation init error:',e));
+</script>
+{% endblock %}

@@ -39,6 +39,7 @@ async function init() {
     loadTranscript();
     loadAudio();
   }
+  loadSharing();
   renderExports();
 }
 
@@ -48,9 +49,15 @@ async function init() {
 
 function renderHeader() {
   const s = _session;
-  const typeClass = s.type === 'race' ? 'badge-race' : s.type === 'practice' ? 'badge-practice' : 'badge-debrief';
+  const typeClass = s.type === 'race' ? 'badge-race'
+    : s.type === 'practice' ? 'badge-practice'
+    : s.type === 'synthesized' ? 'badge-synthesized'
+    : 'badge-debrief';
   const badge = '<span class="badge ' + typeClass + '">' + s.type.toUpperCase() + '</span>';
-  document.getElementById('session-name').innerHTML = esc(s.name) + badge;
+  const peerBadge = s.peer_fingerprint
+    ? '<span class="badge badge-peer" title="Peer boat">PEER</span>'
+    : '';
+  document.getElementById('session-name').innerHTML = esc(s.name) + badge + peerBadge;
 
   const start = fmtTime(s.start_utc);
   const end = s.end_utc ? fmtTime(s.end_utc) : 'in progress';
@@ -654,6 +661,76 @@ function loadAudio() {
   card.style.display = '';
   document.getElementById('audio-body').innerHTML =
     '<audio controls style="width:100%"><source src="/api/audio/' + _session.audio_session_id + '/stream" type="audio/wav"></audio>';
+}
+
+// ---------------------------------------------------------------------------
+// Exports
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Co-op Sharing
+// ---------------------------------------------------------------------------
+
+async function loadSharing() {
+  const r = await fetch('/api/sessions/' + SESSION_ID + '/sharing');
+  if (!r.ok) return;
+  const data = await r.json();
+  if (!data.co_ops || !data.co_ops.length) return;
+
+  const card = document.getElementById('sharing-card');
+  card.style.display = '';
+  renderSharing(data);
+}
+
+function renderSharing(data) {
+  const body = document.getElementById('sharing-body');
+  let html = '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">';
+  for (const c of data.co_ops) {
+    if (c.shared) {
+      html += '<button class="btn-export" style="background:#0d2818;border:1px solid #16a34a;color:#4ade80"'
+        + ' onclick="unshareSession(\'' + esc(c.co_op_id) + '\')">'
+        + esc(c.co_op_name) + ' &#10003;</button>';
+    } else {
+      html += '<button class="btn-export" style="background:#1e293b;border:1px solid #374151;color:#e8eaf0"'
+        + ' onclick="shareSession(\'' + esc(c.co_op_id) + '\')">'
+        + 'Share with ' + esc(c.co_op_name) + '</button>';
+    }
+  }
+  html += '</div>';
+
+  // Show sharing details
+  if (data.sharing && data.sharing.length) {
+    html += '<div style="margin-top:8px;font-size:.78rem;color:#8892a4">';
+    for (const s of data.sharing) {
+      html += '<div>Shared with <strong style="color:#e8eaf0">' + esc(s.co_op_name || s.co_op_id) + '</strong>';
+      if (s.embargo_until) html += ' (embargo until ' + esc(s.embargo_until).slice(0, 10) + ')';
+      html += ' &mdash; ' + esc(s.shared_at).slice(0, 19) + '</div>';
+    }
+    html += '</div>';
+  }
+  body.innerHTML = html;
+}
+
+async function shareSession(coopId) {
+  const r = await fetch('/api/sessions/' + SESSION_ID + '/share', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({co_op_id: coopId})
+  });
+  if (r.ok) { loadSharing(); } else {
+    const d = await r.json().catch(() => ({}));
+    alert(d.detail || 'Failed to share');
+  }
+}
+
+async function unshareSession(coopId) {
+  if (!confirm('Stop sharing this session with this co-op?')) return;
+  const r = await fetch('/api/sessions/' + SESSION_ID + '/share/' + encodeURIComponent(coopId), {
+    method: 'DELETE'
+  });
+  if (r.ok) { loadSharing(); } else {
+    const d = await r.json().catch(() => ({}));
+    alert(d.detail || 'Failed to unshare');
+  }
 }
 
 // ---------------------------------------------------------------------------

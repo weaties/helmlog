@@ -44,7 +44,7 @@ def _get_git_info() -> str:
 
     try:
         _repo = str(Path(__file__).resolve().parents[2])
-        _git = ["git", "-c", f"safe.directory={_repo}"]
+        _git = ["git", "-c", f"safe.directory={_repo}", "--no-optional-locks"]
 
         def _run(args: list[str]) -> str:
             return subprocess.check_output(
@@ -66,13 +66,31 @@ def _get_git_info() -> str:
             except Exception:  # noqa: BLE001
                 pass  # no upstream configured
 
+        import socket
+
+        hostname = socket.gethostname()
         status = "dirty" if dirty else "clean"
-        return f"{branch} @ {sha} · {status}"
+        return f"{hostname} · {branch} @ {sha} · {status}"
     except Exception:  # noqa: BLE001
         return ""
 
 
 _GIT_INFO: str = _get_git_info()
+# SHA the running process was started with — used to detect restart-needed
+_STARTUP_SHA: str = ""
+try:
+    import subprocess as _sp
+
+    _repo_dir = str(Path(__file__).resolve().parents[2])
+    _STARTUP_SHA = _sp.check_output(  # noqa: S603, S607
+        ["git", "-c", f"safe.directory={_repo_dir}", "rev-parse", "HEAD"],
+        cwd=_repo_dir,
+        text=True,
+        stderr=_sp.DEVNULL,
+    ).strip()
+    del _sp, _repo_dir
+except Exception:  # noqa: BLE001
+    pass
 
 # ---------------------------------------------------------------------------
 # Jinja2 templates + static files
@@ -291,6 +309,13 @@ def create_app(
     # -- Static files + templates --
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
+    # -- Peer API (federation endpoints for remote boats) --
+    from helmlog.peer_api import _limiter as peer_limiter
+    from helmlog.peer_api import router as peer_router
+
+    app.state.peer_limiter = peer_limiter
+    app.include_router(peer_router)
+
     def _tpl_ctx(request: Request, page: str, **extra: Any) -> dict[str, Any]:  # noqa: ANN401
         return {"request": request, "active_page": page, "git_info": _GIT_INFO, **extra}
 
@@ -344,7 +369,7 @@ def create_app(
 
             request.state.user = _MOCK_ADMIN
             return await call_next(request)  # type: ignore[no-any-return]
-        if path in _PUBLIC_PATHS or path.startswith(("/static/",)):
+        if path in _PUBLIC_PATHS or path.startswith(("/static/", "/co-op/")):
             return await call_next(request)  # type: ignore[no-any-return]
         from http.cookies import SimpleCookie
 
@@ -1568,6 +1593,157 @@ def create_app(
         )
 
     # ------------------------------------------------------------------
+    # /api/courses/marks  (CYC marks + computed buoy marks for map)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/courses/marks")
+    async def api_course_marks(
+        wind_dir: float = 0.0,
+        start_lat: float = 47.63,
+        start_lon: float = -122.40,
+        leg_nm: float = 1.0,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.courses import CYC_MARKS, compute_buoy_marks
+
+        buoy = compute_buoy_marks(start_lat, start_lon, wind_dir, leg_nm)
+        buoy_json = {k: {"name": m.name, "lat": m.lat, "lon": m.lon} for k, m in buoy.items()}
+        cyc_json = {k: {"name": m.name, "lat": m.lat, "lon": m.lon} for k, m in CYC_MARKS.items()}
+        return JSONResponse({"buoy_marks": buoy_json, "cyc_marks": cyc_json})
+
+    # ------------------------------------------------------------------
+    # /api/sessions/synthesize
+    # ------------------------------------------------------------------
+
+    @app.post("/api/sessions/synthesize")
+    async def api_synthesize_session(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.courses import (
+            build_custom_course,
+            build_triangle_course,
+            build_wl_course,
+            compute_buoy_marks,
+            validate_course_marks,
+        )
+        from helmlog.races import build_race_name, local_today
+        from helmlog.synthesize import SynthConfig, simulate
+
+        body = await request.json()
+        course_type = body.get("course_type", "windward_leeward")
+        wind_dir = float(body.get("wind_direction", 0.0))
+        tws_low = float(body.get("wind_speed_low", 8.0))
+        tws_high = float(body.get("wind_speed_high", 14.0))
+        shift_mag_lo = float(body.get("shift_magnitude_low", 5.0))
+        shift_mag_hi = float(body.get("shift_magnitude_high", 14.0))
+        start_lat = float(body.get("start_lat", 47.63))
+        start_lon = float(body.get("start_lon", -122.40))
+        leg_nm = float(body.get("leg_distance_nm", 1.0))
+        laps = int(body.get("laps", 2))
+        seed = int(body.get("seed", 42))
+        mark_sequence = body.get("mark_sequence", "")
+        peer_fingerprint: str | None = body.get("peer_fingerprint") or None
+        peer_co_op_id: str | None = body.get("peer_co_op_id") or None
+
+        # Parse optional mark position overrides from user-dragged map markers
+        raw_overrides = body.get("mark_overrides")
+        mark_overrides: dict[str, tuple[float, float]] | None = None
+        if isinstance(raw_overrides, dict):
+            mark_overrides = {
+                k: (float(v["lat"]), float(v["lon"]))
+                for k, v in raw_overrides.items()
+                if isinstance(v, dict) and "lat" in v and "lon" in v
+            }
+
+        if course_type == "windward_leeward":
+            legs = build_wl_course(start_lat, start_lon, wind_dir, leg_nm, laps, mark_overrides)
+        elif course_type == "triangle":
+            legs = build_triangle_course(start_lat, start_lon, wind_dir, leg_nm, mark_overrides)
+        elif course_type == "custom":
+            if not mark_sequence:
+                raise HTTPException(
+                    status_code=422, detail="mark_sequence required for custom course"
+                )
+            try:
+                legs = build_custom_course(mark_sequence, start_lat, start_lon, wind_dir, leg_nm)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        else:
+            raise HTTPException(status_code=422, detail=f"Unknown course_type: {course_type}")
+
+        # Validate all course marks are in navigable water (>6 ft deep)
+        all_marks = {leg.target.name[:1]: leg.target for leg in legs}
+        if course_type != "custom":
+            buoy_marks = compute_buoy_marks(start_lat, start_lon, wind_dir, leg_nm)
+            all_marks.update(buoy_marks)
+        mark_warnings = validate_course_marks(all_marks)
+
+        now = datetime.now(UTC)
+        config = SynthConfig(
+            start_lat=start_lat,
+            start_lon=start_lon,
+            base_twd=wind_dir,
+            tws_low=tws_low,
+            tws_high=tws_high,
+            shift_interval=(600.0, 1200.0),
+            shift_magnitude=(shift_mag_lo, shift_mag_hi),
+            legs=legs,
+            seed=seed,
+            start_time=now,
+        )
+
+        rows = await asyncio.to_thread(simulate, config)
+        if not rows:
+            raise HTTPException(status_code=500, detail="Simulation produced no data points")
+
+        today = local_today()
+        date_str = today.isoformat()
+        race_num = await storage.count_sessions_for_date(date_str, "synthesized") + 1
+        source_id = str(uuid.uuid4())
+
+        rules = {r["weekday"]: r["event_name"] for r in await storage.list_event_rules()}
+        from helmlog.races import default_event_for_date
+
+        custom_event = await storage.get_daily_event(date_str)
+        default_event = default_event_for_date(today, rules)
+        event = custom_event or default_event or "Synthesized"
+
+        name = build_race_name(event, today, race_num, "synthesized")
+
+        start_utc = rows[0].ts
+        end_utc = rows[-1].ts
+
+        race_id = await storage.import_race(
+            name=name,
+            event=event,
+            race_num=race_num,
+            date_str=date_str,
+            start_utc=start_utc,
+            end_utc=end_utc,
+            session_type="synthesized",
+            source="synthesized",
+            source_id=source_id,
+            peer_fingerprint=peer_fingerprint,
+            peer_co_op_id=peer_co_op_id,
+        )
+        await storage.import_synthesized_data(rows, race_id=race_id)
+
+        duration_s = (end_utc - start_utc).total_seconds()
+        detail = name + (f" [peer={peer_fingerprint}]" if peer_fingerprint else "")
+        await _audit(request, "session.synthesize", detail=detail, user=_user)
+
+        resp: dict[str, Any] = {
+            "id": race_id,
+            "name": name,
+            "points": len(rows),
+            "duration_s": round(duration_s, 1),
+        }
+        if mark_warnings:
+            resp["mark_warnings"] = mark_warnings
+        return JSONResponse(resp, status_code=201)
+
+    # ------------------------------------------------------------------
     # /api/sessions/{id}/track  (GeoJSON track for map display)
     # ------------------------------------------------------------------
 
@@ -1587,11 +1763,26 @@ def create_app(
         start_utc = row["start_utc"]
         end_utc = row["end_utc"] or start_utc
 
-        pos_cur = await db.execute(
-            "SELECT latitude_deg, longitude_deg, ts FROM positions"
-            " WHERE ts >= ? AND ts <= ? ORDER BY ts",
-            (start_utc, end_utc),
+        # Prefer race_id filter (exact match for synthesized sessions);
+        # fall back to time-range query for real instrument data.
+        rid_cur = await db.execute(
+            "SELECT COUNT(*) as cnt FROM positions WHERE race_id = ?", (session_id,)
         )
+        rid_row = await rid_cur.fetchone()
+        has_race_id = rid_row["cnt"] > 0 if rid_row else False
+
+        if has_race_id:
+            pos_cur = await db.execute(
+                "SELECT latitude_deg, longitude_deg, ts FROM positions"
+                " WHERE race_id = ? ORDER BY ts",
+                (session_id,),
+            )
+        else:
+            pos_cur = await db.execute(
+                "SELECT latitude_deg, longitude_deg, ts FROM positions"
+                " WHERE ts >= ? AND ts <= ? ORDER BY ts",
+                (start_utc, end_utc),
+            )
         positions = await pos_cur.fetchall()
         if not positions:
             return JSONResponse({"type": "FeatureCollection", "features": []})
@@ -1625,6 +1816,7 @@ def create_app(
         cur = await db.execute(
             "SELECT r.id, r.name, r.event, r.race_num, r.date,"
             " r.start_utc, r.end_utc, r.session_type,"
+            " r.peer_fingerprint, r.peer_co_op_id,"
             " (SELECT COUNT(*) > 0 FROM positions p"
             "   WHERE p.ts >= r.start_utc AND p.ts <= COALESCE(r.end_utc, r.start_utc)"
             " ) AS has_track,"
@@ -1663,6 +1855,7 @@ def create_app(
                 "first_video_url": row["first_video_url"],
                 "has_audio": arow is not None,
                 "audio_session_id": arow["id"] if arow else None,
+                "peer_fingerprint": row["peer_fingerprint"],
             }
         )
 
@@ -1680,10 +1873,10 @@ def create_app(
         offset: int = 0,
         _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
     ) -> JSONResponse:
-        if type is not None and type not in ("race", "practice", "debrief"):
+        if type is not None and type not in ("race", "practice", "debrief", "synthesized"):
             raise HTTPException(
                 status_code=422,
-                detail="type must be 'race', 'practice', or 'debrief'",
+                detail="type must be 'race', 'practice', 'debrief', or 'synthesized'",
             )
         limit = max(1, min(limit, 200))
         total, sessions = await storage.list_sessions(
@@ -3053,11 +3246,631 @@ def create_app(
         )
 
     # ------------------------------------------------------------------
-    # Rate-limited data endpoints (#204)
+    # Deployment management (#125)
     # ------------------------------------------------------------------
 
-    # Note: rate limits are applied inline on the endpoints above via
-    # @limiter.limit() decorators. Additional limits here for remaining
-    # endpoints that need protection.
+    @app.get("/admin/deployment", response_class=HTMLResponse, include_in_schema=False)
+    async def admin_deployment_page(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> Response:
+        return _templates.TemplateResponse(
+            request, "admin/deployment.html", _tpl_ctx(request, "/admin/deployment")
+        )
+
+    @app.get("/api/deployment/status")
+    @limiter.limit("30/minute")
+    async def api_deployment_status(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.deploy import DeployConfig, commits_behind, fetch_latest, get_running_version
+
+        config = await DeployConfig.from_storage(storage)
+        running = get_running_version()
+        await fetch_latest(config)  # update origin refs before comparing
+        behind = commits_behind(config)
+        last = await storage.last_deployment()
+        # Detect if on-disk code differs from what the running process loaded
+        restart_needed = bool(_STARTUP_SHA and running["sha"] and running["sha"] != _STARTUP_SHA)
+        return JSONResponse(
+            {
+                "running": {**running, "startup_sha": _STARTUP_SHA},
+                "branch": config.branch,
+                "mode": config.mode,
+                "poll_interval": config.poll_interval,
+                "deploy_window": {
+                    "start": config.window_start,
+                    "end": config.window_end,
+                },
+                "commits_behind": behind,
+                "update_available": behind > 0 or restart_needed,
+                "restart_needed": restart_needed,
+                "last_deploy": last,
+            }
+        )
+
+    @app.get("/api/deployment/changelog")
+    @limiter.limit("10/minute")
+    async def api_deployment_changelog(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.deploy import DeployConfig, get_changelog
+
+        config = await DeployConfig.from_storage(storage)
+        commits = await get_changelog(config)
+        return JSONResponse({"commits": commits, "count": len(commits)})
+
+    @app.post("/api/deployment/deploy")
+    @limiter.limit("3/minute")
+    async def api_deployment_deploy(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.deploy import DeployConfig, execute_deploy
+
+        config = await DeployConfig.from_storage(storage)
+        result = await execute_deploy(config)
+        await storage.log_deployment(
+            from_sha=result.get("from_sha", ""),
+            to_sha=result.get("to_sha", ""),
+            trigger="manual",
+            status=result["status"],
+            error=result.get("error"),
+            user_id=_user.get("id"),
+        )
+        await _audit(
+            request,
+            "deployment.manual",
+            detail=f"{result.get('from_sha', '')[:7]}→{result.get('to_sha', '')[:7]}",
+            user=_user,
+        )
+        if result["status"] == "failed":
+            raise HTTPException(status_code=500, detail=result.get("error", "Deploy failed"))
+        return JSONResponse(result)
+
+    @app.get("/api/deployment/branches")
+    @limiter.limit("10/minute")
+    async def api_deployment_branches(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.deploy import list_remote_branches
+
+        branches = await list_remote_branches()
+        return JSONResponse({"branches": branches})
+
+    @app.put("/api/deployment/config")
+    @limiter.limit("10/minute")
+    async def api_deployment_config(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        body = await request.json()
+        changed: list[str] = []
+        if "mode" in body:
+            mode = body["mode"]
+            if mode not in ("explicit", "evergreen"):
+                raise HTTPException(
+                    status_code=400, detail="Mode must be 'explicit' or 'evergreen'"
+                )
+            await storage.set_setting("DEPLOY_MODE", mode)
+            changed.append(f"mode={mode}")
+        if "branch" in body:
+            branch = str(body["branch"]).strip()
+            if not branch:
+                raise HTTPException(status_code=400, detail="Branch cannot be empty")
+            await storage.set_setting("DEPLOY_BRANCH", branch)
+            changed.append(f"branch={branch}")
+        if "poll_interval" in body:
+            poll = int(body["poll_interval"])
+            if poll < 60:
+                raise HTTPException(status_code=400, detail="Poll interval must be >= 60 seconds")
+            await storage.set_setting("DEPLOY_POLL_INTERVAL", str(poll))
+            changed.append(f"poll_interval={poll}")
+        if "window_start" in body:
+            val = body["window_start"]
+            if val is None or val == "":
+                await storage.delete_setting("DEPLOY_WINDOW_START")
+            else:
+                await storage.set_setting("DEPLOY_WINDOW_START", str(int(val)))
+            changed.append(f"window_start={val}")
+        if "window_end" in body:
+            val = body["window_end"]
+            if val is None or val == "":
+                await storage.delete_setting("DEPLOY_WINDOW_END")
+            else:
+                await storage.set_setting("DEPLOY_WINDOW_END", str(int(val)))
+            changed.append(f"window_end={val}")
+        await _audit(request, "deployment.config", detail=", ".join(changed), user=_user)
+        return JSONResponse({"status": "ok", "changed": changed})
+
+    @app.get("/api/deployment/history")
+    @limiter.limit("30/minute")
+    async def api_deployment_history(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        deployments = await storage.list_deployments()
+        return JSONResponse({"deployments": deployments})
+
+    # ------------------------------------------------------------------
+    # Admin: Federation
+    # ------------------------------------------------------------------
+
+    @app.get("/admin/federation", response_class=HTMLResponse, include_in_schema=False)
+    async def admin_federation_page(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> Response:
+        return _templates.TemplateResponse(
+            request,
+            "admin/federation.html",
+            _tpl_ctx(request, "/admin/federation"),
+        )
+
+    @app.get("/api/federation/identity")
+    async def api_federation_identity(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        identity = await storage.get_boat_identity()
+        boat_card_json: str | None = None
+        if identity:
+            try:
+                from helmlog.federation import load_identity
+
+                _, card = load_identity()
+                boat_card_json = card.to_json()
+                identity["owner_email"] = card.owner_email
+            except FileNotFoundError:
+                pass
+        return JSONResponse(
+            {
+                "identity": identity,
+                "boat_card_json": boat_card_json,
+            }
+        )
+
+    @app.post("/api/federation/identity", status_code=201)
+    async def api_federation_identity_init(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        body = await request.json()
+        sail = body.get("sail_number", "").strip()
+        name = body.get("boat_name", "").strip()
+        email = body.get("owner_email") or None
+        if not sail or not name:
+            raise HTTPException(422, "sail_number and boat_name are required")
+
+        from helmlog.federation import identity_exists, init_identity
+
+        if identity_exists():
+            raise HTTPException(409, "Identity already exists")
+
+        card = init_identity(
+            sail_number=sail,
+            boat_name=name,
+            owner_email=email,
+        )
+        await storage.save_boat_identity(
+            pub_key=card.pub_key,
+            fingerprint=card.fingerprint,
+            sail_number=card.sail_number,
+            boat_name=card.boat_name,
+        )
+        await _audit(
+            request,
+            "federation.identity.init",
+            detail=f"{card.boat_name} ({card.fingerprint})",
+            user=_user,
+        )
+        return JSONResponse(
+            {
+                "pub_key": card.pub_key,
+                "fingerprint": card.fingerprint,
+                "sail_number": card.sail_number,
+                "boat_name": card.boat_name,
+            },
+            status_code=201,
+        )
+
+    @app.get("/api/federation/co-ops")
+    async def api_federation_coops(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        memberships = await storage.list_co_op_memberships()
+        result = []
+        for m in memberships:
+            peers = await storage.list_co_op_peers(m["co_op_id"])
+            result.append({**m, "peers": peers})
+        return JSONResponse({"co_ops": result})
+
+    @app.post("/api/federation/co-ops", status_code=201)
+    async def api_federation_coop_create(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.federation import create_co_op, load_identity
+
+        try:
+            private_key, card = load_identity()
+        except FileNotFoundError:
+            raise HTTPException(409, "Initialize identity first")  # noqa: B904
+
+        if not card.owner_email:
+            raise HTTPException(
+                422,
+                "Co-op requires an owner email. Re-initialize identity with an email address.",
+            )
+
+        body = await request.json()
+        name = body.get("name", "").strip()
+        if not name:
+            raise HTTPException(422, "Co-op name is required")
+        areas = body.get("areas") or []
+
+        charter = create_co_op(private_key, card, name=name, areas=areas)
+
+        from helmlog.federation import list_co_op_members
+
+        members = list_co_op_members(charter.co_op_id)
+        if members:
+            await storage.save_co_op_membership(
+                co_op_id=charter.co_op_id,
+                co_op_name=charter.name,
+                co_op_pub=card.pub_key,
+                membership_json=members[0].to_json(),
+                role="admin",
+                joined_at=members[0].joined_at,
+            )
+            # Also save the creating boat as a peer so it appears in the member list
+            await storage.save_co_op_peer(
+                co_op_id=charter.co_op_id,
+                boat_pub=card.pub_key,
+                fingerprint=card.fingerprint,
+                membership_json=members[0].to_json(),
+                sail_number=card.sail_number,
+                boat_name=card.boat_name,
+            )
+        await _audit(
+            request,
+            "federation.co_op.create",
+            detail=f"{charter.name} ({charter.co_op_id})",
+            user=_user,
+        )
+        return JSONResponse(charter.to_dict(), status_code=201)
+
+    @app.post("/api/federation/co-ops/{co_op_id}/invite", status_code=201)
+    async def api_federation_invite(
+        request: Request,
+        co_op_id: str,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.federation import BoatCard, load_identity, sign_membership
+
+        try:
+            private_key, admin_card = load_identity()
+        except FileNotFoundError:
+            raise HTTPException(409, "Initialize identity first")  # noqa: B904
+
+        membership = await storage.get_co_op_membership(co_op_id)
+        if not membership or membership["role"] != "admin":
+            raise HTTPException(403, "You are not admin of this co-op")
+
+        body = await request.json()
+        required = ["pub", "fingerprint", "sail_number", "name"]
+        missing = [f for f in required if not body.get(f)]
+        if missing:
+            raise HTTPException(
+                422,
+                f"Boat card missing required fields: {', '.join(missing)}",
+            )
+
+        invitee = BoatCard(
+            pub_key=body["pub"],
+            fingerprint=body["fingerprint"],
+            sail_number=body["sail_number"],
+            boat_name=body["name"],
+            owner_email=body.get("owner_email"),
+        )
+
+        record = sign_membership(
+            private_key,
+            co_op_id=co_op_id,
+            boat_card=invitee,
+        )
+
+        # Persist to filesystem
+        from pathlib import Path
+
+        identity_dir = Path.home() / ".helmlog" / "identity"
+        members_dir = identity_dir.parent / "co-ops" / co_op_id / "members"
+        members_dir.mkdir(parents=True, exist_ok=True)
+        member_file = members_dir / f"{invitee.fingerprint}.json"
+        member_file.write_text(record.to_json())
+
+        # Persist to SQLite as peer
+        await storage.save_co_op_peer(
+            co_op_id=co_op_id,
+            boat_pub=invitee.pub_key,
+            fingerprint=invitee.fingerprint,
+            membership_json=record.to_json(),
+            sail_number=invitee.sail_number,
+            boat_name=invitee.boat_name,
+            tailscale_ip=body.get("tailscale_ip"),
+        )
+        await _audit(
+            request,
+            "federation.invite",
+            detail=f"{invitee.boat_name} ({invitee.fingerprint}) → {co_op_id}",
+            user=_user,
+        )
+        # Build invite bundle — the invitee imports this to join
+        membership = await storage.get_co_op_membership(co_op_id)
+        invite_bundle = {
+            "co_op_id": co_op_id,
+            "co_op_name": membership["co_op_name"] if membership else "",
+            "admin_pub": admin_card.pub_key,
+            "admin_fingerprint": admin_card.fingerprint,
+            "admin_boat_name": admin_card.boat_name,
+            "admin_sail_number": admin_card.sail_number,
+            "admin_tailscale_ip": admin_card.tailscale_ip or "",
+            "membership": record.to_dict(),
+        }
+        return JSONResponse(
+            {
+                "boat_name": invitee.boat_name,
+                "fingerprint": invitee.fingerprint,
+                "membership": record.to_dict(),
+                "invite_bundle": invite_bundle,
+            },
+            status_code=201,
+        )
+
+    @app.post("/api/federation/join", status_code=201)
+    async def api_federation_join(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Join a co-op using an invite bundle from the admin boat."""
+        body = await request.json()
+        co_op_id = body.get("co_op_id", "").strip()
+        co_op_name = body.get("co_op_name", "").strip()
+        admin_pub = body.get("admin_pub", "").strip()
+        admin_fingerprint = body.get("admin_fingerprint", "").strip()
+        membership_json = body.get("membership")
+
+        if not all([co_op_id, co_op_name, admin_pub]):
+            raise HTTPException(422, "Missing required fields in invite bundle")
+
+        # Verify the membership signature before accepting the bundle
+        if isinstance(membership_json, dict) and membership_json.get("admin_sig"):
+            from helmlog.federation import MembershipRecord, verify_membership
+
+            try:
+                m = membership_json
+                record = MembershipRecord(
+                    co_op_id=m.get("co_op_id", ""),
+                    boat_pub=m.get("boat_pub", ""),
+                    sail_number=m.get("sail_number", ""),
+                    boat_name=m.get("boat_name", ""),
+                    role=m.get("role", "member"),
+                    joined_at=m.get("joined_at", ""),
+                    owner_email=m.get("owner_email"),
+                    admin_sig=m.get("admin_sig", ""),
+                )
+                if not verify_membership(admin_pub, record):
+                    raise HTTPException(
+                        422,
+                        "Invite bundle has invalid signature — bundle may be tampered",
+                    )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(422, f"Invalid invite bundle: {exc}") from exc
+
+        import json as _json
+
+        membership_str = (
+            _json.dumps(membership_json)
+            if isinstance(membership_json, dict)
+            else str(membership_json or "{}")
+        )
+
+        # Save co-op membership (this boat is a member, not admin)
+        await storage.save_co_op_membership(
+            co_op_id=co_op_id,
+            co_op_name=co_op_name,
+            co_op_pub=admin_pub,
+            membership_json=membership_str,
+            role="member",
+        )
+
+        # Save ourselves as a peer (so we show in the members list)
+        try:
+            from helmlog.federation import load_identity
+
+            _, my_card = load_identity()
+            await storage.save_co_op_peer(
+                co_op_id=co_op_id,
+                boat_pub=my_card.pub_key,
+                fingerprint=my_card.fingerprint,
+                membership_json=membership_str,
+                sail_number=my_card.sail_number,
+                boat_name=my_card.boat_name,
+                tailscale_ip=my_card.tailscale_ip,
+            )
+        except FileNotFoundError:
+            pass
+
+        # Save the admin as a peer so we can query them
+        admin_tailscale_ip = body.get("admin_tailscale_ip", "").strip() or None
+        admin_boat_name = body.get("admin_boat_name", "").strip()
+        admin_sail_number = body.get("admin_sail_number", "").strip()
+        await storage.save_co_op_peer(
+            co_op_id=co_op_id,
+            boat_pub=admin_pub,
+            fingerprint=admin_fingerprint,
+            membership_json="{}",
+            sail_number=admin_sail_number,
+            boat_name=admin_boat_name,
+            tailscale_ip=admin_tailscale_ip,
+        )
+
+        await _audit(
+            request,
+            "federation.join",
+            detail=f"Joined {co_op_name} ({co_op_id})",
+            user=_user,
+        )
+        return JSONResponse(
+            {"status": "joined", "co_op_id": co_op_id, "co_op_name": co_op_name},
+            status_code=201,
+        )
+
+    # ── Session sharing ──────────────────────────────────────────────────
+
+    @app.get("/api/sessions/{session_id}/sharing")
+    async def api_session_sharing(
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        memberships = await storage.list_co_op_memberships()
+        sharing = await storage.get_session_sharing(session_id)
+        shared_ids = {s["co_op_id"] for s in sharing}
+        return JSONResponse(
+            {
+                "sharing": sharing,
+                "co_ops": [
+                    {
+                        "co_op_id": m["co_op_id"],
+                        "co_op_name": m["co_op_name"],
+                        "shared": m["co_op_id"] in shared_ids,
+                    }
+                    for m in memberships
+                    if m["status"] == "active"
+                ],
+            }
+        )
+
+    @app.post("/api/sessions/{session_id}/share", status_code=201)
+    async def api_session_share(
+        request: Request,
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        body = await request.json()
+        co_op_id = body.get("co_op_id", "").strip()
+        if not co_op_id:
+            raise HTTPException(422, "co_op_id is required")
+        membership = await storage.get_co_op_membership(co_op_id)
+        if not membership:
+            raise HTTPException(404, "Not a member of this co-op")
+        embargo_until = body.get("embargo_until") or None
+        await storage.share_session(
+            session_id,
+            co_op_id,
+            user_id=_user.get("id"),
+            embargo_until=embargo_until,
+        )
+        await _audit(
+            request,
+            "federation.session.share",
+            detail=f"session {session_id} → {membership['co_op_name']}",
+            user=_user,
+        )
+        return JSONResponse({"status": "shared", "co_op_id": co_op_id}, status_code=201)
+
+    @app.delete("/api/sessions/{session_id}/share/{co_op_id}")
+    async def api_session_unshare(
+        request: Request,
+        session_id: int,
+        co_op_id: str,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        removed = await storage.unshare_session(session_id, co_op_id)
+        if not removed:
+            raise HTTPException(404, "Session was not shared with this co-op")
+        await _audit(
+            request,
+            "federation.session.unshare",
+            detail=f"session {session_id} ✕ {co_op_id}",
+            user=_user,
+        )
+        return JSONResponse({"status": "unshared", "co_op_id": co_op_id})
+
+    # ── Peer data proxies (local UI → remote peers) ────────────────────
+
+    @app.get("/api/federation/co-ops/{co_op_id}/peer-sessions")
+    @limiter.limit("10/minute")
+    async def api_peer_sessions(
+        request: Request,
+        co_op_id: str,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Query all online peers in a co-op for their shared sessions."""
+        from helmlog.federation import load_identity
+        from helmlog.peer_client import fetch_all_peer_sessions
+
+        try:
+            private_key, card = load_identity()
+        except FileNotFoundError:
+            raise HTTPException(409, "Initialize identity first")  # noqa: B904
+
+        peers = await fetch_all_peer_sessions(
+            storage,
+            co_op_id,
+            private_key,
+            card.fingerprint,
+        )
+        await _audit(
+            request,
+            "coop.proxy.peer_sessions",
+            detail=f"co_op={co_op_id} peers={len(peers)}",
+            user=_user,
+        )
+        return JSONResponse({"peers": peers})
+
+    @app.get(
+        "/api/federation/co-ops/{co_op_id}/peers/{fingerprint}/sessions/{session_id}/track",
+    )
+    @limiter.limit("10/minute")
+    async def api_peer_session_track(
+        request: Request,
+        co_op_id: str,
+        fingerprint: str,
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Proxy track data from a specific remote peer."""
+        from helmlog.federation import load_identity
+        from helmlog.peer_client import fetch_session_track
+
+        try:
+            private_key, card = load_identity()
+        except FileNotFoundError:
+            raise HTTPException(409, "Initialize identity first")  # noqa: B904
+
+        # Look up peer's Tailscale IP
+        peer = await storage.get_co_op_peer(co_op_id, fingerprint)
+        if not peer or not peer.get("tailscale_ip"):
+            raise HTTPException(404, "Peer not found or no Tailscale IP")
+
+        track = await fetch_session_track(
+            peer["tailscale_ip"],
+            co_op_id,
+            session_id,
+            private_key,
+            card.fingerprint,
+        )
+        await _audit(
+            request,
+            "coop.proxy.peer_track",
+            detail=f"co_op={co_op_id} peer={fingerprint} session={session_id} points={len(track)}",
+            user=_user,
+        )
+        return JSONResponse({"track": track, "count": len(track)})
 
     return app

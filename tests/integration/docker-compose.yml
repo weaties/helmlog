@@ -1,0 +1,82 @@
+# Two-boat federation integration test environment.
+#
+# boat-a (admin) and boat-b (member) run real helmlog instances on an
+# isolated Docker network. test-runner executes pytest against both.
+#
+# Usage:
+#   docker compose -f tests/integration/docker-compose.yml up --build --abort-on-container-exit
+#
+# To run with Pi-matching arm64 architecture:
+#   docker compose -f tests/integration/docker-compose.yml build --build-arg PLATFORM=linux/arm64
+#   docker compose -f tests/integration/docker-compose.yml up --abort-on-container-exit
+
+services:
+  boat-a:
+    build:
+      context: ../..
+      dockerfile: tests/integration/Dockerfile
+    environment:
+      DB_PATH: /data/helmlog.db
+      HELMLOG_IDENTITY_DIR: /identity
+      HELMLOG_PORT: "8080"
+      AUTH_DISABLED: "true"
+      LOG_LEVEL: DEBUG
+    volumes:
+      - boat-a-data:/data
+      - boat-a-identity:/identity
+    networks:
+      - co-op-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 2s
+      timeout: 3s
+      start_period: 15s
+      retries: 10
+
+  boat-b:
+    build:
+      context: ../..
+      dockerfile: tests/integration/Dockerfile
+    environment:
+      DB_PATH: /data/helmlog.db
+      HELMLOG_IDENTITY_DIR: /identity
+      HELMLOG_PORT: "8080"
+      AUTH_DISABLED: "true"
+      LOG_LEVEL: DEBUG
+    volumes:
+      - boat-b-data:/data
+      - boat-b-identity:/identity
+    networks:
+      - co-op-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 2s
+      timeout: 3s
+      start_period: 15s
+      retries: 10
+
+  test-runner:
+    build:
+      context: ../..
+      dockerfile: tests/integration/Dockerfile
+    environment:
+      BOAT_A_URL: http://boat-a:8080
+      BOAT_B_URL: http://boat-b:8080
+    command: ["uv", "run", "pytest", "tests/integration/", "-v", "--tb=short"]
+    depends_on:
+      boat-a:
+        condition: service_healthy
+      boat-b:
+        condition: service_healthy
+    networks:
+      - co-op-net
+
+networks:
+  co-op-net:
+    driver: bridge
+
+volumes:
+  boat-a-data:
+  boat-b-data:
+  boat-a-identity:
+  boat-b-identity:

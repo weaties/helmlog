@@ -21,7 +21,7 @@ from helmlog.nmea2000 import (
     SpeedRecord,
     WindRecord,
 )
-from helmlog.web import create_app
+from helmlog.web import _get_git_info, create_app
 
 if TYPE_CHECKING:
     from helmlog.storage import Storage
@@ -29,6 +29,16 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def test_git_info_includes_hostname() -> None:
+    """_get_git_info() should include the system hostname."""
+    import socket
+
+    info = _get_git_info()
+    assert info  # non-empty (we're in a git repo)
+    assert socket.gethostname() in info
+
 
 _DEVICE = "Gordik 2T1R USB Audio"
 _START_UTC = datetime(2026, 2, 26, 14, 0, 0, tzinfo=UTC)
@@ -367,6 +377,25 @@ async def test_index_has_dynamic_signalk_link(storage: Storage) -> None:
     html = resp.text
     assert 'id="signalk-nav"' in html
     assert "Signal K" in html
+
+
+@pytest.mark.asyncio
+async def test_nav_has_hamburger_menu(storage: Storage) -> None:
+    """Base layout includes a hamburger toggle button for mobile nav."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/")
+
+    html = resp.text
+    # Hamburger button must be present with accessibility attributes
+    assert 'id="nav-hamburger"' in html
+    assert "aria-label=" in html
+    assert "aria-expanded=" in html
+    # Nav links must still all be present
+    assert 'href="/history"' in html
+    assert 'href="/admin/boats"' in html
 
 
 @pytest.mark.asyncio

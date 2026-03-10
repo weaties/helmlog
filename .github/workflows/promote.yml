@@ -1,0 +1,148 @@
+name: Promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target branch to promote to"
+        required: true
+        type: choice
+        options:
+          - stage
+          - live
+      rollback:
+        description: "Roll back to the previous deployment"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine source branch
+        id: source
+        run: |
+          TARGET="${{ inputs.target }}"
+          if [ "$TARGET" = "stage" ]; then
+            echo "branch=main" >> "$GITHUB_OUTPUT"
+          elif [ "$TARGET" = "live" ]; then
+            echo "branch=stage" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Unknown target: $TARGET"
+            exit 1
+          fi
+
+      - name: Rollback
+        if: inputs.rollback
+        run: |
+          TARGET="${{ inputs.target }}"
+          # Find the previous tag for this target
+          TAGS=$(git tag -l "${TARGET}/*" --sort=-creatordate)
+          TAG_COUNT=$(echo "$TAGS" | grep -c . || true)
+          if [ "$TAG_COUNT" -lt 2 ]; then
+            echo "::error::No previous deployment to roll back to (need at least 2 tags)"
+            exit 1
+          fi
+          PREVIOUS_TAG=$(echo "$TAGS" | sed -n '2p')
+          PREVIOUS_SHA=$(git rev-parse "$PREVIOUS_TAG")
+          CURRENT_SHA=$(git rev-parse "origin/${TARGET}")
+          echo "Rolling back ${TARGET} from $(git rev-parse --short=7 "$CURRENT_SHA") to $(git rev-parse --short=7 "$PREVIOUS_SHA") (tag: ${PREVIOUS_TAG})"
+
+          # Fast-forward target branch to the previous tag's commit
+          git fetch origin "${TARGET}"
+          git checkout "${TARGET}"
+          git reset --hard "$PREVIOUS_SHA"
+          git push origin "${TARGET}" --force-with-lease
+
+          # Create a new tag for the rollback event
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H.%M.%SZ)
+          TAG_NAME="${TARGET}/${TIMESTAMP}"
+          git tag -a "$TAG_NAME" -m "Rollback ${TARGET} to ${PREVIOUS_TAG}
+          Triggered by: ${{ github.actor }}
+          Previous SHA: $(git rev-parse --short=7 "$CURRENT_SHA")
+          Rolled back to: $(git rev-parse --short=7 "$PREVIOUS_SHA")
+          Source tag: ${PREVIOUS_TAG}"
+          git push origin "$TAG_NAME"
+
+          echo "### Rollback complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Target** | \`${TARGET}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **From** | \`$(git rev-parse --short=7 "$CURRENT_SHA")\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **To** | \`$(git rev-parse --short=7 "$PREVIOUS_SHA")\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Tag** | \`${TAG_NAME}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Source tag** | \`${PREVIOUS_TAG}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Triggered by** | @${{ github.actor }} |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Promote
+        if: "!inputs.rollback"
+        run: |
+          TARGET="${{ inputs.target }}"
+          SOURCE="${{ steps.source.outputs.branch }}"
+
+          git fetch origin "$SOURCE" "$TARGET"
+
+          SOURCE_SHA=$(git rev-parse "origin/${SOURCE}")
+          TARGET_SHA=$(git rev-parse "origin/${TARGET}")
+
+          if [ "$SOURCE_SHA" = "$TARGET_SHA" ]; then
+            echo "::notice::${TARGET} is already up to date with ${SOURCE}"
+            echo "### No changes" >> "$GITHUB_STEP_SUMMARY"
+            echo "${TARGET} is already at $(git rev-parse --short=7 "$SOURCE_SHA")" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Verify fast-forward is possible
+          MERGE_BASE=$(git merge-base "$TARGET_SHA" "$SOURCE_SHA")
+          if [ "$MERGE_BASE" != "$TARGET_SHA" ]; then
+            echo "::error::Cannot fast-forward ${TARGET} to ${SOURCE} — branches have diverged. Target SHA ${TARGET_SHA} is not an ancestor of source SHA ${SOURCE_SHA}."
+            exit 1
+          fi
+
+          # Fast-forward target to source
+          git checkout "${TARGET}"
+          git merge --ff-only "origin/${SOURCE}"
+          git push origin "${TARGET}"
+
+          # Create promotion tag
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H.%M.%SZ)
+          TAG_NAME="${TARGET}/${TIMESTAMP}"
+          COMMIT_COUNT=$(git rev-list --count "${TARGET_SHA}..${SOURCE_SHA}")
+          git tag -a "$TAG_NAME" -m "Promote ${SOURCE} → ${TARGET} (${COMMIT_COUNT} commits)
+          Triggered by: ${{ github.actor }}
+          From: $(git rev-parse --short=7 "$TARGET_SHA")
+          To: $(git rev-parse --short=7 "$SOURCE_SHA")"
+          git push origin "$TAG_NAME"
+
+          # Summary
+          echo "### Promotion complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Source** | \`${SOURCE}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Target** | \`${TARGET}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Commits** | ${COMMIT_COUNT} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **From** | \`$(git rev-parse --short=7 "$TARGET_SHA")\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **To** | \`$(git rev-parse --short=7 "$SOURCE_SHA")\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Tag** | \`${TAG_NAME}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Triggered by** | @${{ github.actor }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "#### Commits promoted" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          git log --oneline "${TARGET_SHA}..${SOURCE_SHA}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

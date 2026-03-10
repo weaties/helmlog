@@ -1,6 +1,6 @@
-# HelmLog — Crew Operations Guide
+# HelmLog — On-Boat Operations Guide
 
-_Last reviewed: 2026-03-01 · App version: schema v16_
+_Last reviewed: 2026-03-08 · App version: schema v26_
 
 Quick reference for using the logger on race day.
 No technical knowledge required. Print double-sided, laminate, keep in the nav station.
@@ -114,15 +114,6 @@ Tap **Results ▶** on a completed race card in the "Today's races" list.
 
 ## 4. After the race
 
-### Download race data
-
-Every completed race card has:
-
-| Button | Downloads |
-|---|---|
-| **↓ CSV** | Spreadsheet with every instrument reading |
-| **↓ GPX** | GPS track for navigation apps |
-
 ### Record a debrief
 
 If the Gordik microphone is plugged in, a **🎙 Debrief** button appears on
@@ -138,6 +129,31 @@ The audio is saved and linked to that race.
 
 Tap **⛵ Sails ▶** on a race card, select the Main, Jib, and Spinnaker from
 the dropdown menus, then tap **Save Sails**.
+
+### Share with the co-op
+
+If your boat is part of a data co-op, you can share the session with your
+fleet. Tap **Share** on the race card to authorize other boats to see your
+track and instrument data for that session. This only shares instrument
+data (speed, wind, GPS) — audio, notes, crew, and sails stay private.
+
+Sharing is optional, session by session. You can skip it entirely or come
+back and share later. Data syncs the next time the Pi has internet.
+
+For details on what gets shared and how the co-op works, see the
+[Sailor's Guide](guide-sailors.md).
+
+### Download race data
+
+Every completed race card has:
+
+| Button | Downloads |
+|---|---|
+| **↓ CSV** | Spreadsheet with every instrument reading |
+| **↓ GPX** | GPS track for navigation apps |
+
+These export **your own boat's data** — they're always available
+regardless of co-op membership.
 
 ---
 

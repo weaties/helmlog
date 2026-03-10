@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+{% block title %}Deployment — HelmLog{% endblock %}
+{% block extra_css %}
+<style>
+.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:12px}
+.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#8892a4;margin-bottom:8px}
+.kv{display:flex;gap:8px;margin-bottom:6px;font-size:.85rem;align-items:center}
+.kv .k{color:#8892a4;min-width:120px}
+.kv .v{color:#e8eaf0;font-family:monospace}
+.badge{display:inline-block;font-size:.7rem;padding:2px 8px;border-radius:4px;font-weight:600;letter-spacing:.04em}
+.badge-ok{background:#0d2818;color:#4ade80;border:1px solid #16a34a}
+.badge-warn{background:#2a1a00;color:#fbbf24;border:1px solid #d97706}
+.badge-err{background:#1f1215;color:#f87171;border:1px solid #7f1d1d}
+.badge-mode{background:#1e3a5f;color:#60a5fa}
+.btn{padding:8px 18px;border:1px solid #374151;border-radius:6px;background:#1e293b;color:#e8eaf0;font-size:.85rem;cursor:pointer}
+.btn:hover{background:#253449}
+.btn-primary{background:#2563eb;border-color:#2563eb;color:#fff}
+.btn-primary:hover{background:#1d4ed8}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
+.status{margin-top:12px;padding:8px;border-radius:6px;font-size:.85rem;display:none}
+.status.ok{display:block;background:#0d2818;color:#4ade80;border:1px solid #16a34a}
+.status.err{display:block;background:#1f1215;color:#f87171;border:1px solid #7f1d1d}
+.changelog{margin-top:8px;max-height:400px;overflow-y:auto}
+.commit{padding:6px 0;border-bottom:1px solid #1e293b;font-size:.82rem}
+.commit:last-child{border-bottom:none}
+.commit .sha{font-family:monospace;color:#60a5fa;margin-right:8px}
+.commit .msg{color:#e8eaf0}
+.commit .meta{color:#8892a4;font-size:.72rem;margin-top:2px}
+table.history{width:100%;border-collapse:collapse;font-size:.8rem;margin-top:8px}
+table.history th{text-align:left;color:#8892a4;font-weight:500;padding:4px 8px;border-bottom:1px solid #374151}
+table.history td{padding:4px 8px;color:#e8eaf0;border-bottom:1px solid #1e293b}
+table.history .mono{font-family:monospace;font-size:.78rem}
+select.cfg-input,input.cfg-input{background:#0b1121;border:1px solid #374151;border-radius:4px;color:#e8eaf0;padding:4px 8px;font-size:.82rem;font-family:monospace}
+select.cfg-input{min-width:160px}
+.mode-desc{font-size:.72rem;color:#8892a4;margin-top:2px}
+</style>
+{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="label">Current Version</div>
+  <div id="version-info">Loading...</div>
+  <div id="deploy-status" class="status"></div>
+  <div class="btn-row" id="deploy-actions" style="display:none">
+    <button class="btn btn-primary" id="btn-deploy" onclick="deploy()">Deploy Now</button>
+    <span id="behind-badge"></span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="label">Configuration</div>
+  <div id="config-form">
+    <div class="kv">
+      <span class="k">Mode</span>
+      <span class="v">
+        <select class="cfg-input" id="cfg-mode">
+          <option value="explicit">explicit</option>
+          <option value="evergreen">evergreen</option>
+        </select>
+      </span>
+    </div>
+    <div class="mode-desc" id="mode-desc">Explicit: manually deploy from this page. Evergreen: auto-deploy when the tracked branch changes.</div>
+    <div class="kv" style="margin-top:8px">
+      <span class="k">Track branch</span>
+      <span class="v">
+        <select class="cfg-input" id="cfg-branch"><option>Loading...</option></select>
+      </span>
+    </div>
+    <div class="btn-row">
+      <button class="btn" id="btn-save-config" onclick="saveConfig()">Save</button>
+      <span id="config-status" style="font-size:.8rem"></span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="label">Changelog <span id="changelog-count"></span></div>
+  <div id="changelog">Loading...</div>
+</div>
+
+<div class="card">
+  <div class="label">Deployment History</div>
+  <div id="history">Loading...</div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let statusData=null;
+async function loadStatus(){
+  const r=await fetch('/api/deployment/status');
+  if(!r.ok){showStatus('Failed to load status','err');return}
+  statusData=await r.json();
+  const s=statusData;
+  const v=s.running;
+  let html='';
+  html+='<div class="kv"><span class="k">Running</span><span class="v">'+esc(v.branch)+' @ '+esc(v.short_sha)+' ('+esc(v.commit_timestamp).slice(0,19)+')</span></div>';
+  html+='<div class="kv"><span class="k">Tracking</span><span class="v">'+esc(s.branch)+'</span></div>';
+  html+='<div class="kv"><span class="k">Poll interval</span><span class="v">'+s.poll_interval+'s</span></div>';
+  if(s.deploy_window.start!==null){
+    html+='<div class="kv"><span class="k">Deploy window</span><span class="v">'+s.deploy_window.start+':00 – '+s.deploy_window.end+':00 UTC</span></div>';
+  }
+  if(s.last_deploy){
+    html+='<div class="kv"><span class="k">Last deploy</span><span class="v">'+esc(s.last_deploy.started_at).slice(0,19)+' ('+esc(s.last_deploy.status)+')</span></div>';
+  }
+  document.getElementById('version-info').innerHTML=html;
+  // Update config controls to match current state
+  document.getElementById('cfg-mode').value=s.mode;
+  updateModeDesc();
+  const actions=document.getElementById('deploy-actions');
+  const badge=document.getElementById('behind-badge');
+  if(s.restart_needed && s.commits_behind===0){
+    badge.innerHTML='<span class="badge badge-warn">Restart needed</span>';
+    actions.style.display='flex';
+    document.getElementById('btn-deploy').disabled=false;
+    document.getElementById('btn-deploy').textContent='Restart Service';
+    const navDeploy=document.getElementById('nav-deploy');
+    if(navDeploy) navDeploy.textContent='Deploy (!)';
+  } else if(s.update_available){
+    const label=s.commits_behind+' commit'+(s.commits_behind!==1?'s':'')+' behind';
+    badge.innerHTML='<span class="badge badge-warn">'+label+(s.restart_needed?' + restart needed':'')+'</span>';
+    actions.style.display='flex';
+    document.getElementById('btn-deploy').disabled=false;
+    document.getElementById('btn-deploy').textContent='Deploy Now';
+    const navDeploy=document.getElementById('nav-deploy');
+    if(navDeploy) navDeploy.textContent='Deploy ('+s.commits_behind+')';
+  } else {
+    badge.innerHTML='<span class="badge badge-ok">Up to date</span>';
+    actions.style.display='flex';
+    document.getElementById('btn-deploy').disabled=true;
+    document.getElementById('btn-deploy').textContent='Up to date';
+  }
+}
+async function loadBranches(){
+  const r=await fetch('/api/deployment/branches');
+  if(!r.ok) return;
+  const data=await r.json();
+  const sel=document.getElementById('cfg-branch');
+  const current=statusData?statusData.branch:'';
+  sel.innerHTML='';
+  for(const b of data.branches){
+    const opt=document.createElement('option');
+    opt.value=b;opt.textContent=b;
+    if(b===current) opt.selected=true;
+    sel.appendChild(opt);
+  }
+  // If current branch not in list, add it
+  if(current && !data.branches.includes(current)){
+    const opt=document.createElement('option');
+    opt.value=current;opt.textContent=current+' (current)';
+    opt.selected=true;
+    sel.prepend(opt);
+  }
+}
+function updateModeDesc(){
+  const mode=document.getElementById('cfg-mode').value;
+  const desc=document.getElementById('mode-desc');
+  if(mode==='evergreen'){
+    desc.textContent='Evergreen: automatically deploys when the tracked branch changes. Checks every poll interval.';
+  } else {
+    desc.textContent='Explicit: manually deploy from this page when you are ready.';
+  }
+}
+document.getElementById('cfg-mode').addEventListener('change',updateModeDesc);
+async function saveConfig(){
+  const mode=document.getElementById('cfg-mode').value;
+  const branch=document.getElementById('cfg-branch').value;
+  const btn=document.getElementById('btn-save-config');
+  const st=document.getElementById('config-status');
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/deployment/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode,branch})});
+    if(r.ok){
+      st.textContent='Saved';st.style.color='#4ade80';
+      setTimeout(()=>{st.textContent=''},3000);
+      loadStatus();loadChangelog();
+    } else {
+      const d=await r.json();
+      st.textContent='Error: '+(d.detail||'unknown');st.style.color='#f87171';
+    }
+  }catch(e){st.textContent='Error: '+e.message;st.style.color='#f87171'}
+  btn.disabled=false;
+}
+async function loadChangelog(){
+  const r=await fetch('/api/deployment/changelog');
+  if(!r.ok){document.getElementById('changelog').textContent='Failed to load';return}
+  const data=await r.json();
+  const el=document.getElementById('changelog');
+  const countEl=document.getElementById('changelog-count');
+  if(!data.commits.length){el.textContent='No new commits';countEl.textContent='';return}
+  countEl.textContent='('+data.count+')';
+  let html='<div class="changelog">';
+  for(const c of data.commits){
+    html+='<div class="commit"><span class="sha">'+esc(c.sha)+'</span><span class="msg">'+esc(c.message)+'</span>';
+    html+='<div class="meta">'+esc(c.author)+' · '+esc(c.timestamp).slice(0,19)+'</div></div>';
+  }
+  html+='</div>';
+  el.innerHTML=html;
+}
+async function loadHistory(){
+  const r=await fetch('/api/deployment/history');
+  if(!r.ok){document.getElementById('history').textContent='Failed to load';return}
+  const data=await r.json();
+  const el=document.getElementById('history');
+  if(!data.deployments.length){el.textContent='No deployments recorded yet';return}
+  let html='<table class="history"><thead><tr><th>Time</th><th>From</th><th>To</th><th>Trigger</th><th>Status</th><th>User</th></tr></thead><tbody>';
+  for(const d of data.deployments){
+    const cls=d.status==='success'?'badge-ok':'badge-err';
+    html+='<tr><td>'+esc(d.started_at).slice(0,19)+'</td>';
+    html+='<td class="mono">'+esc(d.from_sha).slice(0,7)+'</td>';
+    html+='<td class="mono">'+esc(d.to_sha).slice(0,7)+'</td>';
+    html+='<td>'+esc(d.trigger)+'</td>';
+    html+='<td><span class="badge '+cls+'">'+esc(d.status)+'</span></td>';
+    html+='<td>'+(d.user_email?esc(d.user_email):'—')+'</td></tr>';
+  }
+  html+='</tbody></table>';
+  el.innerHTML=html;
+}
+async function deploy(){
+  const msg=statusData.commits_behind>0
+    ?'Deploy latest from '+statusData.branch+'?\n\n'+statusData.commits_behind+' new commit(s) will be applied.\nThe service will restart.'
+    :'Restart the service to load code already on disk?\n\nNo new commits to pull — this just restarts the running process.';
+  if(!confirm(msg)) return;
+  const btn=document.getElementById('btn-deploy');
+  btn.disabled=true;btn.textContent='Deploying...';
+  showStatus('Deploying...','ok');
+  try{
+    const r=await fetch('/api/deployment/deploy',{method:'POST'});
+    if(r.ok){
+      showStatus('Deployment successful — service restarting','ok');
+      setTimeout(()=>{loadStatus();loadChangelog();loadHistory()},3000);
+    } else {
+      const d=await r.json();
+      showStatus('Deploy failed: '+(d.detail||'unknown error'),'err');
+      btn.disabled=false;btn.textContent='Deploy Now';
+    }
+  }catch(e){
+    // A network error is expected when the service restarts (kills the connection)
+    showStatus('Service restarting...','ok');
+    setTimeout(()=>{loadStatus();loadChangelog();loadHistory()},5000);
+  }
+}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')}
+function showStatus(msg,cls){const el=document.getElementById('deploy-status');el.textContent=msg;el.className='status '+cls;if(cls==='ok')setTimeout(()=>{el.className='status'},5000)}
+async function init(){await loadStatus();loadBranches();loadChangelog();loadHistory()}
+init();
+</script>
+{% endblock %}

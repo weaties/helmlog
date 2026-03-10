@@ -1,5 +1,28 @@
 # Helm Log — Data Licensing Policy
 
+## Table of Contents
+
+- [Plain English Summary](#plain-english-summary)
+- [Data Type Matrix](#data-type-matrix)
+- [Crew Rights Summary](#crew-rights-summary)
+- [Definitions](#definitions)
+- [1. Data Ownership](#1-data-ownership)
+- [2. Data Sharing — The Co-op Model](#2-data-sharing--the-co-op-model)
+- [3. Co-op Membership and Governance](#3-co-op-membership-and-governance)
+- [4. Crew Access and Departure](#4-crew-access-and-departure)
+- [5. Data Retention and Deletion](#5-data-retention-and-deletion)
+- [6. Cross-Co-op Data Boundaries](#6-cross-co-op-data-boundaries)
+- [7. Non-Member Boats](#7-non-member-boats)
+- [8. AI, Machine Learning, and Derived Models](#8-ai-machine-learning-and-derived-models)
+- [9. Commercial Use and Value](#9-commercial-use-and-value)
+- [10. Dataset Representativeness](#10-dataset-representativeness)
+- [11. Liability and Warranty](#11-liability-and-warranty)
+- [12. Technical Requirements](#12-technical-requirements)
+- [13. Software License](#13-software-license)
+- [Document History](#document-history)
+
+---
+
 ## Plain English Summary
 
 - **You own your data.** Your instrument logs, notes, and photos belong to you.
@@ -10,10 +33,12 @@
 - **Crew rights.** Any crew member can ask to have their voice, face, or likeness
   deleted or blurred from your audio and video at any time.
 - **No spying.** We don't track non-member boats via AIS or radar.
-- **Governance.** The co-op is a democracy. Big moves (like building AI current
-  models or selling data) require a supermajority or unanimous vote.
-- **Easy exit.** You can leave anytime. Your data stays in the co-op but becomes
-  permanently anonymous ("Boat X").
+- **Governance.** The co-op is a democracy. AI/ML model training and commercial
+  use require a 2/3 supermajority vote. Current model sharing requires unanimous
+  consent — a higher bar because current knowledge is competitively sensitive.
+- **Easy exit.** You can leave anytime. Your identifiable session data is deleted
+  from peer caches within 30 days. Your contributions to fleet benchmarks are
+  preserved but permanently anonymized ("Boat X").
 - **No gambling.** Co-op data may not be used for betting or wagering, period.
 - **Your email is protected.** Email addresses used for co-op membership are PII
   with the same deletion rights as audio and photos.
@@ -34,6 +59,53 @@
   after processing. Your Pi is the only permanent home for your data.
 - **Safety first.** This data is for performance analysis, not navigation. Don't
   hit a rock because of a shared log.
+
+---
+
+## Data Type Matrix
+
+| Data Type | Owner | Default Visibility | Shared with Co-op? | Deletion Rights | Coach Access? |
+|---|---|---|---|---|---|
+| **Instrument data** (GPS, speed, wind, heading, depth, heel, pitch) | Boat owner | Boat-private until co-op join | Yes — per-session, when you choose to share | Anonymized on departure ("Boat X"); full deletion after 30-day grace period | Yes, per-boat opt-in only |
+| **Derived metrics** (VMG, polar %, tacking angles, laylines) | Boat owner | Same as instrument data | Yes — per-session, when you choose to share | Same as instrument data | Yes, per-boat opt-in only |
+| **Audio recordings** | Boat owner (speakers retain PII rights over their voice) | Boat-private | No — never shared unless boat owner explicitly opts in | Speakers can request deletion/anonymization at any time, including former crew | Only if boat owner explicitly grants session access |
+| **Transcripts** | Boat owner (speakers retain PII rights) | Boat-private | No — never shared unless boat owner explicitly opts in | Same as audio — speakers can request deletion of segments attributed to them | Only if boat owner explicitly grants session access |
+| **Video / camera recordings** | Boat owner (crew retain PII rights over likeness) | Boat-private; YouTube default is unlisted | No — video links/metadata are boat-private | Crew can request face-blur or removal; YouTube videos must be deleted separately by uploader | Only if boat owner explicitly grants access |
+| **Photos and notes** | Boat owner | Boat-private | No — never shared unless boat owner explicitly opts in | Identifiable photos: same PII deletion rights as audio. Notes: deleted on request | Only if boat owner explicitly grants session access |
+| **Crew roster / positions** | Boat owner | Boat-private | No | Crew emails scrubbed on departure or on request | No — not shared via coach access |
+| **Sail selection** | Boat owner | Boat-private | No — tuning notes are never shared by default | Deleted with session on request | Only if boat owner explicitly grants session access |
+| **Race results** (finish order/time) | Boat owner (but publicly available from organizing authority) | Shared — already public data | Yes — included in co-op shared data by default | Anonymized on departure ("Boat X") but not removed (public data) | Yes, visible as part of shared session data |
+| **Biometrics** (heart rate, fatigue, etc.) | Individual crew member — not the boat | Person-private | No — never shared with co-op | Crew member can revoke consent and request deletion at any time, independent of crew status | No — requires separate authorization from the individual crew member, not just boat owner |
+| **YouTube video links/metadata** | Boat owner | Boat-private | No — listed under "not shared" | Metadata deleted on departure; actual YouTube videos remain on YouTube | Only if boat owner explicitly grants access |
+| **Email addresses** | Individual (PII) | Admin-only (owner email visible to co-op admins; crew email visible only to boat owner) | No — never shared with co-op members | Scrubbed from all records on departure or on request | No |
+| **Current/tide observations** | Boat owner | Boat-private | No — hard-earned local knowledge, never shared unless boat owner explicitly opts in | Deleted on request | Only if boat owner explicitly grants access |
+
+---
+
+## Crew Rights Summary
+
+Crew PII rights are independent of boat ownership and persist even after a crew
+member departs. The following rights apply regardless of crew membership status:
+
+- **Audio recordings**: Any crew member (active or former) can request deletion
+  or anonymization of recordings containing their voice. Anonymization (voice
+  scrambling, redaction, speaker removal) is an acceptable alternative to full
+  deletion. Transcripts derived from audio inherit the same rights — speakers
+  can request deletion of transcript segments attributed to them.
+- **Video recordings**: Any crew member (active or former) can request that their
+  identifiable appearance be face-blurred or removed from video. This applies to
+  both local video files and YouTube-published footage. Video anonymization is
+  technically harder than audio anonymization and may require re-processing.
+- **Biometric data**: Requires explicit, per-person consent **separate from** any
+  co-op or instrument data sharing agreement. Crew members can revoke biometric
+  consent and request deletion at any time, independent of crew membership.
+  Biometric data may not be used in crew selection or personnel decisions. Coach
+  access to biometrics requires separate authorization from the individual crew
+  member, not just the boat owner.
+- **Email addresses**: Treated as PII. Crew emails are visible only to the boat
+  owner (never to the co-op). On departure or request, crew emails are deleted
+  from the boat's instance. Owner emails are scrubbed from co-op membership
+  records, revocation records, and any other co-op documents on departure.
 
 ---
 
@@ -394,13 +466,14 @@ When a coach accesses multiple boats' data for analysis, the coach holds a
 - Coach access grants are **time-limited** and must be renewed each season (or at
   an interval set by the boat owner). There is no perpetual coach access
 - When a coaching engagement ends — whether by expiration, revocation, or mutual
-  agreement — the coach must **delete all data** from that boat. This is mandatory,
-  not optional
-- **Derivative works** — the coach **agrees not to retain** reports, summaries,
-  screenshots, spreadsheets, or other materials created using co-op or boat
-  data after access ends. This is a **normative obligation** — the platform
-  revokes technical access automatically, but cannot enforce deletion of
-  offline materials. Violation of this obligation is grounds for the boat owner
+  agreement — the coach **agrees to delete all data** from that boat. The platform
+  revokes technical access automatically; deletion of any offline copies (notes,
+  screenshots, downloaded files) is a **normative obligation** that the platform
+  cannot enforce technically
+- **Derivative works** — the coach **agrees not to retain or distribute** reports,
+  summaries, screenshots, spreadsheets, or other materials created using co-op or
+  boat data after access ends. This is the same normative obligation — the platform
+  can't reach into a coach's laptop, but violation is grounds for the boat owner
   or co-op to deny future coach access
 - The boat owner can revoke a coach's access at any time, which triggers the
   same deletion and non-retention obligations
@@ -1437,13 +1510,26 @@ launch) and **future** (needed as the platform matures).
 | Fleet benchmark computation | Compute anonymous aggregate statistics (median, percentiles, rank) per metric per condition bin from co-op shared data; enforce minimum 4-boat threshold per bin |
 | Benchmark embargo sync | Exclude embargoed session data from benchmark computation until embargo lifts |
 
-### Future requirements
+### Designed (see [Federation Protocol Design](federation-design.md))
+
+Section 12 groups requirements into three tiers: **MVP** (needed for initial co-op launch), **Designed** (requirements with complete protocol specifications, API endpoints, SQLite schemas, and Python module signatures defined in the federation design document), and **future** (needed as the platform matures). The following requirements are part of the **Designed** tier:
 
 | Requirement | Purpose |
 |---|---|
 | Multi-co-op support | A boat can belong to multiple co-ops; each co-op has independent membership and data pools |
+| Coach/tuning-partner ACLs | Per-boat, time-limited, revocable access grants with mandatory deletion on expiration |
+| Cross-co-op isolation | Enforce data pool boundaries; prevent cross-co-op queries or exports |
+| Per-event co-op assignment | When a boat belongs to multiple co-ops, require co-op selection per session before data is shared |
+| Pre-join disclosure | Present all active commercial, ML, current model, and cross-co-op agreements to prospective members before admission |
+| Current observation derivation | Compute observed current vectors from BSP/heading vs SOG/COG; store as boat-private by default |
+| Current model geographic scoping | Scope current/tide models to defined geographic areas; per-area opt-in/opt-out per boat |
+| Current model unanimous consent | Enforce unanimous vote requirement (not 2/3) for current model projects |
+
+### Future requirements
+
+| Requirement | Purpose |
+|---|---|
 | Club/multi-boat entity support | Track which boats belong to the same owning entity for vote-capping rules |
-| Coach/tuning-partner ACLs | Time-limited, revocable access grants with mandatory deletion on expiration |
 | Audio anonymization | Voice scrambling / redaction as an alternative to full deletion |
 | Photo PII handling | Deletion or anonymization of identifiable photos on request |
 | Admin election tracking | Record admin elections, terms, and removal votes |
@@ -1453,18 +1539,12 @@ launch) and **future** (needed as the platform matures).
 | Camera consent notification | Display active camera recording status on home page; provide mechanism for crew to flag recording objections |
 | YouTube upload privacy default | Default to unlisted YouTube uploads; warn when changing to public; log upload events with privacy setting |
 | Video aging reminder | Notify boat owner when YouTube videos are linked to sessions older than the co-op's data aging threshold, since YouTube videos persist indefinitely unlike aged instrument data |
-| Cross-co-op isolation | Enforce data pool boundaries; prevent cross-co-op queries or exports |
 | ML opt-out flag | Per-boat flag to exclude data from approved ML training projects |
 | ML project governance | Record ML project proposals, votes, model ownership, and opt-outs |
 | Commercial use tracking | Record commercial agreements, votes, and revenue distribution |
 | Co-op dormancy tracking | Track last governance activity date; trigger dormant status after 2 years of inactivity |
 | Non-member result scoping | When importing full-fleet results, store only official scored finish data for non-members; no instrument or session data |
 | OA license compliance | Track organizing authority and race management software licensing terms for imported results |
-| Current observation derivation | Compute observed current vectors from BSP/heading vs SOG/COG; store as boat-private by default |
-| Current model geographic scoping | Scope current/tide models to defined geographic areas; per-area opt-in/opt-out per boat |
-| Current model unanimous consent | Enforce unanimous vote requirement (not 2/3) for current model projects |
-| Pre-join disclosure | Present all active commercial, ML, current model, and cross-co-op agreements to prospective members before admission |
-| Per-event co-op assignment | When a boat belongs to multiple co-ops, require co-op selection per session before data is shared; prevent same session from being contributed to multiple co-ops |
 | Dual membership tracking | Record multi-co-op memberships; notify both co-ops; enforce co-op-level dual membership policies |
 | Biometric consent tracking | Per-person, per-data-type consent records for biometric data; independent of instrument data sharing |
 | Biometric data isolation | Store biometric data separately from instrument data; enforce per-person access controls |

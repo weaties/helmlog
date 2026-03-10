@@ -272,6 +272,45 @@ h1 {
   color: #c084fc;
 }
 
+.badge-synthesized {
+  background: #422006;
+  color: #fbbf24;
+}
+
+.badge-peer {
+  background: #1a3048;
+  color: #67c3f3;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons — Synthesize
+   -------------------------------------------------------------------------- */
+
+.btn-synthesize {
+  background: #422006;
+  color: #fbbf24;
+  border: 1px solid #d97706;
+}
+.btn-synthesize:active {
+  background: #78350f;
+}
+
+/* --------------------------------------------------------------------------
+   Synth Map
+   -------------------------------------------------------------------------- */
+
+.synth-map {
+  height: 350px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.synth-warning {
+  color: #fbbf24;
+  border-left: 3px solid #f59e0b;
+  padding-left: 8px;
+}
+
 /* --------------------------------------------------------------------------
    Form Fields
    -------------------------------------------------------------------------- */
@@ -341,42 +380,115 @@ tr:last-child td {
 
 nav.site-nav {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
   align-items: center;
-  padding: 8px 0;
+  padding: 6px 0;
   margin-bottom: 8px;
   border-bottom: 1px solid #1e3a5f;
+  position: relative;
 }
 
-nav.site-nav a {
-  color: #8892a4;
-  text-decoration: none;
-  font-size: 0.82rem;
-  padding: 4px 8px;
+/* Hamburger button — visible on mobile only */
+.nav-hamburger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid #2563eb;
   border-radius: 6px;
+  color: #7eb8f7;
+  font-size: 1.1rem;
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
-nav.site-nav a:hover {
-  color: #e8eaf0;
+.nav-hamburger:active {
   background: #1e3a5f;
 }
 
-nav.site-nav a.active {
+/* Nav links container — collapsed on mobile by default */
+.nav-links {
+  display: none;
+  flex-direction: column;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: #131f35;
+  border: 1px solid #1e3a5f;
+  border-radius: 0 0 8px 8px;
+  z-index: 100;
+  padding: 4px 0;
+}
+
+.nav-links.open {
+  display: flex;
+}
+
+.nav-links a {
+  color: #8892a4;
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 10px 14px;
+  border-bottom: 1px solid #0d1a2e;
+}
+
+.nav-links a:last-child {
+  border-bottom: none;
+}
+
+.nav-links a:hover,
+.nav-links a:focus {
+  color: #e8eaf0;
+  background: #1e3a5f;
+  outline: none;
+}
+
+.nav-links a.active {
   color: #7eb8f7;
   font-weight: 600;
 }
 
-nav.site-nav .spacer {
-  flex: 1;
-}
-
-nav.site-nav .admin-link {
+.nav-links .admin-link {
   display: none;
 }
 
-nav.site-nav .profile-link {
+.nav-links .profile-link {
   display: none;
+}
+
+/* Desktop / tablet — hide hamburger, show links inline */
+@media (min-width: 769px) {
+  .nav-hamburger {
+    display: none;
+  }
+
+  .nav-links {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    position: static;
+    background: none;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    flex: 1;
+  }
+
+  .nav-links a {
+    font-size: 0.82rem;
+    padding: 4px 8px;
+    border-bottom: none;
+    border-radius: 6px;
+  }
+
+  .nav-links a:last-child {
+    border-bottom: none;
+    margin-left: auto;
+  }
 }
 
 /* --------------------------------------------------------------------------

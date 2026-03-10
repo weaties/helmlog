@@ -16,6 +16,7 @@ import os
 import signal
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
 from loguru import logger
 
@@ -162,6 +163,60 @@ async def _web_loop(
         raise
 
 
+async def _deploy_loop(storage: object, config: object) -> None:
+    """Background task: poll for updates and auto-deploy in evergreen mode.
+
+    Checks the subscribed branch at the configured interval. If new commits
+    are detected and the current time is within the deploy window, executes
+    a deployment (git pull + uv sync + service restart).
+    """
+    from helmlog.deploy import (
+        DeployConfig,
+        commits_behind,
+        execute_deploy,
+        fetch_latest,
+        in_deploy_window,
+    )
+    from helmlog.storage import Storage
+
+    assert isinstance(storage, Storage)
+    assert isinstance(config, DeployConfig)
+
+    logger.info(
+        "Evergreen deploy loop started: branch={} interval={}s",
+        config.branch,
+        config.poll_interval,
+    )
+
+    while True:
+        try:
+            latest = await fetch_latest(config)
+            if latest is not None:
+                behind = commits_behind(config)
+                if behind > 0 and in_deploy_window(config):
+                    logger.info("Evergreen deploy: {} commit(s) behind, deploying...", behind)
+                    result = await execute_deploy(config)
+                    await storage.log_deployment(
+                        from_sha=result.get("from_sha", ""),
+                        to_sha=result.get("to_sha", ""),
+                        trigger="evergreen",
+                        status=result["status"],
+                        error=result.get("error"),
+                    )
+                    if result["status"] == "success":
+                        logger.info("Evergreen deploy succeeded")
+                    else:
+                        logger.error("Evergreen deploy failed: {}", result.get("error"))
+                elif behind > 0:
+                    logger.debug("Updates available ({} commits) but outside deploy window", behind)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Deploy loop error (will retry): {}", exc)
+
+        await asyncio.sleep(config.poll_interval)
+
+
 async def _run() -> None:
     """Main async loop: read instrument data, decode, persist.
 
@@ -200,6 +255,7 @@ async def _run() -> None:
     if cameras_str:
         await storage.seed_cameras_from_env(cameras_str)
 
+    from helmlog.deploy import DeployConfig
     from helmlog.external import external_data_enabled
     from helmlog.monitor import monitor_loop
 
@@ -213,6 +269,11 @@ async def _run() -> None:
             tide_task = asyncio.create_task(asyncio.sleep(1e9))
         web_task = asyncio.create_task(_web_loop(storage, recorder, audio_config))
         monitor_task = asyncio.create_task(monitor_loop())
+        deploy_config = DeployConfig()
+        if deploy_config.mode == "evergreen":
+            deploy_task = asyncio.create_task(_deploy_loop(storage, deploy_config))
+        else:
+            deploy_task = asyncio.create_task(asyncio.sleep(1e9))
         try:
             if data_source == "signalk":
                 from helmlog.sk_reader import SKReader, SKReaderConfig
@@ -253,8 +314,14 @@ async def _run() -> None:
             tide_task.cancel()
             web_task.cancel()
             monitor_task.cancel()
+            deploy_task.cancel()
             await asyncio.gather(
-                weather_task, tide_task, web_task, monitor_task, return_exceptions=True
+                weather_task,
+                tide_task,
+                web_task,
+                monitor_task,
+                deploy_task,
+                return_exceptions=True,
             )
             await storage.close()
             logger.info("Logger stopped")
@@ -978,6 +1045,234 @@ async def _list_devices() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Federation commands
+# ---------------------------------------------------------------------------
+
+
+async def _identity_init(
+    sail_number: str,
+    boat_name: str,
+    owner_email: str | None,
+    force: bool,
+) -> None:
+    """Initialize boat identity (keypair + boat card)."""
+    from helmlog.federation import identity_exists, init_identity, load_identity
+    from helmlog.storage import Storage, StorageConfig
+
+    if identity_exists() and not force:
+        _, card = load_identity()
+        print(f"Identity already exists: {card.boat_name} ({card.fingerprint})")
+        print("Use --force to regenerate (WARNING: this changes your boat's identity).")
+        return
+
+    card = init_identity(
+        sail_number=sail_number,
+        boat_name=boat_name,
+        owner_email=owner_email,
+        force=force,
+    )
+
+    # Also store reference in SQLite
+    storage = Storage(StorageConfig())
+    await storage.connect()
+    try:
+        await storage.save_boat_identity(
+            pub_key=card.pub_key,
+            fingerprint=card.fingerprint,
+            sail_number=card.sail_number,
+            boat_name=card.boat_name,
+        )
+    finally:
+        await storage.close()
+
+    print("Identity created:")
+    print(f"  Boat:        {card.boat_name}")
+    print(f"  Sail number: {card.sail_number}")
+    print(f"  Fingerprint: {card.fingerprint}")
+    if card.owner_email:
+        print(f"  Email:       {card.owner_email}")
+    print("  Keys:        ~/.helmlog/identity/")
+
+
+async def _identity_show() -> None:
+    """Show current boat identity."""
+    from helmlog.federation import identity_exists, load_identity
+
+    if not identity_exists():
+        print("No identity found. Run 'helmlog identity init' first.")
+        sys.exit(1)
+
+    _, card = load_identity()
+    print(f"Boat:        {card.boat_name}")
+    print(f"Sail number: {card.sail_number}")
+    print(f"Fingerprint: {card.fingerprint}")
+    print(f"Public key:  {card.pub_key}")
+    if card.owner_email:
+        print(f"Email:       {card.owner_email}")
+
+
+async def _co_op_create(name: str, areas: list[str] | None) -> None:
+    """Create a new co-op with this boat as moderator."""
+    from helmlog.federation import create_co_op, identity_exists, load_identity
+    from helmlog.storage import Storage, StorageConfig
+
+    if not identity_exists():
+        print("No identity found. Run 'helmlog identity init' first.")
+        sys.exit(1)
+
+    private_key, card = load_identity()
+
+    if not card.owner_email:
+        print("Co-op membership requires an owner email.")
+        print("Re-run 'helmlog identity init' with --email.")
+        sys.exit(1)
+
+    charter = create_co_op(private_key, card, name=name, areas=areas)
+
+    # Store membership in SQLite
+    storage = Storage(StorageConfig())
+    await storage.connect()
+    try:
+        from helmlog.federation import list_co_op_members
+
+        members = list_co_op_members(charter.co_op_id)
+        self_membership = members[0] if members else None
+        if self_membership:
+            await storage.save_co_op_membership(
+                co_op_id=charter.co_op_id,
+                co_op_name=charter.name,
+                co_op_pub=card.pub_key,
+                membership_json=self_membership.to_json(),
+                role="admin",
+                joined_at=self_membership.joined_at,
+            )
+    finally:
+        await storage.close()
+
+    print("Co-op created:")
+    print(f"  Name:    {charter.name}")
+    print(f"  ID:      {charter.co_op_id}")
+    print(f"  Admin:   {card.boat_name} ({card.fingerprint})")
+    if charter.areas:
+        print(f"  Areas:   {', '.join(charter.areas)}")
+    print(f"  Charter: ~/.helmlog/co-ops/{charter.co_op_id}/charter.json")
+
+
+async def _co_op_status() -> None:
+    """Show co-op membership status."""
+    from helmlog.storage import Storage, StorageConfig
+
+    storage = Storage(StorageConfig())
+    await storage.connect()
+    try:
+        memberships = await storage.list_co_op_memberships()
+    finally:
+        await storage.close()
+
+    if not memberships:
+        print("Not a member of any co-op.")
+        print("Create one with 'helmlog co-op create --name \"My Fleet\"'")
+        return
+
+    for m in memberships:
+        print(f"Co-op: {m['co_op_name']}")
+        print(f"  ID:      {m['co_op_id']}")
+        print(f"  Role:    {m['role']}")
+        print(f"  Status:  {m['status']}")
+        print(f"  Joined:  {m['joined_at']}")
+        print()
+
+
+async def _co_op_invite(
+    co_op_id: str | None,
+    boat_card_path: str,
+) -> None:
+    """Invite a boat to a co-op by signing a membership record."""
+    import json as _json
+
+    from helmlog.federation import (
+        identity_exists,
+        load_boat_card_from_json,
+        load_identity,
+        save_membership_to_filesystem,
+        sign_membership,
+    )
+    from helmlog.storage import Storage, StorageConfig
+
+    if not identity_exists():
+        print("No identity found. Run 'helmlog identity init' first.")
+        sys.exit(1)
+
+    private_key, admin_card = load_identity()
+
+    # Load the invitee's boat card
+    card_data = _json.loads(Path(boat_card_path).read_text())
+    invitee = load_boat_card_from_json(card_data)
+
+    # Resolve co-op ID
+    storage = Storage(StorageConfig())
+    await storage.connect()
+    try:
+        memberships = await storage.list_co_op_memberships()
+        if not memberships:
+            print("Not a member of any co-op.")
+            sys.exit(1)
+
+        admin_memberships = [m for m in memberships if m["role"] == "admin"]
+        if not admin_memberships:
+            print("You are not an admin of any co-op.")
+            sys.exit(1)
+
+        if co_op_id:
+            target = next((m for m in admin_memberships if m["co_op_id"] == co_op_id), None)
+            if not target:
+                print(f"You are not an admin of co-op {co_op_id}")
+                sys.exit(1)
+        else:
+            if len(admin_memberships) == 1:
+                target = admin_memberships[0]
+                co_op_id = target["co_op_id"]
+            else:
+                print("Multiple co-ops found. Use --co-op-id to specify.")
+                for m in admin_memberships:
+                    print(f"  {m['co_op_id']}  {m['co_op_name']}")
+                sys.exit(1)
+
+        if co_op_id is None:
+            print("Could not determine co-op ID.")
+            sys.exit(1)
+
+        # Sign membership
+        membership = sign_membership(
+            private_key,
+            co_op_id=co_op_id,
+            boat_card=invitee,
+            role="member",
+        )
+
+        # Save to filesystem
+        out_path = save_membership_to_filesystem(membership, co_op_id, invitee.fingerprint)
+
+        # Save peer in SQLite
+        await storage.save_co_op_peer(
+            co_op_id=co_op_id,
+            boat_pub=invitee.pub_key,
+            fingerprint=invitee.fingerprint,
+            membership_json=membership.to_json(),
+            sail_number=invitee.sail_number,
+            boat_name=invitee.boat_name,
+        )
+    finally:
+        await storage.close()
+
+    print(f"Membership signed for {invitee.boat_name} ({invitee.fingerprint})")
+    print(f"  Co-op: {target['co_op_name']}")
+    print(f"  Record: {out_path}")
+    print()
+    print(f"Share {out_path} with the invitee so they can join.")
+
+
+# ---------------------------------------------------------------------------
 # CLI wiring
 # ---------------------------------------------------------------------------
 
@@ -1091,6 +1386,52 @@ def _build_parser() -> argparse.ArgumentParser:
     st_target.add_argument("--session", type=int, metavar="ID", help="Audio session ID to scan")
     st_target.add_argument("--all", action="store_true", help="Scan all sessions with transcripts")
 
+    # -- Federation: identity -------------------------------------------
+    id_parser = sub.add_parser("identity", help="Manage boat identity")
+    id_sub = id_parser.add_subparsers(dest="identity_command", required=True)
+
+    id_init = id_sub.add_parser("init", help="Generate boat keypair and identity")
+    id_init.add_argument("--sail-number", required=True, metavar="NUM", help="Sail number")
+    id_init.add_argument("--boat-name", required=True, metavar="NAME", help="Boat name")
+    id_init.add_argument(
+        "--email",
+        default=None,
+        metavar="EMAIL",
+        help="Owner email (for co-op)",
+    )
+    id_init.add_argument("--force", action="store_true", help="Overwrite existing identity")
+
+    id_sub.add_parser("show", help="Show current boat identity")
+
+    # -- Federation: co-op ----------------------------------------------
+    coop_parser = sub.add_parser("co-op", help="Manage co-op membership")
+    coop_sub = coop_parser.add_subparsers(dest="coop_command", required=True)
+
+    coop_create = coop_sub.add_parser("create", help="Create a new co-op (you become admin)")
+    coop_create.add_argument("--name", required=True, metavar="NAME", help="Co-op name")
+    coop_create.add_argument(
+        "--area",
+        action="append",
+        default=None,
+        metavar="AREA",
+        help="Geographic area (repeatable)",
+    )
+
+    coop_sub.add_parser("status", help="Show co-op membership status")
+
+    coop_invite = coop_sub.add_parser("invite", help="Invite a boat to the co-op")
+    coop_invite.add_argument(
+        "boat_card",
+        metavar="BOAT_CARD.json",
+        help="Path to invitee boat.json",
+    )
+    coop_invite.add_argument(
+        "--co-op-id",
+        default=None,
+        metavar="ID",
+        help="Co-op ID (if multiple)",
+    )
+
     return parser
 
 
@@ -1137,6 +1478,22 @@ def main() -> None:
                 asyncio.run(_build_polar(args.min_sessions))
             case "scan-transcript":
                 asyncio.run(_scan_transcript(args.session, getattr(args, "all", False)))
+            case "identity":
+                match args.identity_command:
+                    case "init":
+                        asyncio.run(
+                            _identity_init(args.sail_number, args.boat_name, args.email, args.force)
+                        )
+                    case "show":
+                        asyncio.run(_identity_show())
+            case "co-op":
+                match args.coop_command:
+                    case "create":
+                        asyncio.run(_co_op_create(args.name, args.area))
+                    case "status":
+                        asyncio.run(_co_op_status())
+                    case "invite":
+                        asyncio.run(_co_op_invite(getattr(args, "co_op_id", None), args.boat_card))
     except KeyboardInterrupt:
         logger.info("Interrupted by user — shutting down")
     except Exception as exc:

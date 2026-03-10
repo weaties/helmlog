@@ -76,6 +76,11 @@ def test_build_race_name_practice() -> None:
     assert name == "20250810-BallardCup-P1"
 
 
+def test_build_race_name_synthesized() -> None:
+    name = build_race_name("BallardCup", date(2025, 8, 10), 2, "synthesized")
+    assert name == "20250810-BallardCup-S2"
+
+
 # ---------------------------------------------------------------------------
 # build_grafana_url tests
 # ---------------------------------------------------------------------------

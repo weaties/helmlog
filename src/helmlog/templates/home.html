@@ -2,6 +2,7 @@
 {% block title %}HelmLog{% endblock %}
 
 {% block extra_css %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
 {% raw %}@media(min-width:768px){#controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}#btn-end{grid-column:1/-1}}{% endraw %}
 </style>
@@ -129,8 +130,59 @@
 <div id="controls">
   <button class="btn btn-primary"  id="btn-start-race"     onclick="startSession('race')">&#9654; START RACE 1</button>
   <button class="btn btn-practice" id="btn-start-practice" onclick="startSession('practice')">&#9654; START PRACTICE</button>
+  <button class="btn btn-synthesize hidden" id="btn-synthesize" onclick="toggleSynthPanel()">&#9881; SYNTHESIZE RACE</button>
   <button class="btn btn-debrief hidden" id="btn-debrief-last" onclick="startDebriefLast()">DEBRIEF LAST RACE</button>
   <button class="btn btn-danger hidden" id="btn-end" onclick="confirmEndRace()">&#9632; END RACE</button>
+</div>
+
+<div id="synth-panel" class="card hidden">
+  <div class="label">Synthesize Race</div>
+  <div id="synth-map" class="synth-map"></div>
+  <div style="font-size:.75rem;color:#8892a4;margin-bottom:8px">Click map to place start/finish (RC). Marks auto-update with wind.</div>
+  <div class="field">
+    <label for="synth-course">Course type</label>
+    <select id="synth-course" onchange="onSynthCourseChange()">
+      <option value="windward_leeward">Windward/Leeward (2-lap)</option>
+      <option value="triangle">Triangle</option>
+      <option value="custom">Custom mark sequence</option>
+    </select>
+  </div>
+  <div class="field hidden" id="synth-marks-field">
+    <label for="synth-marks">Mark sequence</label>
+    <input id="synth-marks" placeholder="Click CYC marks on map or type e.g. S-K-D-I-F" maxlength="60"/>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div class="field">
+      <label for="synth-wind-dir">Wind direction (&deg;)</label>
+      <input id="synth-wind-dir" type="number" value="0" min="0" max="359" onchange="onSynthWindChange()"/>
+    </div>
+    <div class="field">
+      <label for="synth-laps">Laps</label>
+      <input id="synth-laps" type="number" value="2" min="1" max="6"/>
+    </div>
+    <div class="field">
+      <label for="synth-tws-lo">TWS low (kts)</label>
+      <input id="synth-tws-lo" type="number" value="8" min="4" max="25"/>
+    </div>
+    <div class="field">
+      <label for="synth-tws-hi">TWS high (kts)</label>
+      <input id="synth-tws-hi" type="number" value="14" min="4" max="30"/>
+    </div>
+  </div>
+  <div class="field hidden" id="synth-lat-field">
+    <label>RC position</label>
+    <span id="synth-rc-display" style="font-size:.82rem;color:#fbbf24">Click map to set</span>
+  </div>
+  <input type="hidden" id="synth-lat" value="47.63"/>
+  <input type="hidden" id="synth-lon" value="-122.40"/>
+  <div class="field" id="synth-peer-field">
+    <label for="synth-peer">Attribute to co-op peer (optional)</label>
+    <select id="synth-peer">
+      <option value="">This boat (local)</option>
+    </select>
+  </div>
+  <button class="btn btn-synthesize" id="synth-go" style="width:100%;margin-top:8px" onclick="runSynthesize()">Generate</button>
+  <div id="synth-result" style="margin-top:8px;font-size:.85rem;color:#fbbf24;display:none"></div>
 </div>
 
 <div id="today-summary" class="card hidden" style="text-align:center">
@@ -140,5 +192,6 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/static/home.js"></script>
 {% endblock %}

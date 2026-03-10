@@ -71,6 +71,7 @@ git checkout <previous-commit>
 |---------|-----|
 | Service won't start | Check `journalctl -u helmlog -n 50` for errors |
 | `uv` not found | Ensure `UV_CACHE_DIR` is set in systemd unit |
+| `ModuleNotFoundError` for a dep in pyproject.toml | Run `uv sync` — the venv is stale. The service uses `--no-sync` and trusts the venv. Never use `uv pip install` as a workaround |
 | Permission denied on `data/` | Run `sudo chown -R helmlog:helmlog data/` |
 | Signal K unreachable | Check `systemctl status signalk-server` |
 | Web UI 502 | Service crashed — `sudo systemctl restart helmlog` |

@@ -3,6 +3,37 @@
 > Design document for decentralized data sharing between boats in a co-op,
 > built on the existing Raspberry Pi + Tailscale + FastAPI architecture.
 
+## Table of Contents
+
+- [Core Principle](#core-principle)
+- [1. Identity Model](#1-identity-model)
+- [2. Membership Protocol](#2-membership-protocol)
+- [3. Co-op API Endpoints](#3-co-op-api-endpoints)
+- [4. Request Authentication](#4-request-authentication)
+- [5. Data Flow Patterns](#5-data-flow-patterns)
+- [6. Peer Caching (Optional)](#6-peer-caching-optional)
+- [6.5. Processing Offload](#65-processing-offload)
+- [6.6. Video and the Camera Pipeline](#66-video-and-the-camera-pipeline)
+- [7. Per-Event Co-op Assignment](#7-per-event-co-op-assignment)
+- [8. Current Model Computation](#8-current-model-computation)
+- [8.5. Fleet Benchmark Computation](#85-fleet-benchmark-computation)
+- [9. SQLite Schema Additions](#9-sqlite-schema-additions)
+- [10. New Python Modules](#10-new-python-modules)
+- [11. Peer Discovery](#11-peer-discovery)
+- [12. What This Does NOT Require](#12-what-this-does-not-require)
+- [13. Migration Path](#13-migration-path)
+- [14. Protocol Versioning & Upgrades](#14-protocol-versioning--upgrades)
+- [15. Security Assumptions & Threat Model](#15-security-assumptions--threat-model)
+- [16. Failure Modes & Recovery](#16-failure-modes--recovery)
+- [17. Event Naming & Canonicalization](#17-event-naming--canonicalization)
+- [18. Charter vs Agreements](#18-charter-vs-agreements)
+- [19. Co-op Dissolution](#19-co-op-dissolution)
+- [20. Inter-Co-op Boundaries](#20-inter-co-op-boundaries)
+- [21. Performance Envelope](#21-performance-envelope)
+- [22. Enforcement Classification](#22-enforcement-classification)
+- [23. Resolved Design Decisions](#23-resolved-design-decisions)
+- [24. Open Questions](#24-open-questions)
+
 ---
 
 ## Core Principle
@@ -55,8 +86,9 @@ complex key-sharding ceremonies.
 The founding admin designates 2-3 admin boats at creation. A membership record
 or revocation requires signatures from a majority of admins (e.g., 2-of-3).
 
-**Single moderator mode** (for small co-ops of 3-4 boats): instead of M-of-N,
-a single moderator boat signs all admin records. A **designated backup boat**
+**Single moderator mode** (available for co-ops of any size, per the data
+licensing policy): instead of M-of-N, a single moderator boat signs all
+admin records. A **designated backup boat**
 can assume moderator role if the moderator's Pi is lost. The charter specifies
 which mode the co-op uses.
 
@@ -277,7 +309,9 @@ GET  /co-op/{co_op_id}/sessions
      List sessions this boat has shared with the co-op.
      Query params: ?after=<iso>&before=<iso>&type=race|practice
      Returns: session summaries (id, type, start, end, event_name).
-     Does NOT return private data (audio, notes, crew, sails).
+     Does NOT return private data (audio, notes, crew, sails, video links).
+     See [Data Licensing Policy](data-licensing.md) Definitions section for the full
+     PII definition and Section 2 ("Data Sharing — The Co-op Model") for the shared/private data boundary.
 
      Respects temporal sharing controls:
      - Embargoed sessions return { "status": "embargoed", "available_at": "<iso>" }
@@ -1133,7 +1167,339 @@ recent `last_seen` timestamp. This keeps the scan lightweight.
 
 ---
 
-## 14. Resolved Design Decisions
+## 14. Protocol Versioning & Upgrades
+
+### Protocol version header
+
+Every co-op API response includes a `X-HelmLog-Protocol` header:
+
+```
+X-HelmLog-Protocol: 1.0
+```
+
+The version follows `major.minor`:
+- **Major** increments are breaking changes (new required fields in signed
+  records, changed authentication semantics, removed endpoints)
+- **Minor** increments are additive (new optional endpoints, new optional
+  fields in existing records)
+
+### Compatibility rules
+
+- A Pi **must** accept requests from peers with the same major version
+- A Pi **should** accept requests from peers with a higher minor version
+  (ignore unknown fields)
+- A Pi **may** reject requests from a peer with a different major version,
+  returning `426 Upgrade Required` with a human-readable message
+- Signed records (membership, revocation, charter) include a
+  `protocol_version` field. Records signed under an older major version
+  remain valid — the signature doesn't expire with a protocol upgrade
+
+### Rolling upgrades
+
+Co-ops don't upgrade atomically. During a transition:
+
+1. The new version is released. Pis update via `deploy.sh` on their own
+   schedule (some within hours, some within weeks)
+2. Updated Pis include the new version in their heartbeat
+3. The admin Pi can query `GET /co-op/{id}/heartbeat` to see which Pis
+   are on which version
+4. Once all active Pis are on the new version, the admin can issue a
+   charter amendment setting `min_protocol_version` to the new major,
+   which rejects connections from outdated Pis
+
+For Phase 1-3, there is only one protocol version (`1.0`). Versioning
+infrastructure is included from the start so it doesn't have to be
+retrofitted.
+
+---
+
+## 15. Security Assumptions & Threat Model
+
+### What the protocol trusts
+
+| Assumption | Why it's acceptable |
+|---|---|
+| **Tailscale identity is authentic.** A Pi's Tailscale node key maps to a real device on the co-op's tailnet. | Tailscale uses WireGuard keys authenticated via the control plane. Spoofing requires compromising the boat owner's Tailscale account. |
+| **Pi physical security is the boat owner's responsibility.** The private key on the Pi is as secure as the Pi itself. | Same as any personal computing device. We encrypt caches at rest, but the Pi's own data is protected by physical access control (locked nav station, secured below). |
+| **The OS is not compromised.** The Pi runs a standard Raspberry Pi OS with security hardening (see `setup.sh`). | Automatic security updates, dedicated service account, SSH hardened, unused services masked. |
+| **Signed records are non-repudiable.** Once a membership or revocation record is signed and distributed, the signer cannot deny it. | Ed25519 signatures are deterministic. The signed record includes the signer's public key fingerprint. |
+
+### Threat model
+
+| Threat | Mitigation | Residual risk |
+|---|---|---|
+| **Malicious insider** (member scrapes all shared data) | Audit logging with volume-based rate limiting; auto-freeze on anomalous access patterns (50+ views/minute or bulk data volume); admin alerted | A patient insider accessing data at normal rates over weeks. Mitigation: audit trail makes this detectable retrospectively. |
+| **Compromised Pi** (stolen or remotely accessed) | Admin issues revocation, pushed to all online peers. Revoked Pi's identity is rejected on all future requests. Owner re-joins with a new keypair. | Window between compromise and revocation — attacker can access shared data during this period. |
+| **Lost keypair** (SD card failure, no backup) | Boat re-joins as a new identity. Old identity can be revoked by admin. Data the boat previously shared remains cached on peers under the old identity. | Historical data on the dead Pi is lost if not backed up. Old identity remains valid until explicitly revoked. |
+| **Admin collusion** (admins abuse multi-sig) | M-of-N threshold means a single admin cannot act alone. All admin actions are signed and auditable. Charter amendment for admin removal requires member vote. | If M admins collude (e.g., 2 of 3), they can issue fraudulent membership or revocation records. Detection: all records are visible to all members. |
+| **Replay attack** | Per-request nonce, checked against seen-nonce set bounded by timestamp window. Requests with duplicate nonces are rejected. | If both NTP and peer clock slew fail, the relaxed 20-minute window is the maximum replay window. |
+| **Man-in-the-middle** | Tailscale provides WireGuard-level E2E encryption. API requests are additionally signed with the boat's Ed25519 key. | Requires compromising Tailscale infrastructure or the boat's WireGuard key. |
+| **helmlog.org gateway compromise** | Gateway is stateless — no sailing data at rest. It routes requests to Pis but cannot read signed payloads. Pi-side auth (magic-link) prevents unauthorized access even if routing is compromised. | Attacker could deny service (route requests to wrong Pi) or observe metadata (which boats are online). Cannot access session data. |
+
+### What the protocol does NOT protect against
+
+- A boat owner who lies about their identity (social engineering)
+- A coach who photographs a screen (normative obligation, not technical)
+- A legal subpoena for data on a Pi (law enforcement can compel disclosure)
+- Bugs in the implementation (standard software risk)
+
+---
+
+## 16. Failure Modes & Recovery
+
+### Identity and key management
+
+| Failure | Recovery |
+|---|---|
+| **Pi SD card dies, no backup** | Boat re-joins as new identity. Admin revokes old identity. Previously shared data remains on peers under old fingerprint. Historical data on the Pi is lost. |
+| **Pi SD card dies, backup exists** | Restore `boat.key` and `boat.json` from backup. Pi re-joins as same identity. No admin action needed. Restore `helmlog.db` for historical data. |
+| **Pi stolen** | Contact admin immediately. Admin issues signed revocation record, pushed to all online peers. Old identity rejected on all future requests. Owner creates new identity on replacement Pi. |
+| **Keypair exposed** (key file leaked) | Same as stolen Pi — admin revokes old identity. Owner generates new keypair and re-joins. |
+
+### Admin disagreements
+
+| Failure | Recovery |
+|---|---|
+| **Admins disagree on revocation timing** | Multi-sig threshold determines the outcome. If M-of-N admins sign the revocation, it takes effect regardless of dissent from the remaining admins. If fewer than M agree, the revocation does not proceed. |
+| **Admin goes rogue** (refuses to sign, blocks legitimate actions) | Other admins can propose a charter amendment to remove the rogue admin. Requires 2/3 member vote. The rogue admin's signature is no longer counted toward the M-of-N threshold after removal. |
+| **All admins become unavailable** | Members vote (2/3 supermajority) to elect new admins. If quorum cannot be reached (too many inactive), active members can invoke a bootstrap re-election by signing a petition (majority of active heartbeating members). |
+
+### Network and sync failures
+
+| Failure | Recovery |
+|---|---|
+| **A Pi is offline for weeks** | Data syncs on reconnection. Heartbeat marks the boat inactive after 60 days (excluded from quorum denominator). No data loss. |
+| **Revocation push fails** (target Pi offline) | Revocation record is stored on all online peers. Offline Pi receives it via tombstone polling on reconnection. Window of stale access is bounded by the offline period. |
+| **A malicious boat drops revocation messages** | Revocations are pushed to all peers, not just the target. Even if the target ignores the message, all other peers enforce it. The revoked boat can access its own data but no other peer will serve it co-op data. |
+
+### Data integrity
+
+| Failure | Recovery |
+|---|---|
+| **Corrupted database** | Pi restores from backup. Shared data can be re-pulled from peer caches. Identity key is stored separately from the database. |
+| **Accidental session share** | Boat owner un-shares the session. Tombstone record propagated to peers. Cached copies deleted on next sync. |
+| **Divergent benchmark results** (Pis compute different numbers) | Expected — each Pi queries at a slightly different time and may see different sets of peers. Benchmarks converge as all Pis come online. Not a failure; a property of decentralized computation. |
+
+---
+
+## 17. Event Naming & Canonicalization
+
+Proof of Participation (PoP) depends on matching event names across boats.
+If one boat types "CYC Wed" and another types "CYC Wednesday," PoP breaks.
+
+### Solution: canonical event IDs
+
+1. **Admin-defined event calendar.** The co-op admin creates a calendar of
+   events in the charter metadata:
+
+```json
+{
+  "events": [
+    { "id": "cyc-wed", "name": "CYC Wednesday Night", "pattern": "weekly:wed" },
+    { "id": "ballard-mon", "name": "Ballard Cup Monday", "pattern": "weekly:mon" },
+    { "id": "swiftsure-2026", "name": "Swiftsure 2026", "dates": ["2026-05-23", "2026-05-24"] }
+  ]
+}
+```
+
+2. **Auto-matching on session start.** When a boat starts a race, the Pi
+   checks the event calendar by day/date and suggests the matching event.
+   The boat owner confirms or overrides.
+
+3. **PoP uses the canonical event ID**, not the free-text event name. Two
+   boats at the same event will have the same ID even if their display
+   names differ.
+
+4. **Unknown events.** If a session doesn't match any calendar entry, the
+   boat owner enters a free-text name. PoP for ad-hoc events falls back to
+   temporal proximity (sessions overlapping in time at similar GPS positions
+   are assumed to be the same event).
+
+---
+
+## 18. Charter vs Agreements
+
+### What lives in the charter
+
+The **charter** is the co-op's constitution — it defines structure and
+rules that apply to all members:
+
+- Co-op name, class, geographic scope
+- Admin roster and governance mode (single moderator or multi-admin)
+- Membership requirements (minimum sessions, dual membership policy)
+- Season dates
+- Default sharing mode (event-scoped or full visibility)
+- Embargo policy (if any)
+- Benchmark cache TTL
+- Event calendar
+- `min_protocol_version`
+
+Charter amendments require a 2/3 supermajority vote.
+
+### What lives in agreements
+
+**Agreements** are specific, scoped authorizations that can be added or
+removed without amending the charter:
+
+- Current model sharing (unanimous consent)
+- ML/AI model training projects (2/3 vote)
+- Commercial use arrangements (2/3 vote)
+- Cross-co-op data sharing (2/3 vote from both co-ops)
+
+Each agreement has:
+- A **signed proposal** (who proposed it, when, what it authorizes)
+- **Signed votes** from each voting member
+- A **status** (active, expired, revoked)
+- An optional **expiration date**
+
+### Key differences
+
+| | Charter | Agreement |
+|---|---|---|
+| Scope | Structural rules | Specific authorizations |
+| Amendment | 2/3 supermajority | Varies by type |
+| Expiration | No (persists until amended) | Optional (can be time-limited) |
+| Pre-join disclosure | Yes — shown to prospective members | Yes — all active agreements shown |
+| Superseding | New amendment replaces old | New agreement of same type replaces old |
+
+Agreements do not require charter amendments. A co-op can activate current
+model sharing via a unanimous vote without touching the charter. The
+charter's "Active Agreements" section in the template is a disclosure
+summary, not the agreements themselves.
+
+---
+
+## 19. Co-op Dissolution
+
+When a co-op ceases to operate:
+
+### Voluntary dissolution
+
+1. An admin proposes dissolution (charter amendment)
+2. 2/3 supermajority of active members vote to approve
+3. On approval:
+   - All membership records are marked as revoked (dissolution reason)
+   - Coach access records are revoked
+   - Active agreements are terminated
+   - Each Pi retains its own data (instrument, audio, notes) permanently
+   - Peer caches are purged within 30 days (same as departure)
+   - Fleet benchmarks are retained locally on each Pi but no longer updated
+   - The co-op identity (public key) is retired — cannot be reused
+
+### Dormancy (no active governance)
+
+Per the data licensing policy, if a co-op has no governance activity
+(votes, membership changes, charter amendments) for 2 years:
+
+1. The co-op enters **dormant** status
+2. No new data sharing occurs
+3. Existing shared data remains accessible to members
+4. Any admin can re-activate by issuing a charter amendment
+5. If no admin acts within 6 months of dormancy, the co-op auto-dissolves
+
+### What dissolution does NOT do
+
+- It does not delete any boat's own data
+- It does not affect the boat's identity (keypair remains valid)
+- It does not prevent the same boats from forming a new co-op
+- It does not affect memberships in other co-ops
+
+---
+
+## 20. Inter-Co-op Boundaries
+
+### Can a boat share the same session with multiple co-ops?
+
+**No, by default.** Per-event exclusivity (Section 7) requires that each
+shared session is assigned to exactly one co-op. This prevents the same
+data from appearing in multiple co-ops' benchmark pools, which would
+create cross-co-op information leakage.
+
+**Exception:** If both co-ops vote (2/3 supermajority each) to establish a
+cross-co-op sharing agreement, sessions from joint events can be shared
+with both. The agreement specifies which events are covered.
+
+### Can a boat belong to two co-ops with overlapping membership?
+
+**Yes.** A boat can belong to a J/105 co-op and a PHRF co-op simultaneously.
+Per-event exclusivity ensures each session goes to only one co-op. The
+boat owner picks which co-op gets each session at share time.
+
+### Can two co-ops merge?
+
+Not directly. To merge:
+
+1. Create a new co-op with the combined membership
+2. Both old co-ops dissolve
+3. Members share new sessions with the merged co-op going forward
+4. Historical data from old co-ops is not migrated (no backfill)
+
+---
+
+## 21. Performance Envelope
+
+### Expected resource usage
+
+| Metric | Expected range |
+|---|---|
+| **Storage per boat per season** | ~50-100 MB (instrument data at 1 Hz, ~6 months, 2-3 sessions/week) |
+| **Storage with audio** | +500 MB - 2 GB per season (WAV recordings) |
+| **Storage with video metadata** | Negligible (links only; video is on YouTube/SD card) |
+| **Peer cache size** | ~10-50 MB per co-op (track data from ~10 boats, 30-day TTL) |
+| **SQLite DB total** | ~200 MB - 2 GB after 2+ seasons with audio |
+
+### Query performance
+
+| Operation | Expected latency (Pi 4/5 on Tailscale) |
+|---|---|
+| **Session list** (`GET /co-op/{id}/sessions`) | <100 ms per peer |
+| **Track data** (`GET /co-op/{id}/sessions/{id}/track`) | 200-500 ms (1 Hz data, ~2 hour race = ~7200 points) |
+| **Benchmark pull from all peers** (10-boat co-op) | 1-3 seconds (parallel queries, lightweight metric arrays) |
+| **Benchmark pull** (20-boat co-op) | 2-5 seconds |
+| **Full co-op view refresh** | 3-10 seconds depending on co-op size and peer availability |
+
+### Scaling limits
+
+The fully decentralized benchmark model works well up to ~20 boats.
+Beyond that:
+
+- **20-50 boats**: still viable but benchmark refreshes may take 10-20
+  seconds. Consider longer cache TTLs (48-72 hours).
+- **50+ boats**: consider a designated aggregator (see resolved decision
+  #15). The N×N query pattern becomes the bottleneck.
+- **100+ boats**: unlikely for a single one-design fleet co-op. If needed,
+  the aggregator model or sharded sub-co-ops would be required.
+
+### Small fleet benchmark fragility
+
+With exactly 4 boats in a condition bin (the minimum threshold):
+
+- A single anomalous data point can skew percentiles significantly
+- Benchmarks are marked with a confidence indicator based on sample size:
+  `low` (4-6 boats), `medium` (7-12), `high` (13+)
+- The UI displays "limited data" warnings for low-confidence bins
+- Bins with fewer than 4 boats show no benchmark (not enough data)
+
+---
+
+## 22. Enforcement Classification
+
+Policy obligations fall into three categories:
+
+| Category | Meaning | Examples |
+|---|---|---|
+| **Technically enforced** | The protocol prevents violation — no human action required | Session visibility (API returns 403), coach access expiration (record has TTL), no-bulk-export (API doesn't support it), replay protection (nonce rejection), revocation (signature invalid after revocation) |
+| **Socially enforced** | The protocol detects or deters violation, but cannot prevent it | Audit logging (admin sees anomalous access), screenshot accumulation (trust model), derivative works after expiry (agreement, not control), coach data deletion (normative obligation) |
+| **Charter-enforced** | Violation is addressed through governance, not technology | No-protest-use (charter prohibition), no cross-co-op aggregation (coach agreement), dispute resolution (charter process), admin removal (member vote) |
+
+The guides and data licensing policy reference these categories implicitly.
+The distinction matters for setting accurate expectations: technically
+enforced rules are guarantees; socially and charter-enforced rules depend
+on community trust and governance.
+
+---
+
+## 23. Resolved Design Decisions
 
 Decisions reached through PR review and external feedback:
 
@@ -1177,8 +1543,10 @@ Decisions reached through PR review and external feedback:
    never exposed to other members. Scrubbed on departure. See data licensing
    policy Section 1.
 
-9. **Single moderator mode for small co-ops.** Co-ops of 3-4 boats may use
-   a single moderator with a designated backup instead of M-of-N multi-admin.
+9. **Single moderator mode.** Available for co-ops of any size (per data
+   licensing policy). A single moderator with a designated backup instead
+   of M-of-N multi-admin. Simpler for small fleets; larger fleets may
+   also use it if the charter specifies it.
    Charter specifies which mode. See Section 1 above.
 
 10. **Heartbeat with manual inactive toggle.** "On the water" vs "in the
@@ -1247,9 +1615,9 @@ Decisions reached through PR review and external feedback:
 
 ---
 
-## 15. Open Questions
+## 24. Open Questions
 
-(Previously open questions 1-3 have been resolved — see Section 14 items
+(Previously open questions 1-3 have been resolved — see Section 23 items
 8-10. Questions 4-6 resolved — see items 15-16 above.)
 
 No open questions remain. All design decisions have been resolved through

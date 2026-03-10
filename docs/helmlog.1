@@ -1,0 +1,200 @@
+.\" helmlog.1 — man page for the HelmLog CLI
+.TH HELMLOG 1 "2026-03-08" "HelmLog" "HelmLog Manual"
+.SH NAME
+helmlog \- open-source sailing data platform
+.SH SYNOPSIS
+.B helmlog
+.RI [ command ]
+.RI [ options ]
+.SH DESCRIPTION
+HelmLog is a Raspberry Pi-based sailing data logger that reads from a B&G
+instrument system via Signal K Server, stores time-series sailing data in
+SQLite, and provides a web interface for race marking, history, debrief
+audio, and performance exports.
+.PP
+Data can be exported as CSV, GPX, or JSON for use in Sailmon and other
+regatta analysis tools.
+.SH COMMANDS
+.SS Core
+.TP
+.B run
+Start the data logging loop. Connects to Signal K (or CAN bus if
+\fBDATA_SOURCE=can\fR), records instrument data, and serves the web interface.
+.TP
+.B status
+Show database row counts and last-seen timestamps for each data table.
+.TP
+.B export
+Export a time range to CSV.
+.SS Video & Media
+.TP
+.B list\-cameras
+Show configured cameras and their ping status.
+.TP
+.B link\-video
+Link a YouTube video to logged data via a time sync point.
+.TP
+.B list\-videos
+List linked YouTube videos.
+.TP
+.B link\-channel\-videos
+Match YouTube channel videos to Gaia GPS-imported races by date.
+.TP
+.B sync\-videos
+Auto-associate YouTube uploads with camera sessions.
+.TP
+.B list\-audio
+List recorded audio sessions.
+.TP
+.B list\-devices
+List available audio input devices.
+.SS Administration
+.TP
+.B add\-user
+Create a user directly in the database (admin bootstrap).
+.TP
+.B build\-polar
+Rebuild polar performance baseline from historical session data.
+.TP
+.B scan\-transcript
+Scan transcripts for trigger keywords and create auto-notes.
+.SS Federation
+.TP
+.B identity init
+Generate a boat keypair and identity. See
+.B FEDERATION
+below.
+.TP
+.B identity show
+Display the current boat identity (public key, fingerprint, sail number).
+.TP
+.B co\-op create
+Create a new co-op. The creating boat becomes admin.
+.TP
+.B co\-op status
+Show co-op membership status and peer list.
+.TP
+.B co\-op invite
+Invite another boat to a co-op using their boat card file.
+.SH FEDERATION
+Federation lets boats share race data directly with each other over Tailscale
+\(em no central server. Each boat has a cryptographic identity (Ed25519
+keypair), and co-ops are groups of boats that agree to share data.
+.PP
+Most federation tasks can also be done from the web admin interface at
+\fB/admin/federation\fR.
+.SS Creating an identity
+.PP
+.nf
+helmlog identity init \\
+    \-\-sail\-number 69 \\
+    \-\-boat\-name "Javelina" \\
+    \-\-email skipper@example.com
+.fi
+.PP
+This creates an Ed25519 keypair under \fB~/.helmlog/identity/\fR.
+The private key (\fBboat.key\fR) never leaves the Pi. The public identity
+document (\fBboat.json\fR) is safe to share with fleet mates.
+.TP
+.B \-\-sail\-number NUM
+Sail number (required).
+.TP
+.B \-\-boat\-name NAME
+Boat name (required).
+.TP
+.B \-\-email EMAIL
+Owner email address. Optional for standalone use, required for co-op
+membership.
+.TP
+.B \-\-force
+Overwrite an existing identity. Warning: this changes your boat's
+cryptographic identity and invalidates existing co-op memberships.
+.SS Creating a co-op
+.PP
+.nf
+helmlog co\-op create \\
+    \-\-name "Puget Sound J/105" \\
+    \-\-area "Elliott Bay" \\
+    \-\-area "Shilshole"
+.fi
+.TP
+.B \-\-name NAME
+Co-op name (required).
+.TP
+.B \-\-area AREA
+Geographic area (repeatable).
+.SS Inviting a boat
+.PP
+.nf
+helmlog co\-op invite ./blackhawk\-boat.json
+helmlog co\-op invite ./blackhawk\-boat.json \-\-co\-op\-id a1b2c3d4
+.fi
+.TP
+.B BOAT_CARD.json
+Path to the invitee's boat card file (required).
+.TP
+.B \-\-co\-op\-id ID
+Target co-op ID. Required only when you admin multiple co-ops.
+.SH FILES
+.TP
+.B ~/.helmlog/identity/boat.key
+Ed25519 private key (mode 0600).
+.TP
+.B ~/.helmlog/identity/boat.pub
+Public key (freely shareable).
+.TP
+.B ~/.helmlog/identity/boat.json
+Boat card \(em the public identity document shared with fleet mates.
+.TP
+.B ~/.helmlog/co\-ops/<id>/charter.json
+Signed co-op charter.
+.TP
+.B ~/.helmlog/co\-ops/<id>/members/*.json
+Signed membership records for each co-op peer.
+.TP
+.B .env
+Environment configuration. See \fB.env.example\fR for available settings.
+.SH ENVIRONMENT
+.TP
+.B DB_PATH
+Path to the SQLite database file.
+.TP
+.B DATA_SOURCE
+Data source: \fBsignalk\fR (default) or \fBcan\fR.
+.TP
+.B LOG_LEVEL
+Logging level (DEBUG, INFO, WARNING, ERROR).
+.TP
+.B SK_HOST
+Signal K server hostname (default: localhost).
+.TP
+.B SK_PORT
+Signal K server port (default: 3000).
+.SH WEB INTERFACE
+The web interface is served at \fBhttp://<hostname>/\fR when running
+\fBhelmlog run\fR. Admin pages are available under \fB/admin/\fR and require
+authentication.
+.PP
+Key admin pages:
+.TP
+.B /admin/federation
+Manage boat identity, create co-ops, and invite boats.
+.TP
+.B /admin/deployment
+View version info, deploy updates, and configure auto-deploy.
+.TP
+.B /admin/settings
+Configure system settings.
+.SH SEE ALSO
+Project documentation in the \fBdocs/\fR directory, especially:
+.PP
+.B docs/guide\-federation.md
+\(em Federation setup guide
+.br
+.B docs/operators\-guide.md
+\(em System operator guide
+.br
+.B docs/data\-licensing.md
+\(em Data ownership and privacy policy
+.SH AUTHORS
+HelmLog contributors.

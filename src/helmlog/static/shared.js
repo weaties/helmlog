@@ -43,8 +43,54 @@ function esc(s) {
 }
 
 // ---------------------------------------------------------------------------
-// Nav bar admin link reveal & profile
+// Nav bar — hamburger toggle, admin link reveal, profile
 // ---------------------------------------------------------------------------
+
+function toggleNav() {
+  const links = document.getElementById('nav-links');
+  const btn = document.getElementById('nav-hamburger');
+  if (!links || !btn) return;
+  const open = links.classList.toggle('open');
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+// Close nav when a link inside it is activated (mobile UX)
+document.addEventListener('DOMContentLoaded', function () {
+  const links = document.getElementById('nav-links');
+  if (links) {
+    links.addEventListener('click', function (e) {
+      if (e.target.tagName === 'A') {
+        links.classList.remove('open');
+        const btn = document.getElementById('nav-hamburger');
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  }
+
+  // Close nav when clicking outside
+  document.addEventListener('click', function (e) {
+    const nav = document.getElementById('site-nav');
+    if (nav && !nav.contains(e.target)) {
+      const links = document.getElementById('nav-links');
+      const btn = document.getElementById('nav-hamburger');
+      if (links) links.classList.remove('open');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  // Keyboard: close on Escape
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      const links = document.getElementById('nav-links');
+      const btn = document.getElementById('nav-hamburger');
+      if (links) links.classList.remove('open');
+      if (btn) {
+        btn.setAttribute('aria-expanded', 'false');
+        btn.focus();
+      }
+    }
+  });
+});
 
 function initNav() {
   fetch('/api/me').then(r => r.json()).then(u => {

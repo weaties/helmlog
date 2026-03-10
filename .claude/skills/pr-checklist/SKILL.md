@@ -61,7 +61,24 @@ Must be clean. Pre-existing exceptions (do not fix unless asked):
 - `web.py`: `Item "None" of "AudioRecorder | None" has no attribute "stop"` (x2)
 - `main.py`: `Unused "type: ignore" comment`
 
-## 6. Data licensing compliance
+## 6. Integration tests (federation PRs)
+
+If the change touches federation, co-op, peer API, or data licensing code,
+run the integration tests:
+
+```bash
+uv run pytest tests/integration/ -v
+```
+
+All 32 integration tests must pass. These validate inter-boat auth, embargo,
+data licensing, and audit logging with real Ed25519 crypto.
+
+For major federation changes, also run Pi smoke tests before merge:
+```bash
+ssh weaties@corvopi-tst1 "cd ~/helmlog && uv run python scripts/integration_smoke.py --peer corvopi-live"
+```
+
+## 7. Data licensing compliance
 
 If the change touches data storage, export, deletion, API endpoints, PII
 handling, co-op features, or any new data type collection, run `/data-license`
@@ -75,7 +92,14 @@ Key items to check:
 - No gambling/betting facilitation
 - Audit logging on co-op data access
 
-## 7. Documentation updates
+## 8. Dependency check
+
+If any dependencies were added (via `uv add`), verify:
+- The dependency is in `pyproject.toml` and `uv.lock`
+- `uv sync` installs it cleanly (the import works)
+- **Never** use `uv pip install` for project dependencies — it bypasses the lockfile and won't persist. The helmlog service runs with `--no-sync`, so the venv must be correct at deploy time.
+
+## 9. Documentation updates
 
 If the change involved any of these, update accordingly:
 - **New module** → update project structure tree in `CLAUDE.md`
@@ -84,8 +108,9 @@ If the change involved any of these, update accordingly:
 - **New stack tool** → update Stack & Tooling table in `CLAUDE.md`
 - **Schema migration** → update schema version in `CLAUDE.md` Stack table
 - **Data handling changes** → verify against `docs/data-licensing.md`
+- **New dependency** → verify it's in `pyproject.toml` and installs via `uv sync`
 
-## 8. Commit and push
+## 10. Commit and push
 
 ```bash
 git add <files>
@@ -93,7 +118,7 @@ git commit -m "feat: description (#issue)"
 git push -u origin <branch>
 ```
 
-## 9. Create PR
+## 11. Create PR
 
 ```bash
 gh pr create --title "..." --body "..."

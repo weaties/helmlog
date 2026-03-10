@@ -1,10 +1,12 @@
 # HelmLog
 
-Open-source sailing data platform — instrument logging, race debrief, fleet performance.
+Open-source sailing data platform — instrument logging, race debrief, fleet performance,
+and peer-to-peer data sharing between boats in a co-op.
 
 Runs on a Raspberry Pi with a CAN bus HAT connected to the B&G instrument network.
 Signal K Server decodes the NMEA 2000 bus and feeds both InfluxDB → Grafana
-(real-time dashboards) and helmlog (SQLite → CSV/GPX/JSON for regatta analysis tools).
+(real-time dashboards) and HelmLog (SQLite → CSV/GPX/JSON for regatta analysis tools).
+Boats in a co-op share instrument data directly over Tailscale — no cloud, no subscription.
 
 Two Signal K plugins are required:
 - **signalk-to-influxdb2** — forwards all SK data to InfluxDB for Grafana dashboards
@@ -55,11 +57,12 @@ grafana-server.service (independent, starts at boot)
 9. [Email notifications](#email-notifications)
 10. [Timezone configuration](#timezone-configuration)
 11. [System health monitoring](#system-health-monitoring)
-12. [Mac development](#mac-development)
-13. [Fresh SD card setup](#fresh-sd-card-setup)
-14. [Updating / deploying](#updating--deploying)
-15. [Configuration](#configuration)
-16. [Troubleshooting](#troubleshooting)
+12. [Documentation](#documentation)
+13. [Mac development](#mac-development)
+14. [Fresh SD card setup](#fresh-sd-card-setup)
+15. [Updating / deploying](#updating--deploying)
+16. [Configuration](#configuration)
+17. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -718,6 +721,42 @@ warning banner if:
 
 No configuration is needed. If InfluxDB is not configured, the metric write
 fails silently and only the web banner is active.
+
+---
+
+## Documentation
+
+The `docs/` directory contains guides, policies, and technical specs:
+
+### For sailors, coaches, and fleet organizers
+
+| Document | Audience | Description |
+|---|---|---|
+| [On-Boat Operations Guide](docs/operators-guide.md) | All crew | Race-day reference — connecting, marking races, notes, exports |
+| [How the Co-op Works](docs/guide-sailors.md) | Sailors | What's shared, what's private, how to join/leave |
+| [Coach Access Guide](docs/guide-coaches.md) | Coaches | What coaches can see, how access works, rules |
+| [Fleet Champion's Guide](docs/guide-champions.md) | Fleet organizers | Adoption playbook — setup, pitching, troubleshooting |
+| [Fleet Quickstart](docs/fleet-quickstart.md) | Anyone | One-page printable dock handout |
+| [Co-op Charter Template](docs/co-op-charter-template.md) | Co-op admins | Fillable template for co-op governance |
+
+### Technical specifications
+
+| Document | Description |
+|---|---|
+| [Data Licensing Policy](docs/data-licensing.md) | Data ownership, sharing rules, privacy, governance |
+| [Federation Protocol Design](docs/federation-design.md) | Peer-to-peer protocol — identity, membership, API, caching, security |
+| [Database Schema](docs/database-schema.md) | SQLite schema reference |
+
+### Setup and operations
+
+| Document | Description |
+|---|---|
+| [Audio Setup](docs/audio-setup.md) | USB mic configuration and troubleshooting |
+| [Camera Setup](docs/camera-setup.md) | Insta360 X4 configuration |
+| [Video Pipeline](docs/video-pipeline.md) | Automated Insta360 → YouTube → HelmLog pipeline |
+| [Transcription Offload](docs/transcription-offload.md) | Remote Whisper worker on a Mac |
+| [HTTPS Deployment](docs/https-deployment.md) | TLS setup for the web interface |
+| [Backup](docs/backup.md) | Pi backup strategy |
 
 ---
 

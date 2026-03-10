@@ -46,6 +46,7 @@ function render(s) {
   const todaySummary = document.getElementById('today-summary');
   const controlsDiv = document.getElementById('controls');
 
+  const btnSynth = document.getElementById('btn-synthesize');
   const isIdle = !cur && !s.current_debrief;
   const isRacing = !!cur;
   const isDebrief = !!s.current_debrief;
@@ -55,6 +56,9 @@ function render(s) {
   crewCard.classList.toggle('hidden', !isRacing);
   // --- Controls: hidden during debrief ---
   controlsDiv.classList.toggle('hidden', isDebrief);
+
+  // --- Synthesize button: visible when idle ---
+  btnSynth.classList.toggle('hidden', !isIdle);
 
   if(cur) {
     curCard.classList.remove('hidden');
@@ -930,6 +934,355 @@ async function loadPolar() {
       if (noData) noData.style.display = d.tws != null ? 'block' : 'none';
     }
   } catch(e) {}
+}
+
+// ---- Synthesize race ----
+
+let _synthMap = null;
+let _synthRcMarker = null;
+let _synthBuoyMarkers = [];
+let _synthCycMarkers = [];
+let _synthCourseLine = null;
+let _synthWindArrow = null;
+let _synthCustomSequence = [];
+let _synthMarkOverrides = {};
+
+function _synthMapReady() {
+  return typeof L !== 'undefined' && _synthMap !== null;
+}
+
+async function toggleSynthPanel() {
+  const panel = document.getElementById('synth-panel');
+  const hidden = panel.classList.toggle('hidden');
+  if (!hidden) {
+    await loadCoopPeers();
+    // Init map on first open
+    if (!_synthMap) {
+      setTimeout(initSynthMap, 100);
+    }
+  }
+}
+
+function initSynthMap() {
+  if (typeof L === 'undefined') return;
+  const el = document.getElementById('synth-map');
+  if (!el || _synthMap) return;
+
+  _synthMap = L.map('synth-map').setView([47.63, -122.40], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap', maxZoom: 18,
+  }).addTo(_synthMap);
+
+  // Click to place RC
+  _synthMap.on('click', function(e) {
+    const lat = e.latlng.lat;
+    const lon = e.latlng.lng;
+    document.getElementById('synth-lat').value = lat.toFixed(5);
+    document.getElementById('synth-lon').value = lon.toFixed(5);
+    document.getElementById('synth-rc-display').textContent =
+      lat.toFixed(4) + ', ' + lon.toFixed(4);
+    document.getElementById('synth-lat-field').classList.remove('hidden');
+    placeRcMarker(lat, lon);
+    updateSynthMarks();
+  });
+
+  // Show CYC marks on map
+  loadCycMarksOnMap();
+}
+
+function placeRcMarker(lat, lon) {
+  if (!_synthMapReady()) return;
+  if (_synthRcMarker) {
+    _synthRcMarker.setLatLng([lat, lon]);
+  } else {
+    _synthRcMarker = L.marker([lat, lon], {
+      draggable: true,
+      title: 'RC (Start/Finish)',
+      icon: L.divIcon({
+        className: '',
+        html: '<div style="background:#ef4444;color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #fff">RC</div>',
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
+      }),
+    }).addTo(_synthMap);
+    _synthRcMarker.on('dragend', function() {
+      const pos = _synthRcMarker.getLatLng();
+      document.getElementById('synth-lat').value = pos.lat.toFixed(5);
+      document.getElementById('synth-lon').value = pos.lng.toFixed(5);
+      document.getElementById('synth-rc-display').textContent =
+        pos.lat.toFixed(4) + ', ' + pos.lng.toFixed(4);
+      updateSynthMarks();
+    });
+  }
+  updateWindArrow(lat, lon);
+}
+
+function updateWindArrow(lat, lon) {
+  if (!_synthMapReady()) return;
+  const windDir = parseFloat(document.getElementById('synth-wind-dir').value) || 0;
+  const arrowLen = 0.012;
+  const rad = (windDir * Math.PI) / 180;
+  const endLat = lat + arrowLen * Math.cos(rad);
+  const endLon = lon + arrowLen * Math.sin(rad) / Math.cos(lat * Math.PI / 180);
+  if (_synthWindArrow) _synthMap.removeLayer(_synthWindArrow);
+  _synthWindArrow = L.polyline(
+    [[lat, lon], [endLat, endLon]],
+    {color: '#fbbf24', weight: 3, dashArray: '6,4', opacity: 0.8}
+  ).addTo(_synthMap);
+  // Arrowhead
+  const headLen = 0.003;
+  const a1 = rad + 2.6;
+  const a2 = rad - 2.6;
+  const h1 = [endLat + headLen * Math.cos(a1), endLon + headLen * Math.sin(a1) / Math.cos(lat * Math.PI / 180)];
+  const h2 = [endLat + headLen * Math.cos(a2), endLon + headLen * Math.sin(a2) / Math.cos(lat * Math.PI / 180)];
+  L.polyline([[endLat, endLon], h1], {color: '#fbbf24', weight: 3}).addTo(_synthMap);
+  L.polyline([[endLat, endLon], h2], {color: '#fbbf24', weight: 3}).addTo(_synthMap);
+}
+
+function onSynthWindChange() {
+  updateSynthMarks();
+}
+
+async function updateSynthMarks() {
+  if (!_synthMapReady()) return;
+  const lat = parseFloat(document.getElementById('synth-lat').value) || 47.63;
+  const lon = parseFloat(document.getElementById('synth-lon').value) || -122.40;
+  const windDir = parseFloat(document.getElementById('synth-wind-dir').value) || 0;
+  const courseType = document.getElementById('synth-course').value;
+
+  updateWindArrow(lat, lon);
+
+  // Clear old buoy markers and drag overrides
+  _synthBuoyMarkers.forEach(m => _synthMap.removeLayer(m));
+  _synthBuoyMarkers = [];
+  _synthMarkOverrides = {};
+  if (_synthCourseLine) {
+    _synthMap.removeLayer(_synthCourseLine);
+    _synthCourseLine = null;
+  }
+
+  if (courseType === 'custom') return;
+
+  try {
+    const resp = await fetch('/api/courses/marks?wind_dir=' + windDir +
+      '&start_lat=' + lat + '&start_lon=' + lon);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const buoy = data.buoy_marks;
+
+    // Determine which marks to show based on course type
+    let markKeys;
+    if (courseType === 'windward_leeward') {
+      markKeys = ['S', 'A', 'X', 'F'];
+    } else {
+      markKeys = ['S', 'A', 'G', 'X', 'F'];
+    }
+
+    const lineCoords = [];
+    for (const key of markKeys) {
+      const m = buoy[key];
+      if (!m) continue;
+      const marker = L.marker([m.lat, m.lon], {
+        draggable: true,
+        title: key + ': ' + m.name,
+        icon: L.divIcon({
+          className: '',
+          html: '<div style="background:#2563eb;color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;border:2px solid #fff">' + key + '</div>',
+          iconSize: [22, 22],
+          iconAnchor: [11, 11],
+        }),
+      }).addTo(_synthMap);
+      marker.bindTooltip(key + ': ' + m.name, {direction: 'top', offset: [0, -12]});
+      marker._markKey = key;
+      marker.on('dragend', function() {
+        const pos = marker.getLatLng();
+        _synthMarkOverrides[key] = {lat: pos.lat, lon: pos.lng};
+        _updateCourseLine();
+      });
+      _synthBuoyMarkers.push(marker);
+      lineCoords.push([m.lat, m.lon]);
+    }
+
+    if (lineCoords.length > 1) {
+      _synthCourseLine = L.polyline(lineCoords, {
+        color: '#7eb8f7', weight: 2, opacity: 0.7, dashArray: '4,6',
+      }).addTo(_synthMap);
+    }
+  } catch (_) {}
+}
+
+async function loadCycMarksOnMap() {
+  if (!_synthMapReady()) return;
+  try {
+    const resp = await fetch('/api/courses/marks');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const cyc = data.cyc_marks;
+
+    for (const [key, m] of Object.entries(cyc)) {
+      const marker = L.marker([m.lat, m.lon], {
+        title: key + ': ' + m.name,
+        icon: L.divIcon({
+          className: '',
+          html: '<div style="background:#16a34a;color:#fff;border-radius:3px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;border:1px solid #fff;opacity:0.85">' + key + '</div>',
+          iconSize: [20, 20],
+          iconAnchor: [10, 10],
+        }),
+      }).addTo(_synthMap);
+      marker.bindTooltip(key + ': ' + m.name, {direction: 'top', offset: [0, -10]});
+      marker.on('click', function() { onCycMarkClick(key); });
+      _synthCycMarkers.push(marker);
+    }
+  } catch (_) {}
+}
+
+function onCycMarkClick(markKey) {
+  const courseType = document.getElementById('synth-course').value;
+  if (courseType !== 'custom') return;
+
+  const seq = _synthCustomSequence;
+  // If last mark is same, undo
+  if (seq.length && seq[seq.length - 1] === markKey) {
+    seq.pop();
+  } else {
+    seq.push(markKey);
+  }
+  const seqStr = seq.join('-');
+  document.getElementById('synth-marks').value = seqStr;
+  drawCustomCourseLine();
+}
+
+async function drawCustomCourseLine() {
+  if (!_synthMapReady()) return;
+  if (_synthCourseLine) {
+    _synthMap.removeLayer(_synthCourseLine);
+    _synthCourseLine = null;
+  }
+  if (_synthCustomSequence.length < 2) return;
+
+  try {
+    const resp = await fetch('/api/courses/marks');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const all = {...data.buoy_marks, ...data.cyc_marks};
+    const coords = [];
+    for (const key of _synthCustomSequence) {
+      const m = all[key.toUpperCase()];
+      if (m) coords.push([m.lat, m.lon]);
+    }
+    if (coords.length > 1) {
+      _synthCourseLine = L.polyline(coords, {
+        color: '#fbbf24', weight: 3, opacity: 0.8,
+      }).addTo(_synthMap);
+    }
+  } catch (_) {}
+}
+
+function _updateCourseLine() {
+  if (!_synthMapReady()) return;
+  if (_synthCourseLine) {
+    _synthMap.removeLayer(_synthCourseLine);
+    _synthCourseLine = null;
+  }
+  const coords = _synthBuoyMarkers.map(m => {
+    const pos = m.getLatLng();
+    return [pos.lat, pos.lng];
+  });
+  if (coords.length > 1) {
+    _synthCourseLine = L.polyline(coords, {
+      color: '#7eb8f7', weight: 2, opacity: 0.7, dashArray: '4,6',
+    }).addTo(_synthMap);
+  }
+}
+
+function onSynthCourseChange() {
+  const v = document.getElementById('synth-course').value;
+  document.getElementById('synth-marks-field').classList.toggle('hidden', v !== 'custom');
+  _synthCustomSequence = [];
+  document.getElementById('synth-marks').value = '';
+  updateSynthMarks();
+}
+
+async function loadCoopPeers() {
+  try {
+    const resp = await fetch('/api/co-op/peers');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const sel = document.getElementById('synth-peer');
+    const cur = sel.value;
+    while (sel.options.length > 1) sel.remove(1);
+    for (const p of (data.peers || [])) {
+      const label = (p.boat_name || p.sail_number || p.fingerprint) +
+        (p.sail_number && p.boat_name ? ' (' + p.sail_number + ')' : '');
+      const opt = new Option(label, JSON.stringify({fp: p.fingerprint, coop: p.co_op_id}));
+      sel.add(opt);
+    }
+    if (cur) sel.value = cur;
+  } catch (_) {}
+}
+
+async function runSynthesize() {
+  const btn = document.getElementById('synth-go');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  const result = document.getElementById('synth-result');
+  result.style.display = 'none';
+  try {
+    const body = {
+      course_type: document.getElementById('synth-course').value,
+      wind_direction: parseFloat(document.getElementById('synth-wind-dir').value) || 0,
+      wind_speed_low: parseFloat(document.getElementById('synth-tws-lo').value) || 8,
+      wind_speed_high: parseFloat(document.getElementById('synth-tws-hi').value) || 14,
+      laps: parseInt(document.getElementById('synth-laps').value) || 2,
+      start_lat: parseFloat(document.getElementById('synth-lat').value) || 47.63,
+      start_lon: parseFloat(document.getElementById('synth-lon').value) || -122.40,
+      seed: Math.floor(Math.random() * 100000),
+    };
+    if (Object.keys(_synthMarkOverrides).length > 0) {
+      body.mark_overrides = _synthMarkOverrides;
+    }
+    const marks = document.getElementById('synth-marks').value.trim();
+    if (marks) body.mark_sequence = marks;
+    const peerVal = document.getElementById('synth-peer').value;
+    if (peerVal) {
+      try {
+        const peer = JSON.parse(peerVal);
+        if (peer.fp) body.peer_fingerprint = peer.fp;
+        if (peer.coop) body.peer_co_op_id = peer.coop;
+      } catch (_) {}
+    }
+    const resp = await fetch('/api/sessions/synthesize', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      const dur = Math.round(data.duration_s / 60);
+      let msg = data.name + ' \u2014 ' + data.points + ' points, ' + dur + ' min';
+      if (data.mark_warnings && data.mark_warnings.length > 0) {
+        msg += '\n\u26a0\ufe0f ' + data.mark_warnings.join('\n\u26a0\ufe0f ');
+      }
+      result.textContent = msg;
+      result.style.display = '';
+      if (data.mark_warnings && data.mark_warnings.length > 0) {
+        result.style.whiteSpace = 'pre-line';
+        result.classList.add('synth-warning');
+      } else {
+        result.style.whiteSpace = '';
+        result.classList.remove('synth-warning');
+      }
+      await loadState();
+    } else {
+      const err = await resp.json().catch(() => null);
+      alert(err && err.detail ? err.detail : 'Synthesize failed');
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate';
+  }
 }
 
 loadState();

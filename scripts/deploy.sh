@@ -50,6 +50,22 @@ done
 cd "$PROJECT_DIR"
 
 # ---------------------------------------------------------------------------
+# Ensure .git/ is owned by the current user (fixes ownership conflicts when
+# the helmlog service account has run git commands in this directory)
+# ---------------------------------------------------------------------------
+REPO_OWNER="$(stat -c '%U' "$PROJECT_DIR")"
+if [[ "$(whoami)" != "$REPO_OWNER" ]]; then
+    echo "ERROR: deploy.sh must run as '$REPO_OWNER' (the repo owner), not '$(whoami)'." >&2
+    exit 1
+fi
+
+# Fix any mis-owned .git/ files (e.g. from a previous service-account git op)
+if find .git -not -user "$(whoami)" -print -quit 2>/dev/null | grep -q .; then
+    echo "==> Fixing .git/ ownership (some files owned by wrong user)..."
+    sudo chown -R "$(whoami):$(whoami)" .git/
+fi
+
+# ---------------------------------------------------------------------------
 # Resolve uv — not on PATH in non-interactive SSH sessions
 # ---------------------------------------------------------------------------
 if command -v uv &>/dev/null; then
@@ -185,6 +201,75 @@ chmod -R g+w "$PROJECT_DIR/data" 2>/dev/null || true
 
 echo "==> Restarting helmlog service..."
 sudo systemctl restart helmlog
+
+# ---------------------------------------------------------------------------
+# Bootstrap admin user on first deploy
+# If no admin user exists yet, create one so the operator can log in immediately.
+# ---------------------------------------------------------------------------
+
+# Source .env for DB_PATH, ADMIN_EMAIL, WEB_PORT
+ENV_FILE="$PROJECT_DIR/.env"
+if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$ENV_FILE" | grep -v '^#')
+    set +a
+fi
+
+DB_FILE="$PROJECT_DIR/${DB_PATH:-data/logger.db}"
+
+# Wait for helmlog to start and create/migrate the DB
+echo "==> Checking for admin user..."
+for _i in {1..10}; do
+    [[ -f "$DB_FILE" ]] && break
+    sleep 1
+done
+
+ADMIN_COUNT="0"
+if [[ -f "$DB_FILE" ]]; then
+    ADMIN_COUNT=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM users WHERE role='admin';" 2>/dev/null || echo "0")
+fi
+
+if [[ "$ADMIN_COUNT" -eq 0 ]]; then
+    echo ""
+    echo "    No admin user found — creating one for first-time login."
+
+    ADMIN_EMAIL="${ADMIN_EMAIL:-}"
+    if [[ -z "$ADMIN_EMAIL" ]]; then
+        read -rp "    Admin email address: " ADMIN_EMAIL
+    else
+        echo "    Using ADMIN_EMAIL from .env: ${ADMIN_EMAIL}"
+    fi
+
+    if [[ -n "$ADMIN_EMAIL" ]]; then
+        echo ""
+        ADD_USER_OUTPUT=$("$UV_BIN" run --project "$PROJECT_DIR" helmlog add-user \
+            --email "$ADMIN_EMAIL" --role admin 2>&1) || true
+        LOGIN_URL=$(echo "$ADD_USER_OUTPUT" | grep -oE 'http[s]?://[^ ]+/login\?token=[^ ]+' | head -1)
+
+        echo "╔══════════════════════════════════════════════════╗"
+        echo "║  Admin user created!                             ║"
+        echo "╠══════════════════════════════════════════════════╣"
+        echo "║                                                  ║"
+        echo "  Email: ${ADMIN_EMAIL}"
+        echo "║                                                  ║"
+        if [[ -n "$LOGIN_URL" ]]; then
+            echo "  Login URL (paste into browser):"
+            echo "  ${LOGIN_URL}"
+        else
+            echo "  (Could not extract login URL — check output below)"
+            echo "$ADD_USER_OUTPUT"
+        fi
+        echo "║                                                  ║"
+        echo "╚══════════════════════════════════════════════════╝"
+        echo ""
+    else
+        echo "    Skipped — no email provided."
+        echo "    Create one later: helmlog add-user --email you@example.com --role admin"
+    fi
+else
+    echo "    Admin user exists — skipping bootstrap."
+fi
 
 echo ""
 echo "==> Deploy complete."
