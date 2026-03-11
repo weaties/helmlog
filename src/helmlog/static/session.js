@@ -787,12 +787,26 @@ async function loadPolar() {
       avgDelta = withDelta.reduce((s, c) => s + c.delta * c.samples, 0) / totalWeight;
     }
     const sign = avgDelta >= 0 ? '+' : '';
-    document.getElementById('polar-summary').textContent =
-      sign + avgDelta.toFixed(2) + ' kt weighted avg vs baseline \u00b7 '
+    const summary = document.getElementById('polar-summary');
+    summary.innerHTML =
+      sign + avgDelta.toFixed(2) + ' kt weighted avg vs baseline &middot; '
       + above + ' bins above, ' + below + ' below'
-      + (noBaseline ? ' \u00b7 ' + noBaseline + ' bins no baseline' : '')
-      + ' \u00b7 ' + data.session_sample_count + ' samples';
+      + (noBaseline ? ' &middot; ' + noBaseline + ' bins no baseline' : '')
+      + ' &middot; ' + data.session_sample_count + ' samples'
+      + ' &middot; <button onclick="rebuildPolarBaseline()" style="background:none;border:none;color:#7eb8f7;cursor:pointer;font-size:.78rem;text-decoration:underline;padding:0">Rebuild baseline</button>';
   } catch (e) { /* non-fatal */ }
+}
+
+async function rebuildPolarBaseline() {
+  const summary = document.getElementById('polar-summary');
+  summary.textContent = 'Rebuilding baseline\u2026';
+  try {
+    const r = await fetch('/api/polar/rebuild', {method: 'POST'});
+    if (!r.ok) { summary.textContent = 'Rebuild failed: ' + r.status; return; }
+    const d = await r.json();
+    summary.textContent = 'Baseline rebuilt: ' + d.bins + ' bins. Reloading\u2026';
+    await loadPolar();
+  } catch (e) { summary.textContent = 'Rebuild failed'; }
 }
 
 function setPolarView(view) {

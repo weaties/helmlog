@@ -1896,6 +1896,21 @@ def create_app(
         )
 
     # ------------------------------------------------------------------
+    # /api/polar/rebuild
+    # ------------------------------------------------------------------
+
+    @app.post("/api/polar/rebuild", status_code=200)
+    async def api_polar_rebuild(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        import helmlog.polar as _polar
+
+        count = await _polar.build_polar_baseline(storage)
+        await _audit(request, "polar.rebuild", detail=f"{count} bins", user=_user)
+        return JSONResponse({"bins": count})
+
+    # ------------------------------------------------------------------
     # /api/sessions  (history browser)
     # ------------------------------------------------------------------
 
