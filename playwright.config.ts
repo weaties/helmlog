@@ -48,8 +48,7 @@ export default defineConfig({
 
   /* Start the HelmLog dev server before running tests */
   webServer: {
-    command:
-      "AUTH_DISABLED=true DB_PATH=:memory: uv run uvicorn helmlog.web:create_app --factory --host 0.0.0.0 --port 8000",
+    command: "uv run python tests/e2e/serve.py",
     url: "http://localhost:8000",
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,
