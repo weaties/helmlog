@@ -239,3 +239,158 @@ async def test_branches_api(storage: Storage) -> None:
     data = resp.json()
     assert "branches" in data
     assert isinstance(data["branches"], list)
+
+
+# ------------------------------------------------------------------
+# Promotion pipeline & history
+# ------------------------------------------------------------------
+
+
+class TestGetPipelineStatus:
+    @pytest.mark.asyncio
+    async def test_returns_branches_and_gaps(self) -> None:
+        """get_pipeline_status returns branches dict and gaps dict."""
+        from helmlog.deploy import get_pipeline_status
+
+        result = await get_pipeline_status()
+        assert "branches" in result
+        assert "gaps" in result
+        # main should always exist in our test repo
+        assert "main" in result["branches"]
+        assert "main_ahead_of_stage" in result["gaps"]
+        assert "stage_ahead_of_live" in result["gaps"]
+
+    @pytest.mark.asyncio
+    async def test_branch_info_has_expected_keys(self) -> None:
+        """Each branch entry should have sha, short_sha, message, timestamp."""
+        from helmlog.deploy import get_pipeline_status
+
+        result = await get_pipeline_status()
+        main = result["branches"]["main"]
+        if main is not None:
+            assert "sha" in main
+            assert "short_sha" in main
+            assert "message" in main
+            assert "timestamp" in main
+            assert len(main["short_sha"]) == 7
+
+
+class TestGetPromotionHistory:
+    @pytest.mark.asyncio
+    async def test_returns_list(self) -> None:
+        """get_promotion_history returns a list (may be empty if no tags)."""
+        from helmlog.deploy import get_promotion_history
+
+        result = await get_promotion_history()
+        assert isinstance(result, list)
+
+    @pytest.mark.asyncio
+    async def test_filter_by_tier(self) -> None:
+        """Filtering by tier should only return matching entries."""
+        from helmlog.deploy import get_promotion_history
+
+        result = await get_promotion_history(tier="stage")
+        for entry in result:
+            assert entry["tier"] == "stage"
+
+    @pytest.mark.asyncio
+    async def test_entry_structure(self) -> None:
+        """Each promotion entry should have expected keys."""
+        from helmlog.deploy import get_promotion_history
+
+        result = await get_promotion_history()
+        for entry in result:
+            assert "tag" in entry
+            assert "tier" in entry
+            assert "timestamp" in entry
+            assert "sha" in entry
+            assert "short_sha" in entry
+            assert entry["tier"] in ("stage", "live")
+
+
+class TestGetPendingChanges:
+    @pytest.mark.asyncio
+    async def test_returns_list_of_commits(self) -> None:
+        """get_pending_changes returns a list of commit dicts."""
+        from helmlog.deploy import get_pending_changes
+
+        result = await get_pending_changes("main", "main")
+        assert isinstance(result, list)
+        # Same branch should have no pending changes
+        assert len(result) == 0
+
+    @pytest.mark.asyncio
+    async def test_invalid_branch_returns_empty(self) -> None:
+        """Non-existent branch should return empty list gracefully."""
+        from helmlog.deploy import get_pending_changes
+
+        result = await get_pending_changes("nonexistent-xyz", "main")
+        assert isinstance(result, list)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_api(storage: Storage) -> None:
+    """GET /api/deployment/pipeline returns pipeline status."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/deployment/pipeline")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "branches" in data
+    assert "gaps" in data
+
+
+@pytest.mark.asyncio
+async def test_promotions_api(storage: Storage) -> None:
+    """GET /api/deployment/promotions returns promotion list."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/deployment/promotions")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "promotions" in data
+    assert isinstance(data["promotions"], list)
+
+
+@pytest.mark.asyncio
+async def test_promotions_api_with_tier_filter(storage: Storage) -> None:
+    """GET /api/deployment/promotions?tier=stage filters correctly."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/deployment/promotions?tier=stage")
+    assert resp.status_code == 200
+    data = resp.json()
+    for p in data["promotions"]:
+        assert p["tier"] == "stage"
+
+
+@pytest.mark.asyncio
+async def test_pending_api(storage: Storage) -> None:
+    """GET /api/deployment/pending returns commits."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/deployment/pending?from_tier=main&to_tier=main")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "commits" in data
+    assert "count" in data
+    assert data["count"] == 0  # same branch = no pending
+
+
+@pytest.mark.asyncio
+async def test_pending_api_invalid_tier(storage: Storage) -> None:
+    """GET /api/deployment/pending rejects invalid tier names."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/deployment/pending?from_tier=invalid&to_tier=main")
+    assert resp.status_code == 400

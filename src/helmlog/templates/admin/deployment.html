@@ -34,6 +34,23 @@ table.history .mono{font-family:monospace;font-size:.78rem}
 select.cfg-input,input.cfg-input{background:#0b1121;border:1px solid #374151;border-radius:4px;color:#e8eaf0;padding:4px 8px;font-size:.82rem;font-family:monospace}
 select.cfg-input{min-width:160px}
 .mode-desc{font-size:.72rem;color:#8892a4;margin-top:2px}
+.tier-row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px}
+.tier-card{flex:1;min-width:200px;background:#0b1121;border:1px solid #374151;border-radius:8px;padding:12px}
+.tier-card h4{margin:0 0 6px;font-size:.82rem;color:#8892a4;text-transform:uppercase;letter-spacing:.06em;display:flex;align-items:center;gap:6px}
+.tier-sha{font-family:monospace;color:#60a5fa;font-size:.82rem}
+.tier-msg{color:#e8eaf0;font-size:.8rem;margin-top:4px;word-break:break-word}
+.tier-ts{color:#8892a4;font-size:.72rem;margin-top:2px}
+.gap-pill{display:inline-block;font-size:.7rem;padding:2px 8px;border-radius:10px;font-weight:600}
+.gap-ok{background:#0d2818;color:#4ade80}
+.gap-warn{background:#2a1a00;color:#fbbf24}
+.gap-err{background:#1f1215;color:#f87171}
+.promo-filter{display:flex;gap:6px;margin-bottom:8px}
+.promo-filter button{padding:4px 12px;font-size:.75rem;border:1px solid #374151;border-radius:4px;background:#1e293b;color:#8892a4;cursor:pointer}
+.promo-filter button.active{background:#2563eb;color:#fff;border-color:#2563eb}
+.pending-toggle{cursor:pointer;color:#60a5fa;font-size:.82rem;margin-top:4px;display:inline-block}
+.pending-toggle:hover{text-decoration:underline}
+.pending-list{display:none;margin-top:6px;max-height:300px;overflow-y:auto}
+.pending-list.open{display:block}
 </style>
 {% endblock %}
 {% block content %}
@@ -71,6 +88,22 @@ select.cfg-input{min-width:160px}
       <span id="config-status" style="font-size:.8rem"></span>
     </div>
   </div>
+</div>
+
+<div class="card">
+  <div class="label">Promotion Pipeline</div>
+  <div id="pipeline">Loading...</div>
+  <div id="pending-sections" style="margin-top:12px"></div>
+</div>
+
+<div class="card">
+  <div class="label">Promotion History</div>
+  <div class="promo-filter" id="promo-filter">
+    <button class="active" onclick="filterPromos('all',this)">All</button>
+    <button onclick="filterPromos('stage',this)">Stage</button>
+    <button onclick="filterPromos('live',this)">Live</button>
+  </div>
+  <div id="promotions">Loading...</div>
 </div>
 
 <div class="card">
@@ -241,7 +274,95 @@ async function deploy(){
 }
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')}
 function showStatus(msg,cls){const el=document.getElementById('deploy-status');el.textContent=msg;el.className='status '+cls;if(cls==='ok')setTimeout(()=>{el.className='status'},5000)}
-async function init(){await loadStatus();loadBranches();loadChangelog();loadHistory()}
+function gapClass(n){if(n===0) return 'gap-ok';if(n<=5) return 'gap-warn';return 'gap-err'}
+function gapLabel(n,from,to){if(n===0) return '<span class="gap-pill gap-ok">up to date</span>';return '<span class="gap-pill '+gapClass(n)+'">'+n+' commit'+(n!==1?'s':'')+' ahead</span>'}
+async function loadPipeline(){
+  const r=await fetch('/api/deployment/pipeline');
+  if(!r.ok){document.getElementById('pipeline').textContent='Failed to load';return}
+  const data=await r.json();
+  const b=data.branches;
+  let html='<div class="tier-row">';
+  for(const tier of ['main','stage','live']){
+    const info=b[tier];
+    html+='<div class="tier-card"><h4>'+esc(tier);
+    if(tier==='main'&&data.gaps.main_ahead_of_stage!==null){html+=' '+gapLabel(data.gaps.main_ahead_of_stage,'main','stage')}
+    if(tier==='stage'&&data.gaps.stage_ahead_of_live!==null){html+=' '+gapLabel(data.gaps.stage_ahead_of_live,'stage','live')}
+    if(tier==='live'){html+=' <span class="gap-pill gap-ok">production</span>'}
+    html+='</h4>';
+    if(info){
+      html+='<div class="tier-sha">'+esc(info.short_sha)+'</div>';
+      html+='<div class="tier-msg">'+esc(info.message)+'</div>';
+      html+='<div class="tier-ts">'+esc(info.timestamp).slice(0,19)+'</div>';
+    } else {
+      html+='<div class="tier-ts">branch not found</div>';
+    }
+    html+='</div>';
+  }
+  html+='</div>';
+  document.getElementById('pipeline').innerHTML=html;
+  // Pending changes sections
+  let pending='';
+  const transitions=[{from:'stage',to:'main',label:'main \u2192 stage'},{from:'live',to:'stage',label:'stage \u2192 live'}];
+  for(const t of transitions){
+    const gap=t.from==='stage'?data.gaps.main_ahead_of_stage:data.gaps.stage_ahead_of_live;
+    if(gap===null||gap===0) continue;
+    pending+='<div><span class="pending-toggle" onclick="togglePending(this,\''+t.from+'\',\''+t.to+'\')">'+esc(t.label)+': '+gap+' pending commit'+(gap!==1?'s':'')+' \u25B6</span>';
+    pending+='<div class="pending-list" data-from="'+esc(t.from)+'" data-to="'+esc(t.to)+'"></div></div>';
+  }
+  document.getElementById('pending-sections').innerHTML=pending;
+}
+async function togglePending(el,from,to){
+  const list=el.nextElementSibling;
+  if(list.classList.contains('open')){list.classList.remove('open');el.textContent=el.textContent.replace('\u25BC','\u25B6');return}
+  if(!list.innerHTML){
+    list.innerHTML='Loading...';
+    const r=await fetch('/api/deployment/pending?from_tier='+encodeURIComponent(from)+'&to_tier='+encodeURIComponent(to));
+    if(!r.ok){list.innerHTML='Failed to load';list.classList.add('open');return}
+    const data=await r.json();
+    if(!data.commits.length){list.innerHTML='<div style="font-size:.8rem;color:#8892a4">No pending commits</div>';list.classList.add('open');return}
+    let html='<div class="changelog">';
+    for(const c of data.commits){
+      html+='<div class="commit"><span class="sha">'+esc(c.sha)+'</span><span class="msg">'+esc(c.message)+'</span>';
+      html+='<div class="meta">'+esc(c.author)+' \u00B7 '+esc(c.timestamp).slice(0,19)+'</div></div>';
+    }
+    html+='</div>';
+    list.innerHTML=html;
+  }
+  list.classList.add('open');
+  el.textContent=el.textContent.replace('\u25B6','\u25BC');
+}
+let promoData=[];
+async function loadPromotions(tier){
+  const url='/api/deployment/promotions'+(tier&&tier!=='all'?'?tier='+encodeURIComponent(tier):'');
+  const r=await fetch(url);
+  if(!r.ok){document.getElementById('promotions').textContent='Failed to load';return}
+  const data=await r.json();
+  promoData=data.promotions;
+  renderPromotions(promoData);
+}
+function renderPromotions(promos){
+  const el=document.getElementById('promotions');
+  if(!promos.length){el.textContent='No promotion tags found';return}
+  let html='<table class="history"><thead><tr><th>Tier</th><th>Time</th><th>SHA</th><th>Commits</th><th>Message</th><th>Triggered by</th></tr></thead><tbody>';
+  for(const p of promos){
+    const cls=p.tier==='live'?'badge-ok':'badge-mode';
+    html+='<tr><td><span class="badge '+cls+'">'+esc(p.tier)+'</span></td>';
+    html+='<td>'+esc(p.timestamp).slice(0,19)+'</td>';
+    html+='<td class="mono">'+esc(p.short_sha)+'</td>';
+    html+='<td>'+(p.commit_count!==null?p.commit_count+(p.from_sha?' <span style="color:#8892a4;font-size:.72rem">from '+esc(p.from_sha)+'</span>':''):'\u2014')+'</td>';
+    html+='<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(p.message)+'</td>';
+    html+='<td>'+(p.triggered_by?esc(p.triggered_by):'\u2014')+'</td></tr>';
+  }
+  html+='</tbody></table>';
+  el.innerHTML=html;
+}
+function filterPromos(tier,btn){
+  document.querySelectorAll('#promo-filter button').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  if(tier==='all'){renderPromotions(promoData)}
+  else{renderPromotions(promoData.filter(p=>p.tier===tier))}
+}
+async function init(){await loadStatus();loadBranches();loadChangelog();loadHistory();loadPipeline();loadPromotions()}
 init();
 </script>
 {% endblock %}
