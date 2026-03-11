@@ -141,7 +141,15 @@ async function loadStatus(){
   updateModeDesc();
   const actions=document.getElementById('deploy-actions');
   const badge=document.getElementById('behind-badge');
-  if(s.restart_needed && s.commits_behind===0){
+  if(s.branch_mismatch){
+    const label='on '+esc(s.running.branch)+', tracking '+esc(s.branch);
+    badge.innerHTML='<span class="badge badge-warn">'+label+'</span>';
+    actions.style.display='flex';
+    document.getElementById('btn-deploy').disabled=false;
+    document.getElementById('btn-deploy').textContent='Switch to '+s.branch;
+    const navDeploy=document.getElementById('nav-deploy');
+    if(navDeploy) navDeploy.textContent='Deploy (\u2194)';
+  } else if(s.restart_needed && s.commits_behind===0){
     badge.innerHTML='<span class="badge badge-warn">Restart needed</span>';
     actions.style.display='flex';
     document.getElementById('btn-deploy').disabled=false;
@@ -249,9 +257,14 @@ async function loadHistory(){
   el.innerHTML=html;
 }
 async function deploy(){
-  const msg=statusData.commits_behind>0
-    ?'Deploy latest from '+statusData.branch+'?\n\n'+statusData.commits_behind+' new commit(s) will be applied.\nThe service will restart.'
-    :'Restart the service to load code already on disk?\n\nNo new commits to pull — this just restarts the running process.';
+  let msg;
+  if(statusData.branch_mismatch){
+    msg='Switch from '+statusData.running.branch+' to '+statusData.branch+'?\n\nThe service will checkout '+statusData.branch+', pull latest, and restart.';
+  } else if(statusData.commits_behind>0){
+    msg='Deploy latest from '+statusData.branch+'?\n\n'+statusData.commits_behind+' new commit(s) will be applied.\nThe service will restart.';
+  } else {
+    msg='Restart the service to load code already on disk?\n\nNo new commits to pull — this just restarts the running process.';
+  }
   if(!confirm(msg)) return;
   const btn=document.getElementById('btn-deploy');
   btn.disabled=true;btn.textContent='Deploying...';

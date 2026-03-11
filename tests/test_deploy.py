@@ -180,6 +180,23 @@ async def test_deployment_api_status(storage: Storage) -> None:
     assert "mode" in data
     assert "commits_behind" in data
     assert "update_available" in data
+    assert "branch_mismatch" in data
+
+
+@pytest.mark.asyncio
+async def test_deployment_status_branch_mismatch(storage: Storage) -> None:
+    """Status shows branch_mismatch when tracked branch differs from checked-out branch."""
+    await storage.set_setting("DEPLOY_BRANCH", "live")
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/deployment/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    # We're on feature/257-promotion-history, tracking "live" — should mismatch
+    assert data["branch_mismatch"] is True
+    assert data["update_available"] is True
 
 
 @pytest.mark.asyncio

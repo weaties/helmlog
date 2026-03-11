@@ -3480,6 +3480,8 @@ def create_app(
         last = await storage.last_deployment()
         # Detect if on-disk code differs from what the running process loaded
         restart_needed = bool(_STARTUP_SHA and running["sha"] and running["sha"] != _STARTUP_SHA)
+        # Detect if checked-out branch differs from tracked branch
+        branch_mismatch = bool(running["branch"] and running["branch"] != config.branch)
         return JSONResponse(
             {
                 "running": {**running, "startup_sha": _STARTUP_SHA},
@@ -3491,8 +3493,9 @@ def create_app(
                     "end": config.window_end,
                 },
                 "commits_behind": behind,
-                "update_available": behind > 0 or restart_needed,
+                "update_available": behind > 0 or restart_needed or branch_mismatch,
                 "restart_needed": restart_needed,
+                "branch_mismatch": branch_mismatch,
                 "last_deploy": last,
             }
         )
