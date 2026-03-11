@@ -318,6 +318,173 @@ def in_deploy_window(config: DeployConfig) -> bool:
     return hour >= config.window_start or hour < config.window_end
 
 
+async def get_pipeline_status() -> dict[str, Any]:
+    """Return the current HEAD of main, stage, and live with commit gap counts.
+
+    Uses remote refs (origin/*) so data is current after a fetch.  Returns a
+    dict with ``branches`` (per-branch HEAD info) and ``gaps`` (commit counts
+    between tiers).
+    """
+
+    def _pipeline() -> dict[str, Any]:
+        # Ensure we have fresh remote refs
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            _git(["fetch", "--prune", "origin"], write=True)
+
+        tiers = ["main", "stage", "live"]
+        branches: dict[str, dict[str, str] | None] = {}
+        for tier in tiers:
+            try:
+                sha = _git(["rev-parse", f"origin/{tier}"])
+                short = _git(["rev-parse", "--short=7", f"origin/{tier}"])
+                msg = _git(["log", "-1", "--format=%s", f"origin/{tier}"])
+                ts = _git(["log", "-1", "--format=%cI", f"origin/{tier}"])
+                branches[tier] = {"sha": sha, "short_sha": short, "message": msg, "timestamp": ts}
+            except Exception:  # noqa: BLE001
+                branches[tier] = None
+
+        gaps: dict[str, int | None] = {}
+        for ahead, behind in [("main", "stage"), ("stage", "live")]:
+            if branches[ahead] and branches[behind]:
+                try:
+                    count = int(_git(["rev-list", "--count", f"origin/{behind}..origin/{ahead}"]))
+                    gaps[f"{ahead}_ahead_of_{behind}"] = count
+                except Exception:  # noqa: BLE001
+                    gaps[f"{ahead}_ahead_of_{behind}"] = None
+            else:
+                gaps[f"{ahead}_ahead_of_{behind}"] = None
+
+        return {"branches": branches, "gaps": gaps}
+
+    return await asyncio.to_thread(_pipeline)
+
+
+async def get_promotion_history(tier: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+    """Return recent promotion tags (``stage/*`` and ``live/*``) with metadata.
+
+    Each entry includes the tag name, promotion timestamp, target SHA, commit
+    message, and — when consecutive tags exist — the commit range and count.
+    """
+
+    def _history() -> list[dict[str, Any]]:
+        patterns: list[str] = []
+        if tier in (None, "all", "stage"):
+            patterns.extend(["--list", "stage/*"])
+        if tier in (None, "all", "live"):
+            patterns.extend(["--list", "live/*"])
+        if not patterns:
+            return []
+
+        try:
+            raw = _git(["tag", *patterns, "--sort=-creatordate"])
+        except Exception:  # noqa: BLE001
+            return []
+
+        if not raw:
+            return []
+
+        tags = raw.splitlines()[:limit]
+        result: list[dict[str, Any]] = []
+
+        for tag_name in tags:
+            tag_name = tag_name.strip()
+            if not tag_name:
+                continue
+            entry: dict[str, Any] = {"tag": tag_name}
+            # Determine tier from prefix
+            entry["tier"] = "stage" if tag_name.startswith("stage/") else "live"
+            # Extract timestamp from tag name (e.g. stage/2026-03-10T22.37.30Z)
+            ts_part = tag_name.split("/", 1)[1] if "/" in tag_name else ""
+            entry["timestamp"] = ts_part.replace(".", ":").rstrip("Z") + "Z" if ts_part else ""
+
+            # Get the commit the tag points to
+            try:
+                sha = _git(["rev-list", "-1", tag_name])
+                short = _git(["rev-parse", "--short=7", sha])
+                msg = _git(["log", "-1", "--format=%s", sha])
+                entry["sha"] = sha
+                entry["short_sha"] = short
+                entry["message"] = msg
+            except Exception:  # noqa: BLE001
+                entry["sha"] = ""
+                entry["short_sha"] = ""
+                entry["message"] = ""
+
+            # Try to get tagger info from annotated tags
+            try:
+                tagger = _git(["tag", "-l", tag_name, "--format=%(taggername)"])
+                entry["triggered_by"] = tagger if tagger else ""
+            except Exception:  # noqa: BLE001
+                entry["triggered_by"] = ""
+
+            result.append(entry)
+
+        # Add commit range between consecutive same-tier tags
+        by_tier: dict[str, list[dict[str, Any]]] = {}
+        for entry in result:
+            by_tier.setdefault(entry["tier"], []).append(entry)
+
+        for tier_entries in by_tier.values():
+            for i, entry in enumerate(tier_entries):
+                if i + 1 < len(tier_entries) and entry["sha"] and tier_entries[i + 1]["sha"]:
+                    prev_sha = tier_entries[i + 1]["sha"]
+                    entry["from_sha"] = prev_sha[:7]
+                    try:
+                        count = int(_git(["rev-list", "--count", f"{prev_sha}..{entry['sha']}"]))
+                        entry["commit_count"] = count
+                    except Exception:  # noqa: BLE001
+                        entry["commit_count"] = None
+                else:
+                    entry["from_sha"] = ""
+                    entry["commit_count"] = None
+
+        return result
+
+    return await asyncio.to_thread(_history)
+
+
+async def get_pending_changes(from_tier: str, to_tier: str) -> list[dict[str, str]]:
+    """Return commits on *to_tier* not yet on *from_tier*.
+
+    For example ``get_pending_changes("stage", "main")`` returns commits on
+    ``origin/main`` that are not on ``origin/stage``.
+    """
+
+    def _pending() -> list[dict[str, str]]:
+        try:
+            raw = _git(
+                [
+                    "log",
+                    f"origin/{from_tier}..origin/{to_tier}",
+                    "--format=%H|%s|%an|%cI",
+                    "--no-merges",
+                ]
+            )
+        except Exception:  # noqa: BLE001
+            return []
+
+        if not raw:
+            return []
+
+        commits: list[dict[str, str]] = []
+        for line in raw.splitlines():
+            parts = line.split("|", 3)
+            if len(parts) == 4:
+                commits.append(
+                    {
+                        "sha": parts[0][:7],
+                        "message": parts[1],
+                        "author": parts[2],
+                        "timestamp": parts[3],
+                    }
+                )
+        return commits
+
+    return await asyncio.to_thread(_pending)
+
+
 async def execute_deploy(config: DeployConfig) -> dict[str, Any]:
     """Execute a deployment: git pull, uv sync, restart service.
 
