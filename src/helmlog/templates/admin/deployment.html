@@ -288,7 +288,7 @@ async function deploy(){
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')}
 function showStatus(msg,cls){const el=document.getElementById('deploy-status');el.textContent=msg;el.className='status '+cls;if(cls==='ok')setTimeout(()=>{el.className='status'},5000)}
 function gapClass(n){if(n===0) return 'gap-ok';if(n<=5) return 'gap-warn';return 'gap-err'}
-function gapLabel(n,from,to){if(n===0) return '<span class="gap-pill gap-ok">up to date</span>';return '<span class="gap-pill '+gapClass(n)+'">'+n+' commit'+(n!==1?'s':'')+' ahead</span>'}
+function gapLabel(n,target){if(n===0) return '<span class="gap-pill gap-ok">\u2192 '+esc(target)+' up to date</span>';return '<span class="gap-pill '+gapClass(n)+'">'+n+' commit'+(n!==1?'s':'')+' ahead of '+esc(target)+'</span>'}
 async function loadPipeline(){
   const r=await fetch('/api/deployment/pipeline');
   if(!r.ok){document.getElementById('pipeline').textContent='Failed to load';return}
@@ -298,8 +298,8 @@ async function loadPipeline(){
   for(const tier of ['main','stage','live']){
     const info=b[tier];
     html+='<div class="tier-card"><h4>'+esc(tier);
-    if(tier==='main'&&data.gaps.main_ahead_of_stage!==null){html+=' '+gapLabel(data.gaps.main_ahead_of_stage,'main','stage')}
-    if(tier==='stage'&&data.gaps.stage_ahead_of_live!==null){html+=' '+gapLabel(data.gaps.stage_ahead_of_live,'stage','live')}
+    if(tier==='main'&&data.gaps.main_ahead_of_stage!==null){html+=' '+gapLabel(data.gaps.main_ahead_of_stage,'stage')}
+    if(tier==='stage'&&data.gaps.stage_ahead_of_live!==null){html+=' '+gapLabel(data.gaps.stage_ahead_of_live,'live')}
     if(tier==='live'){html+=' <span class="gap-pill gap-ok">production</span>'}
     html+='</h4>';
     if(info){
