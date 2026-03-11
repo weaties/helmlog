@@ -190,6 +190,21 @@ _SETTINGS_DEFS: tuple[_SettingDef, ...] = (
         default="2",
         help_text="How often to collect Pi health metrics for the dashboard (1\u2013300 seconds).",
     ),
+    _SettingDef(
+        key="NETWORK_AUTO_SWITCH",
+        label="Auto-switch WLAN for races",
+        input_type="select",
+        default="false",
+        options=("true", "false"),
+        help_text="Automatically switch WLAN to camera Wi-Fi on race start and revert on race end.",
+    ),
+    _SettingDef(
+        key="NETWORK_DEFAULT_PROFILE",
+        label="Default WLAN profile ID",
+        input_type="text",
+        default="",
+        help_text="WLAN profile ID to revert to after a race ends (used with auto-switch).",
+    ),
 )
 
 _SETTINGS_BY_KEY: dict[str, _SettingDef] = {s.key: s for s in _SETTINGS_DEFS}
@@ -1068,6 +1083,174 @@ def create_app(
         await _audit(request, "camera.delete", detail=camera_name, user=_user)
 
     # ------------------------------------------------------------------
+    # /admin/network (#256)
+    # ------------------------------------------------------------------
+
+    @app.get("/admin/network", response_class=HTMLResponse, include_in_schema=False)
+    async def admin_network_page(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> Response:
+        return _templates.TemplateResponse(
+            request, "admin/network.html", _tpl_ctx(request, "/admin/network")
+        )
+
+    @app.get("/api/network/status")
+    async def api_network_status(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return WLAN status, interface list, and internet connectivity."""
+        import helmlog.network as net_mod
+
+        wlan_status, interfaces, internet = await asyncio.gather(
+            net_mod.get_wlan_status(),
+            net_mod.list_interfaces(),
+            net_mod.check_internet(),
+        )
+        return JSONResponse(
+            {
+                "wlan": {
+                    "connected": wlan_status.connected,
+                    "ssid": wlan_status.ssid,
+                    "ip_address": wlan_status.ip_address,
+                    "signal_strength": wlan_status.signal_strength,
+                },
+                "interfaces": [
+                    {"name": i.name, "state": i.state, "ip_address": i.ip_address}
+                    for i in interfaces
+                ],
+                "internet": internet,
+            }
+        )
+
+    @app.get("/api/network/profiles")
+    async def api_list_network_profiles(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """List all WLAN profiles (camera + non-camera)."""
+        camera_rows = await storage.list_cameras()
+        camera_profiles = [
+            {
+                "id": f"camera:{r['name']}",
+                "name": f"{r['name']} \u2014 {r['wifi_ssid']}",
+                "ssid": r["wifi_ssid"],
+                "source": "camera",
+                "is_default": False,
+            }
+            for r in camera_rows
+            if r.get("wifi_ssid")
+        ]
+        wlan_rows = await storage.list_wlan_profiles()
+        wlan_profiles = [
+            {
+                "id": f"profile:{r['id']}",
+                "name": r["name"],
+                "ssid": r["ssid"],
+                "source": "saved",
+                "is_default": bool(r["is_default"]),
+            }
+            for r in wlan_rows
+        ]
+        return JSONResponse(camera_profiles + wlan_profiles)
+
+    @app.post("/api/network/profiles", status_code=201)
+    async def api_add_network_profile(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Add a non-camera WLAN profile."""
+        body = await request.json()
+        name = body.get("name", "").strip()
+        ssid = body.get("ssid", "").strip()
+        password = body.get("password", "").strip() or None
+        is_default = bool(body.get("is_default", False))
+        if not name or not ssid:
+            raise HTTPException(422, detail="name and ssid are required")
+        pid = await storage.add_wlan_profile(name, ssid, password, is_default)
+        await _audit(request, "network.profile.add", detail=name, user=_user)
+        return JSONResponse({"id": pid, "name": name, "ssid": ssid}, status_code=201)
+
+    @app.put("/api/network/profiles/{profile_id}")
+    async def api_update_network_profile(
+        request: Request,
+        profile_id: int,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Update a non-camera WLAN profile."""
+        body = await request.json()
+        name = body.get("name", "").strip()
+        ssid = body.get("ssid", "").strip()
+        password = body.get("password", "").strip() or None
+        is_default = bool(body.get("is_default", False))
+        if not name or not ssid:
+            raise HTTPException(422, detail="name and ssid are required")
+        ok = await storage.update_wlan_profile(profile_id, name, ssid, password, is_default)
+        if not ok:
+            raise HTTPException(404, detail="Profile not found")
+        await _audit(request, "network.profile.update", detail=name, user=_user)
+        return JSONResponse({"id": profile_id, "name": name, "ssid": ssid})
+
+    @app.delete("/api/network/profiles/{profile_id}", status_code=204)
+    async def api_delete_network_profile(
+        request: Request,
+        profile_id: int,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> None:
+        """Delete a non-camera WLAN profile."""
+        ok = await storage.delete_wlan_profile(profile_id)
+        if not ok:
+            raise HTTPException(404, detail="Profile not found")
+        await _audit(request, "network.profile.delete", detail=str(profile_id), user=_user)
+
+    @app.post("/api/network/connect")
+    async def api_network_connect(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Connect to a WLAN profile (camera or saved)."""
+        import helmlog.network as net_mod
+
+        body = await request.json()
+        profile_id = body.get("profile_id", "")
+
+        if str(profile_id).startswith("camera:"):
+            camera_name = str(profile_id).removeprefix("camera:")
+            cams = await storage.list_cameras()
+            cam = next((c for c in cams if c["name"] == camera_name), None)
+            if not cam or not cam.get("wifi_ssid"):
+                raise HTTPException(404, detail="Camera network not found")
+            result = await net_mod.connect_to_ssid(cam["wifi_ssid"], cam.get("wifi_password"))
+        elif str(profile_id).startswith("profile:"):
+            pid = int(str(profile_id).removeprefix("profile:"))
+            profile = await storage.get_wlan_profile(pid)
+            if not profile:
+                raise HTTPException(404, detail="Profile not found")
+            result = await net_mod.connect_to_ssid(profile["ssid"], profile.get("password"))
+        else:
+            raise HTTPException(422, detail="Invalid profile_id format")
+
+        await _audit(request, "network.connect", detail=str(profile_id), user=_user)
+        return JSONResponse(
+            {
+                "success": result.success,
+                "ssid": result.ssid,
+                "error": result.error,
+            }
+        )
+
+    @app.post("/api/network/disconnect")
+    async def api_network_disconnect(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Disconnect WLAN (Ethernet-only mode)."""
+        import helmlog.network as net_mod
+
+        result = await net_mod.disconnect_wlan()
+        await _audit(request, "network.disconnect", user=_user)
+        return JSONResponse({"success": result.success, "error": result.error})
+
+    # ------------------------------------------------------------------
     # /api/state
     # ------------------------------------------------------------------
 
@@ -1366,7 +1549,18 @@ def create_app(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Camera start_all failed: {}", exc)
 
+        async def _network_auto_switch_start() -> None:
+            import helmlog.network as net_mod
+
+            try:
+                result = await net_mod.auto_switch_for_race_start(storage)
+                if result and not result.success:
+                    logger.warning("WLAN auto-switch failed: {}", result.error)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("WLAN auto-switch error: {}", exc)
+
         asyncio.ensure_future(_start_cameras(race.id))
+        asyncio.ensure_future(_network_auto_switch_start())
         await _audit(request, "race.start", detail=race.name, user=_user)
         return JSONResponse(
             {
@@ -1411,7 +1605,18 @@ def create_app(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Camera stop_all failed: {}", exc)
 
+        async def _network_auto_switch_end() -> None:
+            import helmlog.network as net_mod
+
+            try:
+                result = await net_mod.auto_switch_for_race_end(storage)
+                if result and not result.success:
+                    logger.warning("WLAN auto-revert failed: {}", result.error)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("WLAN auto-revert error: {}", exc)
+
         asyncio.ensure_future(_stop_cameras(race_id))
+        asyncio.ensure_future(_network_auto_switch_end())
 
         if recorder is not None and _audio_session_id is not None:
             completed = await recorder.stop()

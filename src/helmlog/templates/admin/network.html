@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% block title %}Network — HelmLog{% endblock %}
+{% block extra_css %}
+<style>
+.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:12px}
+.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#8892a4;margin-bottom:8px}
+table{width:100%;border-collapse:collapse;font-size:.87rem}
+th{text-align:left;color:#8892a4;font-size:.75rem;text-transform:uppercase;padding:6px 8px}
+td{padding:7px 8px;border-bottom:1px solid #0d1a2e}
+.badge{padding:2px 8px;border-radius:4px;font-size:.78rem;font-weight:600}
+.badge-up{background:#16a34a22;color:#4ade80}
+.badge-down{background:#7f1d1d22;color:#ef4444}
+.badge-conn{background:#16a34a22;color:#4ade80}
+.badge-off{background:#374151;color:#8892a4}
+.btn-sm{padding:6px 12px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.78rem;cursor:pointer}
+.btn-connect{color:#4ade80;border-color:#16a34a}
+.btn-disconnect{color:#ef4444;border-color:#7f1d1d}
+.btn-refresh{color:#7eb8f7;border-color:#2563eb}
+.btn-add{color:#4ade80;border-color:#16a34a}
+.btn-del{color:#ef4444;border-color:#7f1d1d}
+.btn-edit{color:#f59e0b;border-color:#92400e}
+.form-row{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.form-row input{padding:6px 10px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.85rem}
+.form-row input::placeholder{color:#586578}
+.form-row label{font-size:.75rem;color:#8892a4}
+.form-row select{padding:6px 10px;border:1px solid #374151;border-radius:4px;background:#0a1628;color:#e8eaf0;font-size:.85rem}
+#add-err,#edit-err{color:#ef4444;font-size:.8rem;margin-top:4px}
+.signal-bar{display:inline-block;width:40px;height:10px;background:#1e293b;border-radius:3px;overflow:hidden;vertical-align:middle;margin-left:6px}
+.signal-bar .fill{height:100%;background:#4ade80;border-radius:3px}
+.stat-row{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px}
+.stat{font-size:.9rem}
+.stat .val{color:#e8eaf0;font-weight:600}
+.stat .lbl{color:#8892a4;font-size:.75rem}
+.internet-ok{color:#4ade80}.internet-fail{color:#ef4444}
+dialog{background:#131f35;color:#e8eaf0;border:1px solid #374151;border-radius:12px;padding:20px;max-width:400px;width:90%}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+dialog .form-row{flex-direction:column;align-items:stretch}
+dialog .form-row input,dialog .form-row select{width:100%}
+dialog .btn-row{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
+.grafana-link{color:#7eb8f7;text-decoration:none;font-size:.85rem}
+.grafana-link:hover{text-decoration:underline}
+</style>
+{% endblock %}
+{% block content %}
+<h1>Network</h1>
+
+<div class="card">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+<div class="label">WLAN Status</div>
+<button class="btn-sm btn-refresh" onclick="loadAll()">&#x21bb; Refresh</button>
+</div>
+<div id="wlan-status">Loading...</div>
+</div>
+
+<div class="card">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+<div class="label">WLAN Profiles</div>
+<button class="btn-sm btn-add" onclick="showAddForm()">+ Add Profile</button>
+</div>
+<div id="profiles-table">Loading...</div>
+<div id="add-form" style="display:none">
+<div class="form-row">
+<input id="add-name" placeholder="Profile name" maxlength="50"/>
+<input id="add-ssid" placeholder="SSID" maxlength="64"/>
+<input id="add-pass" placeholder="Password" maxlength="64" type="password"/>
+<label><input type="checkbox" id="add-default"/> Default</label>
+<button class="btn-sm btn-add" onclick="addProfile()">Save</button>
+<button class="btn-sm" onclick="hideAddForm()">Cancel</button>
+</div>
+<div id="add-err"></div>
+</div>
+</div>
+
+<dialog id="edit-dlg">
+<h3 style="margin:0 0 12px">Edit Profile</h3>
+<input type="hidden" id="edit-id"/>
+<div class="form-row">
+<label>Name</label><input id="edit-name" maxlength="50"/>
+</div>
+<div class="form-row">
+<label>SSID</label><input id="edit-ssid" maxlength="64"/>
+</div>
+<div class="form-row">
+<label>Password</label><input id="edit-pass" maxlength="64" type="password"/>
+</div>
+<div class="form-row">
+<label><input type="checkbox" id="edit-default"/> Default profile</label>
+</div>
+<div id="edit-err"></div>
+<div class="btn-row">
+<button class="btn-sm" onclick="document.getElementById('edit-dlg').close()">Cancel</button>
+<button class="btn-sm btn-edit" onclick="saveEdit()">Save</button>
+</div>
+</dialog>
+
+<div class="card">
+<div class="label">Network Interfaces</div>
+<div id="iface-table">Loading...</div>
+</div>
+
+<div class="card">
+<div class="label">Bandwidth Monitoring</div>
+<p style="color:#8892a4;font-size:.85rem">Per-interface bandwidth metrics are emitted to InfluxDB every monitor interval. View detailed usage, data budgets, and alerts in Grafana.</p>
+<a id="grafana-link" class="grafana-link" href="#" target="_blank">Open Grafana Dashboard &rarr;</a>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let _currentSSID=null;
+
+function showAddForm(){document.getElementById('add-form').style.display='';document.getElementById('add-name').focus()}
+function hideAddForm(){document.getElementById('add-form').style.display='none';document.getElementById('add-err').textContent='';['add-name','add-ssid','add-pass'].forEach(id=>document.getElementById(id).value='');document.getElementById('add-default').checked=false}
+
+async function loadStatus(){
+  const r=await fetch('/api/network/status');
+  if(!r.ok){document.getElementById('wlan-status').textContent='Failed to load';return}
+  const d=await r.json();
+  const w=d.wlan;
+  _currentSSID=w.ssid;
+  let h='<div class="stat-row">';
+  h+=`<div class="stat"><span class="lbl">Status</span> <span class="val">${w.connected?'<span class="badge badge-conn">connected</span>':'<span class="badge badge-off">disconnected</span>'}</span></div>`;
+  if(w.ssid)h+=`<div class="stat"><span class="lbl">SSID</span> <span class="val">${w.ssid}</span></div>`;
+  if(w.ip_address)h+=`<div class="stat"><span class="lbl">IP</span> <span class="val">${w.ip_address}</span></div>`;
+  if(w.signal_strength!=null)h+=`<div class="stat"><span class="lbl">Signal</span> <span class="val">${w.signal_strength}%</span><div class="signal-bar"><div class="fill" style="width:${w.signal_strength}%"></div></div></div>`;
+  h+=`<div class="stat"><span class="lbl">Internet</span> <span class="val ${d.internet?'internet-ok':'internet-fail'}">${d.internet?'reachable':'unreachable'}</span></div>`;
+  h+='</div>';
+  if(w.connected)h+=`<button class="btn-sm btn-disconnect" onclick="doDisconnect()">Disconnect WLAN</button>`;
+  document.getElementById('wlan-status').innerHTML=h;
+}
+
+async function loadProfiles(){
+  const r=await fetch('/api/network/profiles');
+  if(!r.ok){document.getElementById('profiles-table').textContent='Failed to load';return}
+  const profiles=await r.json();
+  if(!profiles.length){document.getElementById('profiles-table').innerHTML='<p style="color:#8892a4">No WLAN profiles. Camera networks appear here automatically when cameras have WiFi SSIDs configured. Click <b>+ Add Profile</b> to add a shore/marina network.</p>';return}
+  let h='<table><thead><tr><th>Name</th><th>SSID</th><th>Source</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+  for(const p of profiles){
+    const active=_currentSSID&&_currentSSID===p.ssid;
+    const badge=active?'<span class="badge badge-conn">active</span>':p.is_default?'<span class="badge badge-up">default</span>':'';
+    const src=p.source==='camera'?'<span style="color:#f59e0b">camera</span>':'<span style="color:#7eb8f7">saved</span>';
+    const connectBtn=active?'':`<button class="btn-sm btn-connect" onclick="doConnect('${p.id}')">Connect</button>`;
+    let actionBtns=connectBtn;
+    if(p.source==='saved'){
+      const pid=p.id.replace('profile:','');
+      actionBtns+=` <button class="btn-sm btn-edit" onclick="showEdit(${pid},'${p.name.replace(/'/g,"\\'")}','${p.ssid.replace(/'/g,"\\'")}',${p.is_default})">&#x270e;</button>`;
+      actionBtns+=` <button class="btn-sm btn-del" onclick="delProfile(${pid},'${p.name.replace(/'/g,"\\'")}')">&#x2715;</button>`;
+    }
+    h+=`<tr><td>${p.name}</td><td>${p.ssid}</td><td>${src}</td><td>${badge}</td><td style="display:flex;gap:4px">${actionBtns}</td></tr>`;
+  }
+  h+='</tbody></table>';
+  document.getElementById('profiles-table').innerHTML=h;
+}
+
+async function loadInterfaces(){
+  const r=await fetch('/api/network/status');
+  if(!r.ok)return;
+  const d=await r.json();
+  if(!d.interfaces||!d.interfaces.length){document.getElementById('iface-table').innerHTML='<p style="color:#8892a4">No interfaces detected (nmcli may not be available).</p>';return}
+  let h='<table><thead><tr><th>Interface</th><th>State</th><th>IP Address</th></tr></thead><tbody>';
+  for(const i of d.interfaces){
+    const badge=i.state==='up'?'<span class="badge badge-up">up</span>':'<span class="badge badge-down">down</span>';
+    h+=`<tr><td>${i.name}</td><td>${badge}</td><td>${i.ip_address||'—'}</td></tr>`;
+  }
+  h+='</tbody></table>';
+  document.getElementById('iface-table').innerHTML=h;
+}
+
+async function loadAll(){await Promise.all([loadStatus(),loadProfiles(),loadInterfaces()]);updateGrafanaLink()}
+
+function updateGrafanaLink(){
+  const link=document.getElementById('grafana-link');
+  const influxUrl=window.location.hostname;
+  link.href='http://'+influxUrl+':3000/d/helmlog-network';
+}
+
+async function doConnect(profileId){
+  const r=await fetch('/api/network/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile_id:profileId})});
+  const d=await r.json();
+  if(!d.success)alert('Connect failed: '+(d.error||'unknown error'));
+  setTimeout(loadAll,2000);
+}
+
+async function doDisconnect(){
+  if(!confirm('Disconnect WLAN? The Pi will be Ethernet-only.'))return;
+  const r=await fetch('/api/network/disconnect',{method:'POST',headers:{'Content-Type':'application/json'}});
+  const d=await r.json();
+  if(!d.success)alert('Disconnect failed: '+(d.error||'unknown error'));
+  setTimeout(loadAll,2000);
+}
+
+async function addProfile(){
+  const name=document.getElementById('add-name').value.trim();
+  const ssid=document.getElementById('add-ssid').value.trim();
+  const password=document.getElementById('add-pass').value.trim();
+  const is_default=document.getElementById('add-default').checked;
+  if(!name||!ssid){document.getElementById('add-err').textContent='Name and SSID are required';return}
+  const r=await fetch('/api/network/profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,ssid,password,is_default})});
+  if(!r.ok){const d=await r.json();document.getElementById('add-err').textContent=d.detail||'Failed';return}
+  hideAddForm();loadProfiles();
+}
+
+function showEdit(id,name,ssid,isDefault){
+  document.getElementById('edit-id').value=id;
+  document.getElementById('edit-name').value=name;
+  document.getElementById('edit-ssid').value=ssid;
+  document.getElementById('edit-pass').value='';
+  document.getElementById('edit-default').checked=isDefault;
+  document.getElementById('edit-err').textContent='';
+  document.getElementById('edit-dlg').showModal();
+}
+
+async function saveEdit(){
+  const id=document.getElementById('edit-id').value;
+  const name=document.getElementById('edit-name').value.trim();
+  const ssid=document.getElementById('edit-ssid').value.trim();
+  const password=document.getElementById('edit-pass').value.trim();
+  const is_default=document.getElementById('edit-default').checked;
+  if(!name||!ssid){document.getElementById('edit-err').textContent='Name and SSID are required';return}
+  const r=await fetch('/api/network/profiles/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,ssid,password:password||null,is_default})});
+  if(!r.ok){const d=await r.json();document.getElementById('edit-err').textContent=d.detail||'Failed';return}
+  document.getElementById('edit-dlg').close();loadProfiles();
+}
+
+async function delProfile(id,name){
+  if(!confirm('Delete profile "'+name+'"?'))return;
+  const r=await fetch('/api/network/profiles/'+id,{method:'DELETE'});
+  if(!r.ok){const d=await r.json();alert(d.detail||'Failed');return}
+  loadProfiles();
+}
+
+loadAll();
+</script>
+{% endblock %}

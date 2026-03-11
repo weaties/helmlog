@@ -104,6 +104,8 @@ class TestFanSpeedCollection:
 
             mod._prev_net = None
             mod._prev_net_time = None
+            mod._prev_pernic = None
+            mod._prev_pernic_time = None
             _collect_and_write()
 
         # Gather all .field() calls
@@ -130,6 +132,8 @@ class TestFanSpeedCollection:
 
             mod._prev_net = None
             mod._prev_net_time = None
+            mod._prev_pernic = None
+            mod._prev_pernic_time = None
             _collect_and_write()
 
         field_names = [call.args[0] for call in point_instance.field.call_args_list]
@@ -154,7 +158,107 @@ class TestFanSpeedCollection:
 
             mod._prev_net = None
             mod._prev_net_time = None
+            mod._prev_pernic = None
+            mod._prev_pernic_time = None
             _collect_and_write()
 
         field_names = [call.args[0] for call in point_instance.field.call_args_list]
         assert "fan_rpm" not in field_names
+
+
+class TestPerInterfaceBandwidth:
+    """Per-interface bandwidth metrics are emitted to InfluxDB (#256)."""
+
+    def test_pernic_points_written_on_second_call(self) -> None:
+        """After two collections, per-interface points should be written."""
+        _NicIO = namedtuple("_NicIO", ["bytes_sent", "bytes_recv"])
+        psutil_mock = _make_psutil_mock()
+        psutil_mock_pernic_first = {"eth0": _NicIO(100, 200), "wlan0": _NicIO(50, 75)}
+        psutil_mock_pernic_second = {"eth0": _NicIO(600, 1200), "wlan0": _NicIO(150, 275)}
+        pernic_calls = [psutil_mock_pernic_first, psutil_mock_pernic_second]
+        pernic_idx = [0]
+        agg_calls = iter([_NetIO(0, 0), _NetIO(1000, 2000)])
+
+        def net_io_side_effect(pernic: bool = False, **kwargs: object) -> object:
+            if pernic:
+                result = pernic_calls[pernic_idx[0]]
+                pernic_idx[0] = min(pernic_idx[0] + 1, len(pernic_calls) - 1)
+                return result
+            return next(agg_calls)
+
+        psutil_mock.net_io_counters = MagicMock(side_effect=net_io_side_effect)
+
+        point_instances: list[MagicMock] = []
+
+        def make_point(*args: object, **kwargs: object) -> MagicMock:
+            p = MagicMock()
+            p.tag.return_value = p
+            p.field.return_value = p
+            point_instances.append(p)
+            return p
+
+        point_cls = MagicMock(side_effect=make_point)
+        write_api = MagicMock()
+        client = MagicMock()
+
+        monotonic_values = iter([100.0, 100.0, 102.0, 102.0])
+
+        with (
+            patch.dict("sys.modules", {"psutil": psutil_mock}),
+            patch("helmlog.influx._client", return_value=(client, write_api)),
+            patch.dict("sys.modules", {"influxdb_client": MagicMock(Point=point_cls)}),
+            patch("time.monotonic", side_effect=lambda: next(monotonic_values)),
+        ):
+            import helmlog.monitor as mod
+
+            mod._prev_net = None
+            mod._prev_net_time = None
+            mod._prev_pernic = None
+            mod._prev_pernic_time = None
+            _collect_and_write()
+            _collect_and_write()
+
+        point_names = [call.args[0] for call in point_cls.call_args_list]
+        assert "net_interface" in point_names
+        assert point_names.count("net_interface") == 2  # eth0 + wlan0
+
+    def test_pernic_no_points_on_first_call(self) -> None:
+        """First collection should not emit per-interface points (no baseline)."""
+        psutil_mock = _make_psutil_mock()
+        _NicIO = namedtuple("_NicIO", ["bytes_sent", "bytes_recv"])
+
+        def net_io_side_effect(pernic: bool = False, **kw: object) -> object:
+            if pernic:
+                return {"eth0": _NicIO(100, 200)}
+            return _NetIO(bytes_sent=0, bytes_recv=0)
+
+        psutil_mock.net_io_counters = MagicMock(side_effect=net_io_side_effect)
+
+        point_instances: list[MagicMock] = []
+
+        def make_point(*args: object, **kwargs: object) -> MagicMock:
+            p = MagicMock()
+            p.tag.return_value = p
+            p.field.return_value = p
+            point_instances.append(p)
+            return p
+
+        point_cls = MagicMock(side_effect=make_point)
+        write_api = MagicMock()
+        client = MagicMock()
+
+        with (
+            patch.dict("sys.modules", {"psutil": psutil_mock}),
+            patch("helmlog.influx._client", return_value=(client, write_api)),
+            patch.dict("sys.modules", {"influxdb_client": MagicMock(Point=point_cls)}),
+        ):
+            import helmlog.monitor as mod
+
+            mod._prev_net = None
+            mod._prev_net_time = None
+            mod._prev_pernic = None
+            mod._prev_pernic_time = None
+            _collect_and_write()
+
+        point_names = [call.args[0] for call in point_cls.call_args_list]
+        assert "net_interface" not in point_names

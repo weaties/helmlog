@@ -122,9 +122,11 @@ async function delCamera(name){
 }
 async function loadCameras(){
   document.getElementById('cam-table').textContent='Loading\u2026';
-  const r=await fetch('/api/cameras');
-  if(!r.ok){document.getElementById('cam-table').textContent='Failed to load';return}
-  const cams=await r.json();
+  const [camResp, netResp]=await Promise.all([fetch('/api/cameras'),fetch('/api/network/status').catch(()=>null)]);
+  if(!camResp.ok){document.getElementById('cam-table').textContent='Failed to load';return}
+  const cams=await camResp.json();
+  let currentSSID=null;
+  if(netResp&&netResp.ok){const nd=await netResp.json();currentSSID=nd.wlan?.ssid}
   if(!cams.length){document.getElementById('cam-table').innerHTML='<p style="color:#8892a4">No cameras configured. Click <b>+ Add Camera</b> above to get started.</p>';return}
   let h='<table><thead><tr><th>Name</th><th>IP</th><th>WiFi</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
   for(const c of cams){
@@ -134,10 +136,12 @@ async function loadCameras(){
     const passEsc=(c.wifi_password||'').replace(/'/g,"\\'");
     const editBtn=`<button class="btn-sm btn-edit" onclick="showEdit('${c.name}','${c.ip}','${ssidEsc}','${passEsc}')">\u270e</button>`;
     const delBtn=`<button class="btn-sm btn-del" onclick="delCamera('${c.name}')">\u2715</button>`;
-    const wifi=c.wifi_ssid?`<span style="color:#7eb8f7">${c.wifi_ssid}</span>`:'<span style="color:#586578">\u2014</span>';
-    h+=`<tr><td>${c.name}</td><td>${c.ip}</td><td>${wifi}</td><td>${badge}${c.error?' <small style="color:#ef4444">'+c.error.slice(0,60)+'</small>':''}</td><td style="display:flex;gap:4px">${recBtn}${editBtn}${delBtn}</td></tr>`;
+    const wlanConnected=c.wifi_ssid&&currentSSID===c.wifi_ssid;
+    const wifiLabel=c.wifi_ssid?`<span style="color:#7eb8f7">${c.wifi_ssid}</span>${wlanConnected?' <span class="badge badge-rec" style="font-size:.65rem">connected</span>':''}`:'<span style="color:#586578">\u2014</span>';
+    h+=`<tr><td>${c.name}</td><td>${c.ip}</td><td>${wifiLabel}</td><td>${badge}${c.error?' <small style="color:#ef4444">'+c.error.slice(0,60)+'</small>':''}</td><td style="display:flex;gap:4px">${recBtn}${editBtn}${delBtn}</td></tr>`;
   }
   h+='</tbody></table>';
+  h+='<p style="margin-top:8px;font-size:.8rem;color:#586578"><a href="/admin/network" style="color:#7eb8f7">Manage networks &rarr;</a></p>';
   document.getElementById('cam-table').innerHTML=h;
 }
 async function camAction(name,action){
