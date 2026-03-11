@@ -23,6 +23,47 @@ if TYPE_CHECKING:
 _BASE_TS = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC)
 
 
+@pytest.mark.asyncio
+async def test_polar_build_endpoint(storage: Storage) -> None:
+    """POST /api/polar/build rebuilds baseline and returns bin count."""
+    for i in range(1, 4):
+        await _seed_session(storage, i, bsp=6.0, tws=10.0, twa=45.0)
+
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/polar/build")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["bins_written"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_polar_build_then_session_polar(storage: Storage) -> None:
+    """Build baseline via API, then session polar returns data."""
+    for i in range(1, 4):
+        await _seed_session(storage, i, bsp=6.0, tws=10.0, twa=45.0)
+    target_id = await _seed_session(storage, 4, bsp=7.0, tws=10.0, twa=45.0)
+
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Build baseline via API
+        build_resp = await client.post("/api/polar/build")
+        assert build_resp.status_code == 200
+
+        # Now session polar should have data
+        polar_resp = await client.get(f"/api/sessions/{target_id}/polar")
+
+    assert polar_resp.status_code == 200
+    data = polar_resp.json()
+    assert len(data["bins"]) >= 1
+    assert data["summary"] is not None
+
+
 async def _seed_session(
     storage: Storage,
     race_num: int,

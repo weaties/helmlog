@@ -766,11 +766,18 @@ async function loadPolar() {
   const r = await fetch('/api/sessions/' + SESSION_ID + '/polar');
   if (!r.ok) return;
   const data = await r.json();
-  if (!data.bins || !data.bins.length) return;
 
   const card = document.getElementById('polar-card');
   card.style.display = '';
   const body = document.getElementById('polar-body');
+
+  if (!data.bins || !data.bins.length) {
+    body.innerHTML = '<div style="color:#8892a4;font-size:.82rem">'
+      + 'No polar baseline built yet.'
+      + ' <button class="btn-export" style="font-size:.78rem" onclick="buildPolar()">Build Baseline</button>'
+      + '</div>';
+    return;
+  }
 
   let html = '<table class="polar-table"><thead><tr>'
     + '<th>TWS</th><th>TWA</th><th>Session BSP</th><th>Baseline</th><th>P90</th><th>Delta</th><th>Samples</th>'
@@ -801,10 +808,28 @@ async function loadPolar() {
       + ' &middot; ' + s.bins_above + ' bins above, ' + s.bins_below + ' below'
       + (s.bins_insufficient > 0 ? ' &middot; ' + s.bins_insufficient + ' bins insufficient data' : '')
       + ' &middot; Dominant TWS: ' + s.dominant_tws + ' kt'
+      + ' &middot; <button style="background:none;border:none;color:#7eb8f7;cursor:pointer;font-size:.78rem;text-decoration:underline" onclick="buildPolar()">Rebuild</button>'
       + '</div>';
   }
 
   body.innerHTML = html;
+}
+
+async function buildPolar() {
+  const body = document.getElementById('polar-body');
+  body.innerHTML = '<span style="color:#facc15;font-size:.82rem">Building polar baseline\u2026</span>';
+  const r = await fetch('/api/polar/build', {method: 'POST'});
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    body.innerHTML = '<span style="color:#f87171;font-size:.82rem">Failed: ' + esc(d.detail || 'unknown error') + '</span>';
+    return;
+  }
+  const d = await r.json();
+  if (d.bins_written === 0) {
+    body.innerHTML = '<span style="color:#8892a4;font-size:.82rem">No bins built — need at least 3 completed sessions with speed and wind data in the same conditions.</span>';
+    return;
+  }
+  loadPolar();
 }
 
 // ---------------------------------------------------------------------------

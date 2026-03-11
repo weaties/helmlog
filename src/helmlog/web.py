@@ -1209,6 +1209,20 @@ def create_app(
         )
 
     # ------------------------------------------------------------------
+    # POST /api/polar/build  (rebuild polar baseline)
+    # ------------------------------------------------------------------
+
+    @app.post("/api/polar/build")
+    async def api_polar_build(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Rebuild the polar performance baseline from all completed sessions."""
+        import helmlog.polar as _polar
+
+        count = await _polar.build_polar_baseline(storage)
+        return JSONResponse({"bins_written": count})
+
+    # ------------------------------------------------------------------
     # /api/sessions/{id}/polar  (per-session polar performance)
     # ------------------------------------------------------------------
 
