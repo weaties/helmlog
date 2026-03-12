@@ -2,10 +2,7 @@
 
 ## Sprint 2 complete — Performance Analysis & Synthesizer (2026-03-12)
 
-Sprint 2 (March 10–24) is feature-complete. Three stretch/secondary items were
-punted to Sprint 3: #226 (federation integration tests — Docker + Pi smoke),
-#186 (YouTube channel video linker script), and #166 (deep-link transcript
-segments to YouTube timestamps).
+Sprint 2 (March 10–24) is feature-complete. 
 
 ### Performance analysis
 
