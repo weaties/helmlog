@@ -206,6 +206,28 @@ class TestDetectTacks:
         m = maneuvers[0]
         assert m.twa_bin == _twa_bin(45.0)
 
+    def test_port_tack_twa_above_180_classified_as_tack(self) -> None:
+        """TWA reported as 300° (port tack, = 60° folded) must be classified as tack, not gybe.
+
+        Signal K sends boat-referenced TWA in [0°, 360°) — values above 180°
+        represent port-side wind angles that must be folded to [0°, 180°] before
+        the upwind/downwind classification threshold is applied.
+        """
+        hdg = _make_tack_series(40.0, 320.0, pre_steps=30, tack_steps=10, post_steps=30)
+        bsp = _const(hdg, 6.5)
+        twa = _const(hdg, 300.0)  # 300° = 60° folded → upwind
+        maneuvers = detect_tacks(hdg, bsp, twa)
+        assert len(maneuvers) == 1
+        assert maneuvers[0].type == "tack"
+
+    def test_port_tack_twa_above_180_not_gybe(self) -> None:
+        """TWA=300° (60° folded, upwind) must NOT be classified as a gybe."""
+        hdg = _make_tack_series(40.0, 320.0, pre_steps=30, tack_steps=10, post_steps=30)
+        bsp = _const(hdg, 6.5)
+        twa = _const(hdg, 300.0)  # 300° = 60° folded → upwind
+        maneuvers = detect_gybes(hdg, bsp, twa)
+        assert len(maneuvers) == 0
+
     def test_maneuver_timestamp_within_session(self) -> None:
         """Maneuver timestamp falls within the HDG series window."""
         hdg = _make_tack_series(40.0, 320.0, pre_steps=30, tack_steps=10, post_steps=30)

@@ -220,7 +220,9 @@ def _detect(
         # Check wind angle: upwind (TWA < 90°) for tacks, downwind (TWA > 90°) for gybes.
         # When upwind is None (no wind data), skip the wind-angle filter entirely.
         if upwind is not None:
-            window_twa = [twa_by_ts[ts] for ts in window_ts if ts in twa_by_ts]
+            window_twa_raw = [twa_by_ts[ts] for ts in window_ts if ts in twa_by_ts]
+            # Fold to [0, 180] — Signal K may report boat-referenced TWA in [0, 360).
+            window_twa = [v if v <= 180 else 360 - v for v in window_twa_raw]
             if not window_twa:
                 i += 1
                 continue
@@ -384,7 +386,9 @@ async def detect_maneuvers(storage: Storage, session_id: int) -> list[Maneuver]:
             continue
         key = str(r["ts"])[:19]
         if ref == _WIND_REF_BOAT:
-            twa_series.setdefault(key, abs(float(r["wind_angle_deg"])))
+            raw_twa = abs(float(r["wind_angle_deg"])) % 360
+            twa_val = raw_twa if raw_twa <= 180 else 360 - raw_twa
+            twa_series.setdefault(key, twa_val)
             tws_series.setdefault(key, float(r["wind_speed_kts"]))
         else:
             # reference=4: north-referenced TWD — convert to TWA using heading
