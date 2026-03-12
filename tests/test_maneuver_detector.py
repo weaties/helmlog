@@ -346,6 +346,16 @@ class TestTwaCrosses90:
         """Fewer than 3 values → no crossing."""
         assert _twa_crosses_90([45.0, 135.0]) is False
 
+    def test_beam_reach_noise_rejected(self) -> None:
+        """TWA hovering near 90° (beam reach noise) → no crossing."""
+        values = [87.0] * 5 + [90.0] * 5 + [93.0] * 5
+        assert _twa_crosses_90(values) is False
+
+    def test_moderate_crossing_accepted(self) -> None:
+        """TWA from 80° to 100° → crosses (outside 5° margin)."""
+        values = [80.0] * 5 + [90.0] * 5 + [100.0] * 5
+        assert _twa_crosses_90(values) is True
+
 
 # ---------------------------------------------------------------------------
 # detect_mark_roundings — pure function

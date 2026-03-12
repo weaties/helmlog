@@ -235,7 +235,7 @@ def detect_mark_roundings(
     )
 
 
-_TWA_CROSSING_MARGIN: float = 15.0  # min distance from 90° on each side to confirm crossing
+_TWA_CROSSING_MARGIN: float = 5.0  # min distance from 90° on each side to confirm crossing
 
 
 def _twa_crosses_90(twa_values: list[float]) -> bool:
@@ -602,8 +602,7 @@ async def detect_maneuvers(storage: Storage, session_id: int) -> list[Maneuver]:
     deduped_roundings: list[Maneuver] = []
     for r in roundings:
         too_close = any(
-            abs((r.ts - tg_ts).total_seconds()) < _MIN_MANEUVER_GAP_S
-            for tg_ts in tack_gybe_times
+            abs((r.ts - tg_ts).total_seconds()) < _MIN_MANEUVER_GAP_S for tg_ts in tack_gybe_times
         )
         if not too_close:
             deduped_roundings.append(r)
