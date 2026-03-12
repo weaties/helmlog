@@ -684,6 +684,13 @@ sudo cp "$SCRIPT_DIR/loki/loki-config.yaml" /etc/loki/loki-config.yaml
 sudo mkdir -p /etc/promtail
 sudo cp "$SCRIPT_DIR/loki/promtail-config.yaml" /etc/promtail/promtail-config.yaml
 
+# Ensure loki/promtail groups exist (Debian packages create the users with
+# nogroup as primary group, but don't always create a matching group).
+getent group loki    >/dev/null 2>&1 || sudo groupadd -r loki
+getent group promtail >/dev/null 2>&1 || sudo groupadd -r promtail
+id -gn loki    | grep -qx loki    || sudo usermod -g loki    loki
+id -gn promtail | grep -qx promtail || sudo usermod -g promtail promtail
+
 # Data directories
 sudo mkdir -p /var/lib/loki /var/lib/promtail
 sudo chown loki:loki /var/lib/loki

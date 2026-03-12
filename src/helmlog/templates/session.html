@@ -17,6 +17,13 @@
 .video-link:hover{text-decoration:underline}
 .back-link{font-size:.82rem;color:#8892a4;text-decoration:none;margin-bottom:8px;display:inline-block}
 .back-link:hover{color:#7eb8f7}
+.maneuver-table{width:100%;border-collapse:collapse;font-size:.78rem}
+.maneuver-table th{color:#8892a4;font-weight:400;text-align:left;padding:3px 6px;border-bottom:1px solid #1e3050}
+.maneuver-table td{padding:3px 6px;border-bottom:1px solid #0d1a2e;color:#c4cdd8}
+.maneuver-table tr.active-row td{background:#0d2040;color:#e8eaf0}
+.badge-tack{color:#60a5fa}
+.badge-gybe{color:#fb923c}
+.badge-rounding{color:#4ade80}
 </style>
 {% endblock %}
 
@@ -94,6 +101,14 @@
 <div class="card" id="transcript-card" style="display:none">
   <div class="section-title" onclick="toggleSection('transcript')">Transcript <span id="transcript-toggle">&#9660;</span></div>
   <div class="section-body" id="transcript-body"></div>
+</div>
+
+<div class="card" id="maneuvers-card" style="display:none">
+  <div style="display:flex;align-items:center;justify-content:space-between">
+    <div class="section-title" style="margin-bottom:0" onclick="toggleSection('maneuvers')">Maneuvers <span id="maneuvers-toggle">&#9660;</span></div>
+    <button id="detect-maneuvers-btn" onclick="detectManeuvers()" style="font-size:.72rem;color:#7eb8f7;background:none;border:none;cursor:pointer;padding:2px 0">&#8635; Detect</button>
+  </div>
+  <div class="section-body" id="maneuvers-body" style="margin-top:6px"></div>
 </div>
 
 <div class="card" id="sharing-card" style="display:none">

@@ -10,6 +10,8 @@ let _trackData = null; // {latLngs, timestamps (as Date), line, cursor}
 let _videoSync = null; // {syncUtc (Date), syncOffsetS, durationS, player}
 let _ytReady = false;
 let _syncTimer = null;
+let _maneuvers = []; // loaded maneuver list
+let _maneuverMarkers = []; // Leaflet markers for maneuvers
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -28,6 +30,7 @@ async function init() {
   renderHeader();
   // Load track and videos in parallel, then wire up sync
   await Promise.all([loadTrack(), loadVideoPlayer()]);
+  loadManeuvers();
   loadVideos();
   if (_session.type !== 'debrief') {
     loadResults();
@@ -1013,6 +1016,120 @@ function renderPolarHeatmap() {
   }
   html += '</table>';
   container.innerHTML = html;
+}
+
+// ---------------------------------------------------------------------------
+// Maneuvers
+// ---------------------------------------------------------------------------
+
+const _MANEUVER_COLORS = { tack: '#3b82f6', gybe: '#f97316', rounding: '#22c55e' };
+
+async function loadManeuvers() {
+  const r = await fetch('/api/sessions/' + SESSION_ID + '/maneuvers');
+  if (!r.ok) return;
+  _maneuvers = await r.json();
+  renderManeuverCard();
+  if (_map && _maneuvers.length) _addManeuverMarkers();
+}
+
+function renderManeuverCard() {
+  const card = document.getElementById('maneuvers-card');
+  const body = document.getElementById('maneuvers-body');
+  card.style.display = '';
+
+  if (!_maneuvers.length) {
+    body.innerHTML = '<span style="color:#8892a4">No maneuvers detected. Click &#8635; Detect to analyse this session.</span>';
+    return;
+  }
+
+  const tacks = _maneuvers.filter(m => m.type === 'tack').length;
+  const gybes = _maneuvers.filter(m => m.type === 'gybe').length;
+  const roundings = _maneuvers.filter(m => m.type === 'rounding').length;
+  const summary = '<div style="color:#8892a4;font-size:.75rem;margin-bottom:6px">'
+    + tacks + ' tack' + (tacks !== 1 ? 's' : '')
+    + ' &middot; ' + gybes + ' gybe' + (gybes !== 1 ? 's' : '')
+    + ' &middot; ' + roundings + ' rounding' + (roundings !== 1 ? 's' : '')
+    + '</div>';
+
+  let rows = _maneuvers.map((m, idx) => {
+    const color = _MANEUVER_COLORS[m.type] || '#8892a4';
+    const typeBadge = '<span style="color:' + color + ';font-weight:600">' + esc(m.type) + '</span>';
+    const t = fmtTime(m.ts);
+    const dur = m.duration_sec != null ? m.duration_sec.toFixed(1) + ' s' : '—';
+    const loss = m.loss_kts != null ? m.loss_kts.toFixed(2) + ' kt' : '—';
+    const cond = (m.twa_bin != null ? m.twa_bin + '° TWA' : '') + (m.tws_bin != null ? (m.twa_bin != null ? ', ' : '') + m.tws_bin + ' kt TWS' : '');
+    return '<tr id="mrow-' + idx + '" style="cursor:pointer" onclick="highlightManeuver(' + idx + ')">'
+      + '<td>' + typeBadge + '</td>'
+      + '<td>' + t + '</td>'
+      + '<td>' + dur + '</td>'
+      + '<td>' + loss + '</td>'
+      + '<td>' + esc(cond || '—') + '</td>'
+      + '</tr>';
+  }).join('');
+
+  body.innerHTML = summary
+    + '<table class="maneuver-table"><thead><tr>'
+    + '<th>Type</th><th>Time</th><th>Duration</th><th>BSP Loss</th><th>Conditions</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
+function _addManeuverMarkers() {
+  // Remove old markers
+  _maneuverMarkers.forEach(m => m.remove());
+  _maneuverMarkers = [];
+
+  _maneuvers.forEach((m, idx) => {
+    if (m.lat == null || m.lon == null) return;
+    const color = _MANEUVER_COLORS[m.type] || '#8892a4';
+    const marker = L.circleMarker([m.lat, m.lon], {
+      radius: 7,
+      color: color,
+      fillColor: color,
+      fillOpacity: 0.85,
+      weight: 2,
+    })
+      .addTo(_map)
+      .bindPopup(
+        '<b style="color:' + color + '">' + m.type + '</b><br>'
+        + fmtTime(m.ts)
+        + (m.duration_sec != null ? '<br>' + m.duration_sec.toFixed(1) + ' s' : '')
+        + (m.loss_kts != null ? '<br>' + m.loss_kts.toFixed(2) + ' kt loss' : '')
+      );
+    marker.on('click', function() { highlightManeuver(idx); });
+    _maneuverMarkers.push(marker);
+  });
+}
+
+function highlightManeuver(idx) {
+  // Highlight table row
+  document.querySelectorAll('.maneuver-table tr').forEach(r => r.classList.remove('active-row'));
+  const row = document.getElementById('mrow-' + idx);
+  if (row) {
+    row.classList.add('active-row');
+    row.scrollIntoView({block: 'nearest'});
+  }
+  // Move map cursor to maneuver position
+  const m = _maneuvers[idx];
+  if (m && _trackData) {
+    const ts = new Date(m.ts.endsWith('Z') || m.ts.includes('+') ? m.ts : m.ts + 'Z');
+    const trackIdx = _indexForUtc(ts);
+    _moveCursorToIndex(trackIdx);
+    _seekVideoToIndex(trackIdx);
+  }
+  // Open the marker popup if available
+  if (_maneuverMarkers[idx]) _maneuverMarkers[idx].openPopup();
+}
+
+async function detectManeuvers() {
+  const btn = document.getElementById('detect-maneuvers-btn');
+  if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
+  try {
+    const r = await fetch('/api/sessions/' + SESSION_ID + '/detect-maneuvers', {method: 'POST'});
+    if (!r.ok) { alert('Detection failed: ' + r.status); return; }
+    await loadManeuvers();
+  } finally {
+    if (btn) { btn.textContent = '↺ Detect'; btn.disabled = false; }
+  }
 }
 
 // ---------------------------------------------------------------------------

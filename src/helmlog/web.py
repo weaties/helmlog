@@ -190,6 +190,21 @@ _SETTINGS_DEFS: tuple[_SettingDef, ...] = (
         default="2",
         help_text="How often to collect Pi health metrics for the dashboard (1\u2013300 seconds).",
     ),
+    _SettingDef(
+        key="NETWORK_AUTO_SWITCH",
+        label="Auto-switch WLAN for races",
+        input_type="select",
+        default="false",
+        options=("true", "false"),
+        help_text="Automatically switch WLAN to camera Wi-Fi on race start and revert on race end.",
+    ),
+    _SettingDef(
+        key="NETWORK_DEFAULT_PROFILE",
+        label="Default WLAN profile ID",
+        input_type="text",
+        default="",
+        help_text="WLAN profile ID to revert to after a race ends (used with auto-switch).",
+    ),
 )
 
 _SETTINGS_BY_KEY: dict[str, _SettingDef] = {s.key: s for s in _SETTINGS_DEFS}
@@ -1068,6 +1083,176 @@ def create_app(
         await _audit(request, "camera.delete", detail=camera_name, user=_user)
 
     # ------------------------------------------------------------------
+    # /admin/network (#256)
+    # ------------------------------------------------------------------
+
+    @app.get("/admin/network", response_class=HTMLResponse, include_in_schema=False)
+    async def admin_network_page(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> Response:
+        return _templates.TemplateResponse(
+            request, "admin/network.html", _tpl_ctx(request, "/admin/network")
+        )
+
+    @app.get("/api/network/status")
+    async def api_network_status(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return WLAN status, interface list, and internet connectivity."""
+        import helmlog.network as net_mod
+
+        wlan_status, interfaces, internet = await asyncio.gather(
+            net_mod.get_wlan_status(),
+            net_mod.list_interfaces(),
+            net_mod.check_internet(),
+        )
+        return JSONResponse(
+            {
+                "wlan": {
+                    "connected": wlan_status.connected,
+                    "ssid": wlan_status.ssid,
+                    "ip_address": wlan_status.ip_address,
+                    "signal_strength": wlan_status.signal_strength,
+                },
+                "interfaces": [
+                    {"name": i.name, "state": i.state, "ip_address": i.ip_address}
+                    for i in interfaces
+                ],
+                "internet": internet,
+            }
+        )
+
+    @app.get("/api/network/profiles")
+    async def api_list_network_profiles(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """List all WLAN profiles (camera + non-camera)."""
+        # Camera networks from cameras table
+        camera_rows = await storage.list_cameras()
+        camera_profiles = [
+            {
+                "id": f"camera:{r['name']}",
+                "name": f"{r['name']} — {r['wifi_ssid']}",
+                "ssid": r["wifi_ssid"],
+                "source": "camera",
+                "is_default": False,
+            }
+            for r in camera_rows
+            if r.get("wifi_ssid")
+        ]
+        # Non-camera profiles from wlan_profiles table
+        wlan_rows = await storage.list_wlan_profiles()
+        wlan_profiles = [
+            {
+                "id": f"profile:{r['id']}",
+                "name": r["name"],
+                "ssid": r["ssid"],
+                "source": "saved",
+                "is_default": bool(r["is_default"]),
+            }
+            for r in wlan_rows
+        ]
+        return JSONResponse(camera_profiles + wlan_profiles)
+
+    @app.post("/api/network/profiles", status_code=201)
+    async def api_add_network_profile(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Add a non-camera WLAN profile."""
+        body = await request.json()
+        name = body.get("name", "").strip()
+        ssid = body.get("ssid", "").strip()
+        password = body.get("password", "").strip() or None
+        is_default = bool(body.get("is_default", False))
+        if not name or not ssid:
+            raise HTTPException(422, detail="name and ssid are required")
+        pid = await storage.add_wlan_profile(name, ssid, password, is_default)
+        await _audit(request, "network.profile.add", detail=name, user=_user)
+        return JSONResponse({"id": pid, "name": name, "ssid": ssid}, status_code=201)
+
+    @app.put("/api/network/profiles/{profile_id}")
+    async def api_update_network_profile(
+        request: Request,
+        profile_id: int,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Update a non-camera WLAN profile."""
+        body = await request.json()
+        name = body.get("name", "").strip()
+        ssid = body.get("ssid", "").strip()
+        password = body.get("password", "").strip() or None
+        is_default = bool(body.get("is_default", False))
+        if not name or not ssid:
+            raise HTTPException(422, detail="name and ssid are required")
+        ok = await storage.update_wlan_profile(profile_id, name, ssid, password, is_default)
+        if not ok:
+            raise HTTPException(404, detail="Profile not found")
+        await _audit(request, "network.profile.update", detail=name, user=_user)
+        return JSONResponse({"id": profile_id, "name": name, "ssid": ssid})
+
+    @app.delete("/api/network/profiles/{profile_id}", status_code=204)
+    async def api_delete_network_profile(
+        request: Request,
+        profile_id: int,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> None:
+        """Delete a non-camera WLAN profile."""
+        ok = await storage.delete_wlan_profile(profile_id)
+        if not ok:
+            raise HTTPException(404, detail="Profile not found")
+        await _audit(request, "network.profile.delete", detail=str(profile_id), user=_user)
+
+    @app.post("/api/network/connect")
+    async def api_network_connect(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Connect to a WLAN profile (camera or saved)."""
+        import helmlog.network as net_mod
+
+        body = await request.json()
+        profile_id = body.get("profile_id", "")
+
+        if str(profile_id).startswith("camera:"):
+            camera_name = str(profile_id).removeprefix("camera:")
+            cams = await storage.list_cameras()
+            cam = next((c for c in cams if c["name"] == camera_name), None)
+            if not cam or not cam.get("wifi_ssid"):
+                raise HTTPException(404, detail="Camera network not found")
+            result = await net_mod.connect_to_ssid(cam["wifi_ssid"], cam.get("wifi_password"))
+        elif str(profile_id).startswith("profile:"):
+            pid = int(str(profile_id).removeprefix("profile:"))
+            profile = await storage.get_wlan_profile(pid)
+            if not profile:
+                raise HTTPException(404, detail="Profile not found")
+            result = await net_mod.connect_to_ssid(profile["ssid"], profile.get("password"))
+        else:
+            raise HTTPException(422, detail="Invalid profile_id format")
+
+        await _audit(request, "network.connect", detail=str(profile_id), user=_user)
+        return JSONResponse(
+            {
+                "success": result.success,
+                "ssid": result.ssid,
+                "error": result.error,
+            }
+        )
+
+    @app.post("/api/network/disconnect")
+    async def api_network_disconnect(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Disconnect WLAN (Ethernet-only mode)."""
+        import helmlog.network as net_mod
+
+        result = await net_mod.disconnect_wlan()
+        await _audit(request, "network.disconnect", user=_user)
+        return JSONResponse({"success": result.success, "error": result.error})
+
+    # ------------------------------------------------------------------
     # /api/state
     # ------------------------------------------------------------------
 
@@ -1366,7 +1551,18 @@ def create_app(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Camera start_all failed: {}", exc)
 
+        async def _network_auto_switch_start() -> None:
+            import helmlog.network as net_mod
+
+            try:
+                result = await net_mod.auto_switch_for_race_start(storage)
+                if result and not result.success:
+                    logger.warning("WLAN auto-switch failed: {}", result.error)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("WLAN auto-switch error: {}", exc)
+
         asyncio.ensure_future(_start_cameras(race.id))
+        asyncio.ensure_future(_network_auto_switch_start())
         await _audit(request, "race.start", detail=race.name, user=_user)
         return JSONResponse(
             {
@@ -1411,7 +1607,18 @@ def create_app(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Camera stop_all failed: {}", exc)
 
+        async def _network_auto_switch_end() -> None:
+            import helmlog.network as net_mod
+
+            try:
+                result = await net_mod.auto_switch_for_race_end(storage)
+                if result and not result.success:
+                    logger.warning("WLAN auto-revert failed: {}", result.error)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("WLAN auto-revert error: {}", exc)
+
         asyncio.ensure_future(_stop_cameras(race_id))
+        asyncio.ensure_future(_network_auto_switch_end())
 
         if recorder is not None and _audio_session_id is not None:
             completed = await recorder.stop()
@@ -1909,6 +2116,106 @@ def create_app(
         count = await _polar.build_polar_baseline(storage)
         await _audit(request, "polar.rebuild", detail=f"{count} bins", user=_user)
         return JSONResponse({"bins": count})
+
+    # ------------------------------------------------------------------
+    # /api/sessions/{id}/maneuvers  (maneuver detection)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/sessions/{session_id}/maneuvers")
+    async def api_session_maneuvers(
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return detected maneuvers for a session, with nearest GPS position."""
+        import json as _json
+
+        rows = await storage.get_session_maneuvers(session_id)
+
+        # Enrich with nearest position so the front end can place map markers.
+        # Find the closest position by checking both before and after the
+        # maneuver timestamp and picking the one with the smallest time gap.
+        # Scope queries to the session's time range so positions from other
+        # sessions are never returned.
+        db = storage._conn()
+        race_cur = await db.execute(
+            "SELECT start_utc, end_utc FROM races WHERE id = ?", (session_id,)
+        )
+        race_row = await race_cur.fetchone()
+        session_start = str(race_row["start_utc"])[:19] if race_row else None
+        session_end = str(race_row["end_utc"])[:19] if race_row else None
+
+        enriched = []
+        for row in rows:
+            d = dict(row)
+            ts_str = str(d["ts"])[:19]
+            # Position just before or at the maneuver time (within session)
+            before_cur = await db.execute(
+                "SELECT latitude_deg, longitude_deg, ts FROM positions"
+                " WHERE ts <= ? AND ts >= ? AND race_id = ?"
+                " ORDER BY ts DESC LIMIT 1",
+                (ts_str, session_start, session_id),
+            )
+            before = await before_cur.fetchone()
+            # Position just after the maneuver time (within session)
+            after_cur = await db.execute(
+                "SELECT latitude_deg, longitude_deg, ts FROM positions"
+                " WHERE ts > ? AND ts <= ? AND race_id = ?"
+                " ORDER BY ts LIMIT 1",
+                (ts_str, session_end, session_id),
+            )
+            after = await after_cur.fetchone()
+
+            # Pick the closer one by time delta
+            pos = None
+            if before and after:
+                from datetime import datetime as _dt
+
+                t_man = _dt.fromisoformat(ts_str)
+                t_before = _dt.fromisoformat(str(before["ts"])[:19])
+                t_after = _dt.fromisoformat(str(after["ts"])[:19])
+                pos = before if (t_man - t_before) <= (t_after - t_man) else after
+            else:
+                pos = before or after
+
+            d["lat"] = float(pos["latitude_deg"]) if pos else None
+            d["lon"] = float(pos["longitude_deg"]) if pos else None
+            if d.get("details") and isinstance(d["details"], str):
+                try:
+                    d["details"] = _json.loads(d["details"])
+                except Exception:
+                    d["details"] = {}
+            enriched.append(d)
+
+        return JSONResponse(enriched)
+
+    @app.post("/api/sessions/{session_id}/detect-maneuvers", status_code=202)
+    async def api_detect_maneuvers(
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Trigger maneuver detection (or re-detection) for a session.
+
+        Returns immediately with the count of detected maneuvers.
+        """
+        from helmlog.maneuver_detector import detect_maneuvers
+
+        # Verify session exists
+        db = storage._conn()
+        cur = await db.execute("SELECT id FROM races WHERE id = ?", (session_id,))
+        if await cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        maneuvers = await detect_maneuvers(storage, session_id)
+        return JSONResponse(
+            {
+                "session_id": session_id,
+                "detected": len(maneuvers),
+                "tacks": sum(1 for m in maneuvers if m.type == "tack"),
+                "gybes": sum(1 for m in maneuvers if m.type == "gybe"),
+                "roundings": sum(1 for m in maneuvers if m.type == "rounding"),
+            },
+            status_code=202,
+        )
 
     # ------------------------------------------------------------------
     # /api/sessions  (history browser)
@@ -3324,6 +3631,8 @@ def create_app(
         last = await storage.last_deployment()
         # Detect if on-disk code differs from what the running process loaded
         restart_needed = bool(_STARTUP_SHA and running["sha"] and running["sha"] != _STARTUP_SHA)
+        # Detect if checked-out branch differs from tracked branch
+        branch_mismatch = bool(running["branch"] and running["branch"] != config.branch)
         return JSONResponse(
             {
                 "running": {**running, "startup_sha": _STARTUP_SHA},
@@ -3335,8 +3644,9 @@ def create_app(
                     "end": config.window_end,
                 },
                 "commits_behind": behind,
-                "update_available": behind > 0 or restart_needed,
+                "update_available": behind > 0 or restart_needed or branch_mismatch,
                 "restart_needed": restart_needed,
+                "branch_mismatch": branch_mismatch,
                 "last_deploy": last,
             }
         )
@@ -3445,6 +3755,48 @@ def create_app(
     ) -> JSONResponse:
         deployments = await storage.list_deployments()
         return JSONResponse({"deployments": deployments})
+
+    @app.get("/api/deployment/pipeline")
+    @limiter.limit("10/minute")
+    async def api_deployment_pipeline(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.deploy import get_pipeline_status
+
+        pipeline = await get_pipeline_status()
+        return JSONResponse(pipeline)
+
+    @app.get("/api/deployment/promotions")
+    @limiter.limit("10/minute")
+    async def api_deployment_promotions(
+        request: Request,
+        tier: str | None = None,
+        limit: int = 20,
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.deploy import get_promotion_history
+
+        promotions = await get_promotion_history(tier=tier, limit=limit)
+        return JSONResponse({"promotions": promotions})
+
+    @app.get("/api/deployment/pending")
+    @limiter.limit("10/minute")
+    async def api_deployment_pending(
+        request: Request,
+        from_tier: str = "stage",
+        to_tier: str = "main",
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        from helmlog.deploy import get_pending_changes
+
+        valid_tiers = {"main", "stage", "live"}
+        if from_tier not in valid_tiers or to_tier not in valid_tiers:
+            raise HTTPException(
+                status_code=400, detail="Invalid tier — must be main, stage, or live"
+            )
+        commits = await get_pending_changes(from_tier=from_tier, to_tier=to_tier)
+        return JSONResponse({"commits": commits, "count": len(commits)})
 
     # ------------------------------------------------------------------
     # Admin: Federation
