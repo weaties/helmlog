@@ -17,6 +17,12 @@
 .video-link:hover{text-decoration:underline}
 .back-link{font-size:.82rem;color:#8892a4;text-decoration:none;margin-bottom:8px;display:inline-block}
 .back-link:hover{color:#7eb8f7}
+.polar-table{width:100%;border-collapse:collapse;font-size:.78rem;margin-top:6px}
+.polar-table th{color:#8892a4;font-weight:500;text-align:left;padding:4px 8px;border-bottom:1px solid #1e3050}
+.polar-table td{padding:4px 8px;border-bottom:1px solid #0d1a2e;color:#e8eaf0}
+.polar-delta-pos{color:#4ade80}
+.polar-delta-neg{color:#f87171}
+.polar-summary{font-size:.82rem;margin-top:8px;padding:6px 8px;background:#0d1929;border-radius:6px}
 .maneuver-table{width:100%;border-collapse:collapse;font-size:.78rem}
 .maneuver-table th{color:#8892a4;font-weight:400;text-align:left;padding:3px 6px;border-bottom:1px solid #1e3050}
 .maneuver-table td{padding:3px 6px;border-bottom:1px solid #0d1a2e;color:#c4cdd8}
@@ -95,6 +101,11 @@
 <div class="card" id="sharing-card" style="display:none">
   <div class="section-title">Co-op Sharing</div>
   <div id="sharing-body"></div>
+</div>
+
+<div class="card" id="polar-card" style="display:none">
+  <div class="section-title" onclick="toggleSection('polar')">Performance <span id="polar-toggle">&#9660;</span></div>
+  <div class="section-body" id="polar-body"></div>
 </div>
 
 <div class="card" id="exports-card" style="display:none">

@@ -1394,6 +1394,121 @@ def create_app(
         )
 
     # ------------------------------------------------------------------
+    # POST /api/polar/build  (rebuild polar baseline)
+    # ------------------------------------------------------------------
+
+    @app.post("/api/polar/build")
+    async def api_polar_build(
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> JSONResponse:
+        """Rebuild the polar performance baseline from all completed sessions."""
+        import helmlog.polar as _polar
+
+        count = await _polar.build_polar_baseline(storage)
+        return JSONResponse({"bins_written": count})
+
+    # ------------------------------------------------------------------
+    # /api/sessions/{id}/polar  (per-session polar performance)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/sessions/{session_id}/polar")
+    async def api_session_polar(
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return session BSP performance vs stored polar baseline, binned by wind."""
+        import helmlog.polar as _polar
+
+        db = storage._conn()
+        cur = await db.execute("SELECT start_utc, end_utc FROM races WHERE id = ?", (session_id,))
+        row = await cur.fetchone()
+        if row is None or row["start_utc"] is None or row["end_utc"] is None:
+            raise HTTPException(status_code=404, detail="Session not found or incomplete")
+
+        start = datetime.fromisoformat(str(row["start_utc"])).replace(tzinfo=UTC)
+        end = datetime.fromisoformat(str(row["end_utc"])).replace(tzinfo=UTC)
+
+        speeds = await storage.query_range("speeds", start, end)
+        winds = await storage.query_range("winds", start, end)
+        headings = await storage.query_range("headings", start, end)
+
+        # Index by truncated-second key
+        spd_by_s: dict[str, dict[str, Any]] = {}
+        for s in speeds:
+            spd_by_s.setdefault(str(s["ts"])[:19], s)
+        hdg_by_s: dict[str, dict[str, Any]] = {}
+        for h in headings:
+            hdg_by_s.setdefault(str(h["ts"])[:19], h)
+        tw_by_s: dict[str, dict[str, Any]] = {}
+        for w in winds:
+            if int(w.get("reference", -1)) not in (0, 4):
+                continue
+            tw_by_s.setdefault(str(w["ts"])[:19], w)
+
+        # Collect (tws_bin, twa_bin) → list of BSP values for this session
+        from collections import defaultdict
+
+        bin_samples: dict[tuple[int, int], list[float]] = defaultdict(list)
+        for sk, spd_row in spd_by_s.items():
+            wind_row = tw_by_s.get(sk)
+            if wind_row is None:
+                continue
+            ref = int(wind_row.get("reference", -1))
+            wind_angle = float(wind_row["wind_angle_deg"])
+            tws_kts = float(wind_row["wind_speed_kts"])
+            bsp_kts = float(spd_row["speed_kts"])
+            hdg_row = hdg_by_s.get(sk)
+            heading = float(hdg_row["heading_deg"]) if hdg_row else None
+            twa = _polar._compute_twa(wind_angle, ref, heading)
+            if twa is None:
+                continue
+            tb = _polar._tws_bin(tws_kts)
+            ab = _polar._twa_bin(twa)
+            bin_samples[(tb, ab)].append(bsp_kts)
+
+        # Load baseline and compute deltas
+        bins_out: list[dict[str, Any]] = []
+        for (tws_bin, twa_bin), bsp_vals in sorted(bin_samples.items()):
+            baseline = await storage.get_polar_point(tws_bin, twa_bin)
+            if baseline is None:
+                continue
+            session_mean = sum(bsp_vals) / len(bsp_vals)
+            baseline_mean = float(baseline["mean_bsp"])
+            baseline_p90 = float(baseline["p90_bsp"])
+            bins_out.append(
+                {
+                    "tws_bin": tws_bin,
+                    "twa_bin": twa_bin,
+                    "session_mean_bsp": round(session_mean, 4),
+                    "baseline_mean_bsp": baseline_mean,
+                    "baseline_p90_bsp": baseline_p90,
+                    "delta": round(session_mean - baseline_mean, 4),
+                    "sample_count": len(bsp_vals),
+                }
+            )
+
+        summary = None
+        if bins_out:
+            total_samples = sum(b["sample_count"] for b in bins_out)
+            weighted_delta = sum(b["delta"] * b["sample_count"] for b in bins_out) / total_samples
+            bins_above = sum(1 for b in bins_out if b["delta"] > 0)
+            bins_below = sum(1 for b in bins_out if b["delta"] < 0)
+            # Dominant TWS = the bin with the most samples
+            tws_counts: dict[int, int] = defaultdict(int)
+            for b in bins_out:
+                tws_counts[b["tws_bin"]] += b["sample_count"]
+            dominant_tws = max(tws_counts, key=tws_counts.get)  # type: ignore[arg-type]
+            summary = {
+                "weighted_delta": round(weighted_delta, 4),
+                "bins_above": bins_above,
+                "bins_below": bins_below,
+                "bins_insufficient": len(bin_samples) - len(bins_out),
+                "dominant_tws": dominant_tws,
+            }
+
+        return JSONResponse({"bins": bins_out, "summary": summary})
+
+    # ------------------------------------------------------------------
     # /api/event
     # ------------------------------------------------------------------
 

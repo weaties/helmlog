@@ -37,6 +37,7 @@ async function init() {
     loadCrew();
     loadSails();
     loadNotes();
+    if (_session.end_utc) loadPolar();
   }
   if (_session.has_audio && _session.audio_session_id) {
     loadTranscript();
@@ -758,6 +759,80 @@ function renderExports() {
     html += '<a class="btn-export" href="/api/audio/' + s.audio_session_id + '/download">&#8595; WAV</a>';
   }
   body.innerHTML = html;
+}
+
+// ---------------------------------------------------------------------------
+// Polar performance
+// ---------------------------------------------------------------------------
+
+async function loadPolar() {
+  const r = await fetch('/api/sessions/' + SESSION_ID + '/polar');
+  if (!r.ok) return;
+  const data = await r.json();
+
+  const card = document.getElementById('polar-card');
+  card.style.display = '';
+  const body = document.getElementById('polar-body');
+
+  if (!data.bins || !data.bins.length) {
+    body.innerHTML = '<div style="color:#8892a4;font-size:.82rem">'
+      + 'No polar baseline built yet.'
+      + ' <button class="btn-export" style="font-size:.78rem" onclick="buildPolar()">Build Baseline</button>'
+      + '</div>';
+    return;
+  }
+
+  let html = '<table class="polar-table"><thead><tr>'
+    + '<th>TWS</th><th>TWA</th><th>Session BSP</th><th>Baseline</th><th>P90</th><th>Delta</th><th>Samples</th>'
+    + '</tr></thead><tbody>';
+
+  for (const b of data.bins) {
+    const cls = b.delta > 0 ? 'polar-delta-pos' : b.delta < 0 ? 'polar-delta-neg' : '';
+    const sign = b.delta > 0 ? '+' : '';
+    html += '<tr>'
+      + '<td>' + b.tws_bin + '</td>'
+      + '<td>' + b.twa_bin + '&deg;</td>'
+      + '<td>' + b.session_mean_bsp.toFixed(2) + '</td>'
+      + '<td>' + b.baseline_mean_bsp.toFixed(2) + '</td>'
+      + '<td>' + b.baseline_p90_bsp.toFixed(2) + '</td>'
+      + '<td class="' + cls + '">' + sign + b.delta.toFixed(2) + '</td>'
+      + '<td>' + b.sample_count + '</td>'
+      + '</tr>';
+  }
+  html += '</tbody></table>';
+
+  if (data.summary) {
+    const s = data.summary;
+    const sign = s.weighted_delta > 0 ? '+' : '';
+    const cls = s.weighted_delta > 0 ? 'polar-delta-pos' : s.weighted_delta < 0 ? 'polar-delta-neg' : '';
+    html += '<div class="polar-summary">'
+      + '<span class="' + cls + '">' + sign + s.weighted_delta.toFixed(2) + ' kt</span>'
+      + ' weighted average vs baseline'
+      + ' &middot; ' + s.bins_above + ' bins above, ' + s.bins_below + ' below'
+      + (s.bins_insufficient > 0 ? ' &middot; ' + s.bins_insufficient + ' bins insufficient data' : '')
+      + ' &middot; Dominant TWS: ' + s.dominant_tws + ' kt'
+      + ' &middot; <button style="background:none;border:none;color:#7eb8f7;cursor:pointer;font-size:.78rem;text-decoration:underline" onclick="buildPolar()">Rebuild</button>'
+      + '</div>';
+  }
+
+  body.innerHTML = html;
+}
+
+async function buildPolar() {
+  const body = document.getElementById('polar-body');
+  body.innerHTML = '<span style="color:#facc15;font-size:.82rem">Building polar baseline\u2026</span>';
+  const r = await fetch('/api/polar/build', {method: 'POST'});
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    body.innerHTML = '<span style="color:#f87171;font-size:.82rem">Failed: ' + esc(d.detail || 'unknown error') + '</span>';
+    return;
+  }
+  const d = await r.json();
+  if (d.bins_written === 0) {
+    body.innerHTML = '<span style="color:#8892a4;font-size:.82rem">No bins built — need at least 3 completed sessions with speed and wind data in the same conditions.</span>';
+    return;
+  }
+  loadPolar();
 }
 
 // ---------------------------------------------------------------------------
