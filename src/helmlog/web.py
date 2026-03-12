@@ -4517,4 +4517,46 @@ def create_app(
         )
         return JSONResponse({"track": track, "count": len(track)})
 
+    @app.get(
+        "/api/federation/co-ops/{co_op_id}/peers/{fingerprint}/sessions/{session_id}/wind-field",
+    )
+    @limiter.limit("10/minute")
+    async def api_peer_session_wind_field(
+        request: Request,
+        co_op_id: str,
+        fingerprint: str,
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Proxy wind-field data from a specific remote peer (#246)."""
+        from helmlog.federation import load_identity
+        from helmlog.peer_client import fetch_session_wind_field
+
+        try:
+            private_key, card = load_identity()
+        except FileNotFoundError:
+            raise HTTPException(409, "Initialize identity first")  # noqa: B904
+
+        peer = await storage.get_co_op_peer(co_op_id, fingerprint)
+        if not peer or not peer.get("tailscale_ip"):
+            raise HTTPException(404, "Peer not found or no Tailscale IP")
+
+        data = await fetch_session_wind_field(
+            peer["tailscale_ip"],
+            co_op_id,
+            session_id,
+            private_key,
+            card.fingerprint,
+        )
+        if data is None:
+            raise HTTPException(502, "Failed to fetch wind-field from peer")
+
+        await _audit(
+            request,
+            "coop.proxy.peer_wind_field",
+            detail=f"co_op={co_op_id} peer={fingerprint} session={session_id}",
+            user=_user,
+        )
+        return JSONResponse(data)
+
     return app

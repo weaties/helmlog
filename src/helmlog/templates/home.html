@@ -181,6 +181,26 @@
       <option value="">This boat (local)</option>
     </select>
   </div>
+  <div style="border-top:1px solid #1e3a5f;margin:12px 0 8px;padding-top:10px">
+    <div class="label">Import wind model from co-op</div>
+    <div style="display:grid;grid-template-columns:1fr auto;gap:6px;align-items:end">
+      <select id="synth-peer-session" style="font-size:.82rem;padding:6px 8px;background:#0a1628;border:1px solid #2563eb;border-radius:4px;color:#e8eaf0">
+        <option value="">Select a peer session...</option>
+      </select>
+      <button class="btn" style="padding:6px 12px;font-size:.8rem;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;white-space:nowrap" id="synth-import-wind" onclick="importPeerWindModel()" disabled>Import Wind</button>
+    </div>
+    <div id="synth-import-status" style="font-size:.78rem;color:#8892a4;margin-top:4px;display:none"></div>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+    <label style="font-size:.82rem;color:#8892a4;display:flex;align-items:center;gap:4px;cursor:pointer">
+      <input type="checkbox" id="synth-collision" checked style="accent-color:#2563eb"/>
+      Collision avoidance
+    </label>
+    <label style="font-size:.78rem;color:#8892a4">
+      Min sep:
+      <input id="synth-min-sep" type="number" value="30" min="10" max="200" step="5" style="width:55px;font-size:.82rem;padding:2px 4px;background:#0a1628;border:1px solid #374151;border-radius:3px;color:#e8eaf0"/>m
+    </label>
+  </div>
   <button class="btn btn-synthesize" id="synth-go" style="width:100%;margin-top:8px" onclick="runSynthesize()">Generate</button>
   <div id="synth-result" style="margin-top:8px;font-size:.85rem;color:#fbbf24;display:none"></div>
 </div>

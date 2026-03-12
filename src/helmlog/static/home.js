@@ -1203,6 +1203,10 @@ function onSynthCourseChange() {
   updateSynthMarks();
 }
 
+// Track data imported from peer for collision avoidance (#246)
+let _importedPeerTracks = null;
+let _importedPeerInfo = null;
+
 async function loadCoopPeers() {
   try {
     const resp = await fetch('/api/co-op/peers');
@@ -1218,7 +1222,147 @@ async function loadCoopPeers() {
       sel.add(opt);
     }
     if (cur) sel.value = cur;
+
+    // Also populate peer session picker for wind model import
+    await loadPeerSessions(data.peers || []);
   } catch (_) {}
+}
+
+async function loadPeerSessions(peers) {
+  const sel = document.getElementById('synth-peer-session');
+  while (sel.options.length > 1) sel.remove(1);
+  const btn = document.getElementById('synth-import-wind');
+  btn.disabled = true;
+
+  // Query each co-op for peer sessions
+  const coopIds = [...new Set(peers.map(p => p.co_op_id).filter(Boolean))];
+  for (const coopId of coopIds) {
+    try {
+      const resp = await fetch('/api/federation/co-ops/' + coopId + '/peer-sessions');
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      for (const peer of (data.peers || [])) {
+        for (const s of (peer.sessions || [])) {
+          if (s.status !== 'available') continue;
+          // Only show synthesized sessions (they have wind models)
+          if (s.session_type !== 'synthesized') continue;
+          const label = (peer.boat_name || peer.sail_number || peer.fingerprint.slice(0, 8)) +
+            ' \u2014 ' + (s.name || 'Session ' + s.session_id);
+          const val = JSON.stringify({
+            coop: coopId,
+            fp: peer.fingerprint,
+            sid: s.session_id,
+            boat: peer.boat_name || peer.sail_number,
+          });
+          sel.add(new Option(label, val));
+        }
+      }
+    } catch (_) {}
+  }
+  sel.onchange = function() { btn.disabled = !sel.value; };
+}
+
+async function importPeerWindModel() {
+  const sel = document.getElementById('synth-peer-session');
+  if (!sel.value) return;
+
+  const btn = document.getElementById('synth-import-wind');
+  const status = document.getElementById('synth-import-status');
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+  status.style.display = '';
+  status.textContent = 'Fetching wind model from peer...';
+
+  try {
+    const info = JSON.parse(sel.value);
+
+    // Fetch wind model + start time
+    const wfResp = await fetch(
+      '/api/federation/co-ops/' + info.coop + '/peers/' + info.fp +
+      '/sessions/' + info.sid + '/wind-field'
+    );
+    if (!wfResp.ok) {
+      const err = await wfResp.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to fetch wind model (' + wfResp.status + ')');
+    }
+    const wfData = await wfResp.json();
+    const wp = wfData.wind_params;
+
+    // Pre-fill synthesis form from imported wind model
+    document.getElementById('synth-wind-dir').value = Math.round(wp.base_twd);
+    document.getElementById('synth-tws-lo').value = wp.tws_low;
+    document.getElementById('synth-tws-hi').value = wp.tws_high;
+    if (wp.laps) document.getElementById('synth-laps').value = wp.laps;
+    if (wp.ref_lat) document.getElementById('synth-lat').value = wp.ref_lat;
+    if (wp.ref_lon) document.getElementById('synth-lon').value = wp.ref_lon;
+
+    // Set course type
+    if (wp.course_type) {
+      document.getElementById('synth-course').value = wp.course_type;
+      onSynthCourseChange();
+    }
+    if (wp.mark_sequence && wp.course_type === 'custom') {
+      document.getElementById('synth-marks').value = wp.mark_sequence;
+    }
+
+    // Place RC marker on map
+    if (wp.ref_lat && wp.ref_lon) {
+      const lat = parseFloat(wp.ref_lat);
+      const lon = parseFloat(wp.ref_lon);
+      document.getElementById('synth-rc-display').textContent =
+        lat.toFixed(4) + ', ' + lon.toFixed(4);
+      document.getElementById('synth-lat-field').classList.remove('hidden');
+      placeRcMarker(lat, lon);
+      if (_synthMap) _synthMap.setView([lat, lon], 13);
+    }
+
+    // Update marks on map
+    updateSynthMarks();
+
+    // Set peer attribution
+    const peerSel = document.getElementById('synth-peer');
+    for (let i = 0; i < peerSel.options.length; i++) {
+      try {
+        const pv = JSON.parse(peerSel.options[i].value);
+        if (pv.fp === info.fp && pv.coop === info.coop) {
+          peerSel.selectedIndex = i;
+          break;
+        }
+      } catch (_) {}
+    }
+
+    // Fetch peer's track for collision avoidance
+    status.textContent = 'Fetching peer track for collision avoidance...';
+    const trackResp = await fetch(
+      '/api/federation/co-ops/' + info.coop + '/peers/' + info.fp +
+      '/sessions/' + info.sid + '/track'
+    );
+    if (trackResp.ok) {
+      const trackData = await trackResp.json();
+      _importedPeerTracks = [trackData.track || []];
+      _importedPeerInfo = info;
+      const pts = (trackData.track || []).length;
+      status.textContent = 'Imported wind model from ' + (info.boat || 'peer') +
+        ' + ' + pts + ' track points for collision avoidance';
+      status.style.color = '#16a34a';
+    } else {
+      _importedPeerTracks = null;
+      _importedPeerInfo = null;
+      status.textContent = 'Wind model imported (track not available for collision avoidance)';
+      status.style.color = '#fbbf24';
+    }
+
+    // Enable collision avoidance checkbox
+    document.getElementById('synth-collision').checked = !!_importedPeerTracks;
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+    status.style.color = '#ef4444';
+    _importedPeerTracks = null;
+    _importedPeerInfo = null;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Import Wind';
+  }
 }
 
 async function runSynthesize() {
@@ -1250,6 +1394,12 @@ async function runSynthesize() {
         if (peer.fp) body.peer_fingerprint = peer.fp;
         if (peer.coop) body.peer_co_op_id = peer.coop;
       } catch (_) {}
+    }
+    // Collision avoidance (#246)
+    const caEnabled = document.getElementById('synth-collision').checked;
+    if (caEnabled && _importedPeerTracks && _importedPeerTracks.length > 0) {
+      body.other_tracks = _importedPeerTracks;
+      body.min_separation_m = parseFloat(document.getElementById('synth-min-sep').value) || 30;
     }
     const resp = await fetch('/api/sessions/synthesize', {
       method: 'POST',
