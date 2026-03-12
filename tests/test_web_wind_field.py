@@ -64,14 +64,54 @@ async def test_synthesize_persists_course_marks(storage: Storage) -> None:
         sid = await _synthesize_session(client)
 
     marks = await storage.get_synth_course_marks(sid)
-    assert len(marks) >= 3  # at least S, A, F
     keys = {m["mark_key"] for m in marks}
-    assert "S" in keys
-    assert "A" in keys
-    assert "F" in keys
+    # W/L 1-lap course rounds A, X, F — only these marks should be persisted (#264)
+    assert keys == {"A", "X", "F"}
+    # Must NOT include start (S), gybe (G), or offset (O) marks
+    assert "G" not in keys, "Gybe mark should not appear in W/L course marks"
+    assert "O" not in keys, "Offset mark should not appear in W/L course marks"
     for m in marks:
         assert m["lat"] != 0
         assert m["lon"] != 0
+
+
+@pytest.mark.asyncio
+async def test_synthesize_course_marks_use_overridden_positions(storage: Storage) -> None:
+    """Dragged mark positions must be persisted, not original computed positions (#264)."""
+    await storage.set_daily_event("2026-03-10", "TestRegatta")
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Override the windward mark (A) to a noticeably different position
+        override_lat, override_lon = 47.65, -122.42
+        resp = await client.post(
+            "/api/sessions/synthesize",
+            json={
+                "course_type": "windward_leeward",
+                "wind_direction": 180,
+                "wind_speed_low": 10,
+                "wind_speed_high": 12,
+                "laps": 1,
+                "start_lat": 47.63,
+                "start_lon": -122.40,
+                "seed": 42,
+                "mark_overrides": {"A": {"lat": override_lat, "lon": override_lon}},
+            },
+        )
+        assert resp.status_code == 201
+        sid = resp.json()["id"]
+
+    marks = await storage.get_synth_course_marks(sid)
+    a_marks = [m for m in marks if m["mark_key"] == "A"]
+    assert len(a_marks) == 1
+    a_mark = a_marks[0]
+    assert abs(a_mark["lat"] - override_lat) < 1e-6, (
+        f"Windward mark lat should be overridden ({override_lat}), got {a_mark['lat']}"
+    )
+    assert abs(a_mark["lon"] - override_lon) < 1e-6, (
+        f"Windward mark lon should be overridden ({override_lon}), got {a_mark['lon']}"
+    )
 
 
 @pytest.mark.asyncio
