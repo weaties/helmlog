@@ -49,20 +49,21 @@ grafana-server.service (independent, starts at boot)
 1. [Daily use](#daily-use)
 2. [Web interfaces](#web-interfaces)
 3. [Race marking](#race-marking)
-4. [Sail tracking](#sail-tracking)
-5. [Linking YouTube videos](#linking-youtube-videos) (automated Insta360 pipeline + manual)
-6. [External data — weather and tides](#external-data--weather-and-tides)
-7. [Recording audio commentary](#recording-audio-commentary)
-8. [Audio transcription](#audio-transcription)
-9. [Email notifications](#email-notifications)
-10. [Timezone configuration](#timezone-configuration)
-11. [System health monitoring](#system-health-monitoring)
-12. [Documentation](#documentation)
-13. [Mac development](#mac-development)
-14. [Fresh SD card setup](#fresh-sd-card-setup)
-15. [Updating / deploying](#updating--deploying)
-16. [Configuration](#configuration)
-17. [Troubleshooting](#troubleshooting)
+4. [Performance analysis](#performance-analysis)
+5. [Sail tracking](#sail-tracking)
+6. [Linking YouTube videos](#linking-youtube-videos) (automated Insta360 pipeline + manual)
+7. [External data — weather and tides](#external-data--weather-and-tides)
+8. [Recording audio commentary](#recording-audio-commentary)
+9. [Audio transcription](#audio-transcription)
+10. [Email notifications](#email-notifications)
+11. [Timezone configuration](#timezone-configuration)
+12. [System health monitoring](#system-health-monitoring)
+13. [Documentation](#documentation)
+14. [Mac development](#mac-development)
+15. [Fresh SD card setup](#fresh-sd-card-setup)
+16. [Updating / deploying](#updating--deploying)
+17. [Configuration](#configuration)
+18. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -267,6 +268,24 @@ Once users exist, the admin can generate invite links from the **Admin** page
 
 To bypass auth entirely on a trusted LAN (e.g. local development), set
 `AUTH_DISABLED=true` in `.env` and restart the service.
+
+---
+
+## Performance analysis
+
+The **Session detail page** (`/session/{id}`, linked from History) provides
+post-race performance tools:
+
+- **Maneuver detection** — tacks and gybes are automatically identified from
+  1 Hz heading data using rate-of-turn thresholds. Detected maneuvers are
+  marked on the track map and listed with timestamps so you can review each
+  tack/gybe in context with video and instruments.
+- **Polar performance overlay** — a polar diagram plots actual boatspeed
+  against the J/105 target polar for each true wind angle observed during the
+  session. Points above the polar curve indicate the boat was over-performing;
+  points below highlight areas to improve.
+
+Both features work on real and synthesized sessions with no configuration.
 
 ---
 

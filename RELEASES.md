@@ -1,5 +1,42 @@
 # Release Notes
 
+## Sprint 2 complete — Performance Analysis & Synthesizer (2026-03-12)
+
+Sprint 2 (March 10–24) is feature-complete. Three stretch/secondary items were
+punted to Sprint 3: #226 (federation integration tests — Docker + Pi smoke),
+#186 (YouTube channel video linker script), and #166 (deep-link transcript
+segments to YouTube timestamps).
+
+### Performance analysis
+
+- **Maneuver detection** (#232) — automatic tack and gybe detection from 1 Hz
+  heading data, surfaced on the session detail page
+- **Polar performance visualization** (#233) — polar diagram overlay on the
+  session detail page showing boat performance against the J/105 target polar
+
+### Synthesizer improvements
+
+- **Spatially varying wind model** (#248) — wind direction and pressure
+  gradients across the course area instead of a single uniform wind field
+- **Tack on headers with realistic randomization** (#247) — synthesized boats
+  now tack when lifted, with heading noise and timing jitter for realistic
+  tracks
+- **Wind model sharing between co-op members** (#246) — co-op boats in a
+  synthesized session share the same wind field and start time so their tracks
+  are physically consistent
+- **Fix: leg-derived marks for wind field visualization** (#264) — wind field
+  overlay now uses the actual mark positions from leg geometry instead of the
+  original placed marks
+
+### Deploy & infrastructure
+
+- **Promotion history and branch comparison** (#258) — deploy admin page shows
+  a commit-level diff between the current branch and the promotion target
+- **Fix: create loki/promtail groups before chown** (#261) — setup.sh no longer
+  fails on a fresh Pi when the loki/promtail system groups don't exist yet
+
+---
+
 ## Promoted to live and stage from main, 2026-03-10
 
 ### Synthesize race sessions with interactive Leaflet map (#245, #252)
