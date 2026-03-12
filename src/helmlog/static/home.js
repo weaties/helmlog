@@ -1208,6 +1208,7 @@ let _importedPeerTracks = null;
 let _importedPeerInfo = null;
 let _importedWindSeed = null;
 let _importedWindParams = null;  // full wind params for shift magnitude, leg distance, etc.
+let _importedStartUtc = null;    // source session start time for co-op synthesis
 
 async function loadCoopPeers() {
   try {
@@ -1301,6 +1302,7 @@ async function importPeerWindModel() {
     // The seed is critical — it determines the entire wind field (shifts, puffs, gradients)
     _importedWindSeed = wp.seed;
     _importedWindParams = wp;
+    _importedStartUtc = wfData.start_utc || null;
     document.getElementById('synth-wind-dir').value = Math.round(wp.base_twd);
     document.getElementById('synth-tws-lo').value = wp.tws_low;
     document.getElementById('synth-tws-hi').value = wp.tws_high;
@@ -1371,6 +1373,7 @@ async function importPeerWindModel() {
     status.style.color = '#ef4444';
     _importedPeerTracks = null;
     _importedPeerInfo = null;
+    _importedStartUtc = null;
   } finally {
     btn.disabled = false;
     btn.textContent = 'Import Wind';
@@ -1394,6 +1397,7 @@ async function runSynthesize() {
       start_lon: parseFloat(document.getElementById('synth-lon').value) || -122.40,
       seed: Math.floor(Math.random() * 100000),
       wind_seed: _importedWindSeed != null ? _importedWindSeed : undefined,
+      start_utc: _importedStartUtc || undefined,
     };
     // Pass imported wind params that aren't in the form (shift magnitude, leg distance)
     if (_importedWindParams) {
@@ -1457,6 +1461,7 @@ async function runSynthesize() {
     // Clear imported state so next local synthesis gets a fresh seed
     _importedWindSeed = null;
     _importedWindParams = null;
+    _importedStartUtc = null;
     _importedPeerTracks = null;
     _importedPeerInfo = null;
   }

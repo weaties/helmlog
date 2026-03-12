@@ -1859,6 +1859,7 @@ def create_app(
         mark_sequence = body.get("mark_sequence", "")
         peer_fingerprint: str | None = body.get("peer_fingerprint") or None
         peer_co_op_id: str | None = body.get("peer_co_op_id") or None
+        raw_start_utc: str | None = body.get("start_utc")  # imported source session start
 
         # Collision avoidance — other boats' tracks to avoid (#246)
         raw_other_tracks: list[list[dict[str, Any]]] | None = body.get("other_tracks")
@@ -1920,7 +1921,10 @@ def create_app(
                 all_marks[key] = leg.target
         mark_warnings = validate_course_marks(all_marks)
 
-        now = datetime.now(UTC)
+        if raw_start_utc:
+            start_time = datetime.fromisoformat(raw_start_utc.replace("Z", "+00:00"))
+        else:
+            start_time = datetime.now(UTC)
         config = SynthConfig(
             start_lat=start_lat,
             start_lon=start_lon,
@@ -1931,7 +1935,7 @@ def create_app(
             shift_magnitude=(shift_mag_lo, shift_mag_hi),
             legs=legs,
             seed=seed,
-            start_time=now,
+            start_time=start_time,
             wind_seed=wind_seed,
             header_response=header_response,
             collision_avoidance=collision_avoidance,
