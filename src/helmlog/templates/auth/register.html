@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>HelmLog — Create Account</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;
+padding:16px;max-width:480px;margin:0 auto}
+h1{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:8px}
+p.sub{font-size:.9rem;color:#8892a4;margin-bottom:16px}
+.card{background:#131f35;border-radius:12px;padding:20px;margin-bottom:16px}
+label{font-size:.85rem;color:#8892a4;display:block;margin-bottom:6px}
+input{width:100%;background:#0a1628;border:1px solid #2563eb;border-radius:8px;
+padding:12px;color:#e8eaf0;font-size:1rem;margin-bottom:14px}
+input[readonly]{opacity:.6;cursor:not-allowed}
+.btn{display:block;width:100%;padding:14px;border:none;border-radius:10px;
+font-size:1rem;font-weight:700;cursor:pointer;background:#2563eb;color:#fff;margin-bottom:8px}
+.btn-oauth{background:#475569}
+.divider{text-align:center;color:#8892a4;margin:12px 0;font-size:.85rem}
+</style>
+</head>
+<body>
+<h1>Welcome to HelmLog</h1>
+<p class="sub">You've been invited as <strong>{{ role }}</strong>. Set up your account below.</p>
+<div class="card">
+<form method="post" action="/auth/register">
+<input type="hidden" name="token" value="{{ token }}"/>
+<label>Email</label>
+<input type="email" name="email" value="{{ email }}" readonly/>
+<label>Your name</label>
+<input type="text" name="name" value="{{ name or '' }}" placeholder="Your name"/>
+<label>Password</label>
+<input type="password" name="password" placeholder="Choose a password" required minlength="8" autocomplete="new-password"/>
+<label>Confirm password</label>
+<input type="password" name="password_confirm" placeholder="Confirm password" required minlength="8" autocomplete="new-password"/>
+<button class="btn" type="submit">Create account</button>
+</form>
+{{ error_html|safe }}
+</div>
+{% if oauth_providers %}
+<div class="card">
+<div class="divider">or sign up with</div>
+{% for provider in oauth_providers %}
+<a href="/auth/oauth/{{ provider }}?token={{ token }}" class="btn btn-oauth" style="text-align:center;text-decoration:none;display:block">Sign up with {{ provider|capitalize }}</a>
+{% endfor %}
+</div>
+{% endif %}
+</body>
+</html>

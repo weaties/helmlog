@@ -71,7 +71,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 34
+_CURRENT_VERSION: int = 35
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -725,6 +725,46 @@ _MIGRATIONS: dict[int, str] = {
     34: """
         ALTER TABLE users ADD COLUMN is_developer INTEGER NOT NULL DEFAULT 0;
         ALTER TABLE invite_tokens ADD COLUMN is_developer INTEGER NOT NULL DEFAULT 0;
+    """,
+    35: """
+        -- Migration 35: Invitation + flexible auth (#268)
+        CREATE TABLE IF NOT EXISTS user_credentials (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            provider      TEXT NOT NULL,
+            provider_uid  TEXT,
+            password_hash TEXT,
+            created_at    TEXT NOT NULL,
+            UNIQUE(user_id, provider)
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_credentials_provider
+            ON user_credentials(provider, provider_uid);
+
+        CREATE TABLE IF NOT EXISTS invitations (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            token       TEXT UNIQUE NOT NULL,
+            email       TEXT NOT NULL,
+            role        TEXT NOT NULL,
+            name        TEXT,
+            is_developer INTEGER NOT NULL DEFAULT 0,
+            invited_by  INTEGER REFERENCES users(id),
+            created_at  TEXT NOT NULL,
+            expires_at  TEXT NOT NULL,
+            accepted_at TEXT,
+            revoked_at  TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            token      TEXT UNIQUE NOT NULL,
+            user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            expires_at TEXT NOT NULL,
+            used_at    TEXT
+        );
+
+        ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1;
+
+        DROP TABLE IF EXISTS invite_tokens;
     """,
 }
 
@@ -2891,7 +2931,7 @@ class Storage:
         return cur.lastrowid
 
     async def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
-        cols = "id, email, name, role, created_at, last_seen, avatar_path, is_developer"
+        cols = "id, email, name, role, created_at, last_seen, avatar_path, is_developer, is_active"
         cur = await self._conn().execute(
             f"SELECT {cols} FROM users WHERE id = ?",
             (user_id,),
@@ -2900,7 +2940,7 @@ class Storage:
         return dict(row) if row else None
 
     async def get_user_by_email(self, email: str) -> dict[str, Any] | None:
-        cols = "id, email, name, role, created_at, last_seen, avatar_path, is_developer"
+        cols = "id, email, name, role, created_at, last_seen, avatar_path, is_developer, is_active"
         cur = await self._conn().execute(
             f"SELECT {cols} FROM users WHERE email = ?",
             (email.lower().strip(),),
@@ -2937,60 +2977,194 @@ class Storage:
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def create_invite_token(
+    # ------------------------------------------------------------------
+    # Invitations (#268)
+    # ------------------------------------------------------------------
+
+    async def create_invitation(
         self,
         token: str,
         email: str,
         role: str,
-        created_by: int | None,
+        name: str | None,
+        is_developer: bool,
+        invited_by: int | None,
         expires_at: str,
-        *,
-        is_developer: bool = False,
-    ) -> None:
-        db = self._conn()
-        await db.execute(
-            "INSERT INTO invite_tokens (token, email, role, created_by, expires_at, is_developer)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (token, email.lower().strip(), role, created_by, expires_at, int(is_developer)),
-        )
-        await db.commit()
-
-    async def get_invite_token(self, token: str) -> dict[str, Any] | None:
-        cur = await self._conn().execute(
-            "SELECT token, email, role, created_by, expires_at, used_at, is_developer"
-            " FROM invite_tokens WHERE token = ?",
-            (token,),
-        )
-        row = await cur.fetchone()
-        return dict(row) if row else None
-
-    async def redeem_invite_token(self, token: str) -> None:
-        """Mark the token as used (sets used_at to now)."""
+    ) -> int:
+        """Insert a new invitation and return the new id."""
         from datetime import UTC
         from datetime import datetime as _datetime
 
         now = _datetime.now(UTC).isoformat()
         db = self._conn()
-        await db.execute("UPDATE invite_tokens SET used_at = ? WHERE token = ?", (now, token))
+        cur = await db.execute(
+            "INSERT INTO invitations"
+            " (token, email, role, name, is_developer, invited_by, created_at, expires_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                token,
+                email.lower().strip(),
+                role,
+                name,
+                int(is_developer),
+                invited_by,
+                now,
+                expires_at,
+            ),
+        )
         await db.commit()
+        assert cur.lastrowid is not None
+        return cur.lastrowid
 
-    async def count_recent_tokens_for_email(self, email: str, window_hours: int = 1) -> int:
-        """Count invite tokens created for *email* in the last *window_hours* hours.
-
-        Since ``invite_tokens`` has no ``created_at`` column, we derive creation
-        time from ``expires_at`` (tokens expire 7 days after creation).  A token
-        created within the window has ``expires_at > now + 7d - window``.
-        """
-        from datetime import UTC, timedelta
-        from datetime import datetime as _dt
-
-        threshold = (_dt.now(UTC) + timedelta(days=7) - timedelta(hours=window_hours)).isoformat()
+    async def get_invitation(self, token: str) -> dict[str, Any] | None:
         cur = await self._conn().execute(
-            "SELECT COUNT(*) FROM invite_tokens WHERE email = ? AND expires_at > ?",
-            (email.lower().strip(), threshold),
+            "SELECT id, token, email, role, name, is_developer, invited_by,"
+            " created_at, expires_at, accepted_at, revoked_at"
+            " FROM invitations WHERE token = ?",
+            (token,),
         )
         row = await cur.fetchone()
-        return row[0] if row else 0
+        return dict(row) if row else None
+
+    async def accept_invitation(self, token: str) -> None:
+        """Mark the invitation as accepted (sets accepted_at to now)."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        await db.execute("UPDATE invitations SET accepted_at = ? WHERE token = ?", (now, token))
+        await db.commit()
+
+    async def revoke_invitation(self, invitation_id: int) -> None:
+        """Mark the invitation as revoked (sets revoked_at to now)."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        await db.execute("UPDATE invitations SET revoked_at = ? WHERE id = ?", (now, invitation_id))
+        await db.commit()
+
+    async def list_pending_invitations(self) -> list[dict[str, Any]]:
+        """Return invitations that are pending (not accepted, not revoked, not expired)."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        cur = await self._conn().execute(
+            "SELECT id, token, email, role, name, is_developer, invited_by,"
+            " created_at, expires_at"
+            " FROM invitations"
+            " WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?"
+            " ORDER BY created_at DESC",
+            (now,),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # User credentials (#268)
+    # ------------------------------------------------------------------
+
+    async def create_credential(
+        self,
+        user_id: int,
+        provider: str,
+        provider_uid: str | None,
+        password_hash: str | None,
+    ) -> int:
+        """Insert a new user credential and return the new id."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        cur = await db.execute(
+            "INSERT INTO user_credentials"
+            " (user_id, provider, provider_uid, password_hash, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (user_id, provider, provider_uid, password_hash, now),
+        )
+        await db.commit()
+        assert cur.lastrowid is not None
+        return cur.lastrowid
+
+    async def get_credential(self, user_id: int, provider: str) -> dict[str, Any] | None:
+        cur = await self._conn().execute(
+            "SELECT id, user_id, provider, provider_uid, password_hash, created_at"
+            " FROM user_credentials WHERE user_id = ? AND provider = ?",
+            (user_id, provider),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def get_credential_by_provider_uid(
+        self, provider: str, provider_uid: str
+    ) -> dict[str, Any] | None:
+        cur = await self._conn().execute(
+            "SELECT id, user_id, provider, provider_uid, password_hash, created_at"
+            " FROM user_credentials WHERE provider = ? AND provider_uid = ?",
+            (provider, provider_uid),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def update_password_hash(self, user_id: int, password_hash: str) -> None:
+        db = self._conn()
+        await db.execute(
+            "UPDATE user_credentials SET password_hash = ?"
+            " WHERE user_id = ? AND provider = 'password'",
+            (password_hash, user_id),
+        )
+        await db.commit()
+
+    # ------------------------------------------------------------------
+    # Password reset tokens (#268)
+    # ------------------------------------------------------------------
+
+    async def create_password_reset_token(self, token: str, user_id: int, expires_at: str) -> None:
+        db = self._conn()
+        await db.execute(
+            "INSERT INTO password_reset_tokens (token, user_id, expires_at) VALUES (?, ?, ?)",
+            (token, user_id, expires_at),
+        )
+        await db.commit()
+
+    async def get_password_reset_token(self, token: str) -> dict[str, Any] | None:
+        cur = await self._conn().execute(
+            "SELECT id, token, user_id, expires_at, used_at"
+            " FROM password_reset_tokens WHERE token = ?",
+            (token,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def use_password_reset_token(self, token: str) -> None:
+        """Mark the reset token as used (sets used_at to now)."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        await db.execute(
+            "UPDATE password_reset_tokens SET used_at = ? WHERE token = ?", (now, token)
+        )
+        await db.commit()
+
+    # ------------------------------------------------------------------
+    # User activation (#268)
+    # ------------------------------------------------------------------
+
+    async def deactivate_user(self, user_id: int) -> None:
+        db = self._conn()
+        await db.execute("UPDATE users SET is_active = 0 WHERE id = ?", (user_id,))
+        await db.commit()
+
+    async def activate_user(self, user_id: int) -> None:
+        db = self._conn()
+        await db.execute("UPDATE users SET is_active = 1 WHERE id = ?", (user_id,))
+        await db.commit()
 
     async def create_session(
         self,
@@ -3385,8 +3559,8 @@ class Storage:
         """Anonymize and soft-delete a user.
 
         Replaces email with deleted_<id>@redacted, clears name and avatar,
-        deletes auth sessions and invite tokens. Preserves audit trail with
-        anonymized user_id references.
+        deletes auth sessions, credentials, and invitation references.
+        Preserves audit trail with anonymized user_id references.
         """
         db = self._conn()
         anon_email = f"deleted_{user_id}@redacted"
@@ -3395,8 +3569,9 @@ class Storage:
             (anon_email, user_id),
         )
         await db.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM user_credentials WHERE user_id = ?", (user_id,))
         await db.execute(
-            "UPDATE invite_tokens SET created_by = NULL WHERE created_by = ?", (user_id,)
+            "UPDATE invitations SET invited_by = NULL WHERE invited_by = ?", (user_id,)
         )
         await db.commit()
         logger.info("User {} anonymized and sessions deleted", user_id)

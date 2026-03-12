@@ -9,25 +9,38 @@
 body{font-family:system-ui,sans-serif;background:#0a1628;color:#e8eaf0;
 padding:16px;max-width:480px;margin:0 auto}
 h1{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:16px}
-.card{background:#131f35;border-radius:12px;padding:20px}
+.card{background:#131f35;border-radius:12px;padding:20px;margin-bottom:16px}
 label{font-size:.85rem;color:#8892a4;display:block;margin-bottom:6px}
 input{width:100%;background:#0a1628;border:1px solid #2563eb;border-radius:8px;
 padding:12px;color:#e8eaf0;font-size:1rem;margin-bottom:14px}
 .btn{display:block;width:100%;padding:14px;border:none;border-radius:10px;
-font-size:1rem;font-weight:700;cursor:pointer;background:#2563eb;color:#fff}
+font-size:1rem;font-weight:700;cursor:pointer;background:#2563eb;color:#fff;margin-bottom:8px}
+.btn-oauth{background:#475569}
+.divider{text-align:center;color:#8892a4;margin:12px 0;font-size:.85rem}
+a{color:#7eb8f7}
 </style>
 </head>
 <body>
 <h1>HelmLog</h1>
 <div class="card">
-<form method="post" action="/login">
+<form method="post" action="/auth/login">
 <input type="hidden" name="next" value="{{ next_url }}"/>
-<label>Invite token</label>
-<input type="text" name="token" placeholder="Paste your invite token here" autocomplete="off" value="{{ token_value }}"/>
+<label>Email</label>
+<input type="email" name="email" placeholder="you@example.com" required autocomplete="email"/>
+<label>Password</label>
+<input type="password" name="password" placeholder="Your password" required autocomplete="current-password"/>
 <button class="btn" type="submit">Sign in</button>
 </form>
 {{ error_html|safe }}
+<p style="margin-top:8px;font-size:.85rem"><a href="/auth/forgot-password">Forgot password?</a></p>
 </div>
-{{ email_form_html|safe }}
+{% if oauth_providers %}
+<div class="card">
+<div class="divider">or sign in with</div>
+{% for provider in oauth_providers %}
+<a href="/auth/oauth/{{ provider }}?next={{ next_url }}" class="btn btn-oauth" style="text-align:center;text-decoration:none;display:block">Sign in with {{ provider|capitalize }}</a>
+{% endfor %}
+</div>
+{% endif %}
 </body>
 </html>
