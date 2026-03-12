@@ -762,77 +762,260 @@ function renderExports() {
 }
 
 // ---------------------------------------------------------------------------
-// Polar performance
+// Polar Performance
 // ---------------------------------------------------------------------------
 
+let _polarData = null;
+
 async function loadPolar() {
-  const r = await fetch('/api/sessions/' + SESSION_ID + '/polar');
-  if (!r.ok) return;
-  const data = await r.json();
+  try {
+    const r = await fetch('/api/sessions/' + SESSION_ID + '/polar');
+    if (!r.ok) return;
+    const data = await r.json();
+    if (!data.cells || !data.cells.length) return;
 
-  const card = document.getElementById('polar-card');
-  card.style.display = '';
-  const body = document.getElementById('polar-body');
+    _polarData = data;
+    document.getElementById('polar-card').style.display = '';
+    renderPolarDiagram();
+    renderPolarHeatmap();
 
-  if (!data.bins || !data.bins.length) {
-    body.innerHTML = '<div style="color:#8892a4;font-size:.82rem">'
-      + 'No polar baseline built yet.'
-      + ' <button class="btn-export" style="font-size:.78rem" onclick="buildPolar()">Build Baseline</button>'
-      + '</div>';
-    return;
-  }
-
-  let html = '<table class="polar-table"><thead><tr>'
-    + '<th>TWS</th><th>TWA</th><th>Session BSP</th><th>Baseline</th><th>P90</th><th>Delta</th><th>Samples</th>'
-    + '</tr></thead><tbody>';
-
-  for (const b of data.bins) {
-    const cls = b.delta > 0 ? 'polar-delta-pos' : b.delta < 0 ? 'polar-delta-neg' : '';
-    const sign = b.delta > 0 ? '+' : '';
-    html += '<tr>'
-      + '<td>' + b.tws_bin + '</td>'
-      + '<td>' + b.twa_bin + '&deg;</td>'
-      + '<td>' + b.session_mean_bsp.toFixed(2) + '</td>'
-      + '<td>' + b.baseline_mean_bsp.toFixed(2) + '</td>'
-      + '<td>' + b.baseline_p90_bsp.toFixed(2) + '</td>'
-      + '<td class="' + cls + '">' + sign + b.delta.toFixed(2) + '</td>'
-      + '<td>' + b.sample_count + '</td>'
-      + '</tr>';
-  }
-  html += '</tbody></table>';
-
-  if (data.summary) {
-    const s = data.summary;
-    const sign = s.weighted_delta > 0 ? '+' : '';
-    const cls = s.weighted_delta > 0 ? 'polar-delta-pos' : s.weighted_delta < 0 ? 'polar-delta-neg' : '';
-    html += '<div class="polar-summary">'
-      + '<span class="' + cls + '">' + sign + s.weighted_delta.toFixed(2) + ' kt</span>'
-      + ' weighted average vs baseline'
-      + ' &middot; ' + s.bins_above + ' bins above, ' + s.bins_below + ' below'
-      + (s.bins_insufficient > 0 ? ' &middot; ' + s.bins_insufficient + ' bins insufficient data' : '')
-      + ' &middot; Dominant TWS: ' + s.dominant_tws + ' kt'
-      + ' &middot; <button style="background:none;border:none;color:#7eb8f7;cursor:pointer;font-size:.78rem;text-decoration:underline" onclick="buildPolar()">Rebuild</button>'
-      + '</div>';
-  }
-
-  body.innerHTML = html;
+    // Summary line
+    const above = data.cells.filter(c => c.delta != null && c.delta > 0).length;
+    const below = data.cells.filter(c => c.delta != null && c.delta < 0).length;
+    const noBaseline = data.cells.filter(c => c.delta == null).length;
+    const withDelta = data.cells.filter(c => c.delta != null);
+    let avgDelta = 0;
+    if (withDelta.length) {
+      const totalWeight = withDelta.reduce((s, c) => s + c.samples, 0);
+      avgDelta = withDelta.reduce((s, c) => s + c.delta * c.samples, 0) / totalWeight;
+    }
+    const sign = avgDelta >= 0 ? '+' : '';
+    const summary = document.getElementById('polar-summary');
+    summary.innerHTML =
+      sign + avgDelta.toFixed(2) + ' kt weighted avg vs baseline &middot; '
+      + above + ' bins above, ' + below + ' below'
+      + (noBaseline ? ' &middot; ' + noBaseline + ' bins no baseline' : '')
+      + ' &middot; ' + data.session_sample_count + ' samples'
+      + ' &middot; <button onclick="rebuildPolarBaseline()" style="background:none;border:none;color:#7eb8f7;cursor:pointer;font-size:.78rem;text-decoration:underline;padding:0">Rebuild baseline</button>';
+  } catch (e) { /* non-fatal */ }
 }
 
-async function buildPolar() {
-  const body = document.getElementById('polar-body');
-  body.innerHTML = '<span style="color:#facc15;font-size:.82rem">Building polar baseline\u2026</span>';
-  const r = await fetch('/api/polar/build', {method: 'POST'});
-  if (!r.ok) {
-    const d = await r.json().catch(() => ({}));
-    body.innerHTML = '<span style="color:#f87171;font-size:.82rem">Failed: ' + esc(d.detail || 'unknown error') + '</span>';
-    return;
+async function rebuildPolarBaseline() {
+  const summary = document.getElementById('polar-summary');
+  summary.textContent = 'Rebuilding baseline\u2026';
+  try {
+    const r = await fetch('/api/polar/rebuild', {method: 'POST'});
+    if (!r.ok) { summary.textContent = 'Rebuild failed: ' + r.status; return; }
+    const d = await r.json();
+    summary.textContent = 'Baseline rebuilt: ' + d.bins + ' bins. Reloading\u2026';
+    await loadPolar();
+  } catch (e) { summary.textContent = 'Rebuild failed'; }
+}
+
+function setPolarView(view) {
+  document.getElementById('polar-diagram-view').style.display = view === 'diagram' ? '' : 'none';
+  document.getElementById('polar-heatmap-view').style.display = view === 'heatmap' ? '' : 'none';
+  document.getElementById('polar-tab-diagram').classList.toggle('active', view === 'diagram');
+  document.getElementById('polar-tab-heatmap').classList.toggle('active', view === 'heatmap');
+}
+
+// --- Polar diagram (Canvas) ---
+
+const _TWS_COLORS = [
+  [6, '#7dd3fc'],  [8, '#38bdf8'],  [10, '#2563eb'],
+  [12, '#7c3aed'], [14, '#f97316'], [16, '#ef4444'],
+  [18, '#dc2626'], [20, '#991b1b'],
+];
+
+function _twsColor(tws) {
+  for (let i = _TWS_COLORS.length - 1; i >= 0; i--) {
+    if (tws >= _TWS_COLORS[i][0]) return _TWS_COLORS[i][1];
   }
-  const d = await r.json();
-  if (d.bins_written === 0) {
-    body.innerHTML = '<span style="color:#8892a4;font-size:.82rem">No bins built — need at least 3 completed sessions with speed and wind data in the same conditions.</span>';
-    return;
+  return '#94a3b8';
+}
+
+function renderPolarDiagram() {
+  const canvas = document.getElementById('polar-canvas');
+  if (!canvas || !_polarData) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2, cy = 30;
+  const maxRadius = H - 50;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Determine BSP range for scaling
+  let maxBsp = 0;
+  for (const c of _polarData.cells) {
+    if (c.session_mean != null) maxBsp = Math.max(maxBsp, c.session_mean);
+    if (c.baseline_mean != null) maxBsp = Math.max(maxBsp, c.baseline_mean);
+    if (c.baseline_p90 != null) maxBsp = Math.max(maxBsp, c.baseline_p90);
   }
-  loadPolar();
+  maxBsp = Math.ceil(maxBsp) + 1;
+  if (maxBsp < 4) maxBsp = 4;
+  const scale = maxRadius / maxBsp;
+
+  // Draw concentric BSP circles
+  ctx.strokeStyle = '#1e3a5f';
+  ctx.lineWidth = 0.5;
+  ctx.setLineDash([3, 3]);
+  ctx.font = '11px monospace';
+  ctx.fillStyle = '#8892a4';
+  for (let bsp = 1; bsp <= maxBsp; bsp++) {
+    const r = bsp * scale;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI);
+    ctx.stroke();
+    ctx.fillText(bsp + '', cx + r + 3, cy + 4);
+  }
+
+  // Draw radial TWA lines
+  ctx.strokeStyle = '#1e3a5f';
+  for (let deg = 0; deg <= 180; deg += 30) {
+    const rad = deg * Math.PI / 180;
+    const x2 = cx + maxBsp * scale * Math.sin(rad);
+    const y2 = cy + maxBsp * scale * Math.cos(rad);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    // Label
+    const lx = cx + (maxBsp * scale + 14) * Math.sin(rad);
+    const ly = cy + (maxBsp * scale + 14) * Math.cos(rad);
+    ctx.fillText(deg + '\u00b0', lx - 10, ly + 4);
+  }
+  ctx.setLineDash([]);
+
+  // Group baseline cells by TWS
+  const baselineByTws = {};
+  for (const c of _polarData.cells) {
+    if (c.baseline_mean == null) continue;
+    if (!baselineByTws[c.tws]) baselineByTws[c.tws] = [];
+    baselineByTws[c.tws].push(c);
+  }
+
+  // Draw baseline curves
+  const drawnTws = [];
+  for (const tws of Object.keys(baselineByTws).map(Number).sort((a, b) => a - b)) {
+    const pts = baselineByTws[tws].sort((a, b) => a.twa - b.twa);
+    if (pts.length < 2) continue;
+    const color = _twsColor(tws);
+    drawnTws.push({tws, color});
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.7;
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const rad = pts[i].twa * Math.PI / 180;
+      const r = pts[i].baseline_mean * scale;
+      const x = cx + r * Math.sin(rad);
+      const y = cy + r * Math.cos(rad);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Draw session points
+  for (const c of _polarData.cells) {
+    if (c.session_mean == null) continue;
+    const rad = c.twa * Math.PI / 180;
+    const r = c.session_mean * scale;
+    const x = cx + r * Math.sin(rad);
+    const y = cy + r * Math.cos(rad);
+
+    const dotColor = c.delta == null ? '#94a3b8'
+      : c.delta >= 0 ? '#22c55e' : '#ef4444';
+    const dotSize = Math.min(6, Math.max(3, Math.log2(c.samples + 1) * 1.5));
+
+    ctx.beginPath();
+    ctx.arc(x, y, dotSize, 0, 2 * Math.PI);
+    ctx.fillStyle = dotColor;
+    ctx.fill();
+    ctx.strokeStyle = '#0a1628';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // Legend
+  const legend = document.getElementById('polar-legend');
+  if (legend && drawnTws.length) {
+    legend.innerHTML = 'Baseline curves: '
+      + drawnTws.map(d =>
+        '<span style="color:' + d.color + '">\u25cf ' + d.tws + ' kt</span>'
+      ).join(' &nbsp; ')
+      + ' &nbsp; Session: '
+      + '<span style="color:#22c55e">\u25cf faster</span> '
+      + '<span style="color:#ef4444">\u25cf slower</span> '
+      + '<span style="color:#94a3b8">\u25cf no baseline</span>';
+  }
+}
+
+// --- Heatmap ---
+
+function _deltaColor(delta) {
+  if (delta == null) return '#1e293b';
+  const clamped = Math.max(-1, Math.min(1, delta));
+  if (clamped >= 0) {
+    const t = clamped;
+    return 'rgb(' + Math.round(20 + (1 - t) * 180) + ','
+      + Math.round(80 + t * 160) + ','
+      + Math.round(20 + (1 - t) * 180) + ')';
+  } else {
+    const t = -clamped;
+    return 'rgb(' + Math.round(80 + t * 160) + ','
+      + Math.round(20 + (1 - t) * 180) + ','
+      + Math.round(20 + (1 - t) * 180) + ')';
+  }
+}
+
+function renderPolarHeatmap() {
+  const container = document.getElementById('polar-heatmap');
+  if (!container || !_polarData) return;
+
+  const data = _polarData;
+  const cellMap = {};
+  for (const c of data.cells) {
+    cellMap[c.tws + ',' + c.twa] = c;
+  }
+
+  let html = '<table style="border-collapse:collapse;font-size:.72rem;width:100%">';
+
+  // Header row: TWA labels
+  html += '<tr><th style="padding:2px 4px;color:#8892a4;text-align:right;font-weight:normal">TWS\\TWA</th>';
+  for (const twa of data.twa_bins) {
+    html += '<th style="padding:2px 4px;color:#8892a4;font-weight:normal;min-width:36px">' + twa + '\u00b0</th>';
+  }
+  html += '</tr>';
+
+  // One row per TWS
+  for (const tws of data.tws_bins) {
+    html += '<tr><td style="padding:2px 4px;color:#8892a4;text-align:right;white-space:nowrap">' + tws + ' kt</td>';
+    for (const twa of data.twa_bins) {
+      const c = cellMap[tws + ',' + twa];
+      if (!c) {
+        html += '<td style="padding:2px 4px;background:#0d1929;border:1px solid #0a1628"></td>';
+        continue;
+      }
+      const bg = _deltaColor(c.delta);
+      const textColor = c.delta == null ? '#8892a4' : '#e8eaf0';
+      const text = c.delta != null
+        ? (c.delta >= 0 ? '+' : '') + c.delta.toFixed(2)
+        : c.session_mean != null ? c.session_mean.toFixed(1) : '';
+      const title = 'TWS=' + tws + ' TWA=' + twa + '\u00b0'
+        + '\nSession BSP: ' + (c.session_mean != null ? c.session_mean.toFixed(2) : 'n/a')
+        + '\nBaseline: ' + (c.baseline_mean != null ? c.baseline_mean.toFixed(2) : 'n/a')
+        + '\nP90: ' + (c.baseline_p90 != null ? c.baseline_p90.toFixed(2) : 'n/a')
+        + '\nSamples: ' + c.samples;
+      html += '<td style="padding:2px 4px;background:' + bg + ';border:1px solid #0a1628;'
+        + 'color:' + textColor + ';text-align:center;cursor:default" title="' + title + '">'
+        + text + '</td>';
+    }
+    html += '</tr>';
+  }
+  html += '</table>';
+  container.innerHTML = html;
 }
 
 // ---------------------------------------------------------------------------

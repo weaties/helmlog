@@ -19,6 +19,7 @@ from helmlog.polar import (
     _tws_bin,
     build_polar_baseline,
     lookup_polar,
+    session_polar_comparison,
 )
 
 if TYPE_CHECKING:
@@ -210,3 +211,129 @@ async def test_lookup_guards_min_sessions(storage: Storage) -> None:
     await build_polar_baseline(storage)
     result = await lookup_polar(storage, 10.0, 45.0, min_sessions=5)
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Session polar comparison tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_session_polar_nonexistent(storage: Storage) -> None:
+    """Non-existent session → None."""
+    result = await session_polar_comparison(storage, 9999)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_session_polar_unfinished(storage: Storage) -> None:
+    """Session without end_utc → None."""
+    db = storage._conn()
+    await db.execute(
+        "INSERT INTO races (name, event, race_num, date, start_utc)"
+        " VALUES ('Open', 'E', 1, '2024-06-01', '2024-06-01T12:00:00')",
+    )
+    await db.commit()
+    cur = await db.execute("SELECT id FROM races ORDER BY id DESC LIMIT 1")
+    row = await cur.fetchone()
+    result = await session_polar_comparison(storage, int(row["id"]))
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_session_polar_no_instrument_data(storage: Storage) -> None:
+    """Completed session but no speed/wind data → empty cells."""
+    db = storage._conn()
+    await db.execute(
+        "INSERT INTO races (name, event, race_num, date, start_utc, end_utc)"
+        " VALUES ('Empty', 'E', 1, '2024-06-01',"
+        " '2024-06-01T12:00:00', '2024-06-01T12:10:00')",
+    )
+    await db.commit()
+    cur = await db.execute("SELECT id FROM races ORDER BY id DESC LIMIT 1")
+    row = await cur.fetchone()
+    result = await session_polar_comparison(storage, int(row["id"]))
+    assert result is not None
+    assert result.cells == []
+    assert result.session_sample_count == 0
+
+
+@pytest.mark.asyncio
+async def test_session_polar_bins_correctly(storage: Storage) -> None:
+    """Session with known BSP/TWS/TWA should produce correct bins and session_mean."""
+    # Create a session with BSP=6.5, TWS=10, TWA=45
+    await _make_session(storage, race_num=10, bsp=6.5, tws=10.0, twa=45.0)
+    cur = await storage._conn().execute("SELECT id FROM races ORDER BY id DESC LIMIT 1")
+    row = await cur.fetchone()
+    sid = int(row["id"])
+
+    result = await session_polar_comparison(storage, sid)
+    assert result is not None
+    assert result.session_sample_count == 10
+    assert len(result.cells) == 1
+
+    cell = result.cells[0]
+    assert cell.tws_bin == 10
+    assert cell.twa_bin == 45
+    assert cell.session_mean_bsp == pytest.approx(6.5, rel=1e-3)
+    assert cell.session_sample_count == 10
+    # No baseline built yet
+    assert cell.baseline_mean_bsp is None
+    assert cell.delta is None
+
+
+@pytest.mark.asyncio
+async def test_session_polar_delta_with_baseline(storage: Storage) -> None:
+    """With a baseline present, delta = session_mean - baseline_mean."""
+    # Build baseline from 3 sessions at BSP=6.0
+    for i in range(1, 4):
+        await _make_session(storage, i, bsp=6.0, tws=10.0, twa=45.0)
+    await build_polar_baseline(storage)
+
+    # Create a 4th session at BSP=6.5 (faster than baseline)
+    await _make_session(storage, race_num=10, bsp=6.5, tws=10.0, twa=45.0)
+    cur = await storage._conn().execute("SELECT id FROM races ORDER BY id DESC LIMIT 1")
+    row = await cur.fetchone()
+    sid = int(row["id"])
+
+    result = await session_polar_comparison(storage, sid)
+    assert result is not None
+    cell = result.cells[0]
+    assert cell.baseline_mean_bsp == pytest.approx(6.0, rel=1e-3)
+    assert cell.session_mean_bsp == pytest.approx(6.5, rel=1e-3)
+    assert cell.delta == pytest.approx(0.5, rel=1e-2)
+
+
+@pytest.mark.asyncio
+async def test_session_polar_tws_and_twa_bins_sorted(storage: Storage) -> None:
+    """tws_bins and twa_bins lists should be sorted."""
+    # Session with two different wind conditions
+    start = _BASE_TS + timedelta(hours=20)
+    end = start + timedelta(seconds=20)
+    db = storage._conn()
+    await db.execute(
+        "INSERT INTO races (name, event, race_num, date, start_utc, end_utc)"
+        " VALUES ('Multi', 'E', 20, ?, ?, ?)",
+        (start.date().isoformat(), start.isoformat(), end.isoformat()),
+    )
+    await db.commit()
+
+    for i in range(10):
+        ts = start + timedelta(seconds=i)
+        await storage.write(SpeedRecord(PGN_SPEED_THROUGH_WATER, 5, ts, 6.0))
+        await storage.write(WindRecord(PGN_WIND_DATA, 5, ts, 10.0, 45.0, 0))
+    for i in range(10, 20):
+        ts = start + timedelta(seconds=i)
+        await storage.write(SpeedRecord(PGN_SPEED_THROUGH_WATER, 5, ts, 5.0))
+        await storage.write(WindRecord(PGN_WIND_DATA, 5, ts, 8.0, 90.0, 0))
+
+    cur = await db.execute("SELECT id FROM races ORDER BY id DESC LIMIT 1")
+    row = await cur.fetchone()
+    result = await session_polar_comparison(storage, int(row["id"]))
+    assert result is not None
+    assert result.tws_bins == sorted(result.tws_bins)
+    assert result.twa_bins == sorted(result.twa_bins)
+    assert 8 in result.tws_bins
+    assert 10 in result.tws_bins
+    assert 45 in result.twa_bins
+    assert 90 in result.twa_bins

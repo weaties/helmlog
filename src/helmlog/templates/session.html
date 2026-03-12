@@ -17,12 +17,6 @@
 .video-link:hover{text-decoration:underline}
 .back-link{font-size:.82rem;color:#8892a4;text-decoration:none;margin-bottom:8px;display:inline-block}
 .back-link:hover{color:#7eb8f7}
-.polar-table{width:100%;border-collapse:collapse;font-size:.78rem;margin-top:6px}
-.polar-table th{color:#8892a4;font-weight:500;text-align:left;padding:4px 8px;border-bottom:1px solid #1e3050}
-.polar-table td{padding:4px 8px;border-bottom:1px solid #0d1a2e;color:#e8eaf0}
-.polar-delta-pos{color:#4ade80}
-.polar-delta-neg{color:#f87171}
-.polar-summary{font-size:.82rem;margin-top:8px;padding:6px 8px;background:#0d1929;border-radius:6px}
 .maneuver-table{width:100%;border-collapse:collapse;font-size:.78rem}
 .maneuver-table th{color:#8892a4;font-weight:400;text-align:left;padding:3px 6px;border-bottom:1px solid #1e3050}
 .maneuver-table td{padding:3px 6px;border-bottom:1px solid #0d1a2e;color:#c4cdd8}
@@ -53,6 +47,25 @@
   <div class="section-title">Track</div>
   <div id="track-map" class="track-map"></div>
   <div id="track-hint" style="font-size:.72rem;color:#8892a4;margin-top:4px"></div>
+</div>
+
+<div id="polar-card" class="card" style="display:none">
+  <div class="section-title" onclick="toggleSection('polar')">Polar Performance <span id="polar-toggle">&#9660;</span></div>
+  <div class="section-body" id="polar-body">
+    <div style="display:flex;gap:6px;margin-bottom:8px">
+      <button class="filter-btn active" id="polar-tab-diagram" onclick="setPolarView('diagram')">Polar Diagram</button>
+      <button class="filter-btn" id="polar-tab-heatmap" onclick="setPolarView('heatmap')">Heatmap</button>
+    </div>
+    <div id="polar-diagram-view">
+      <canvas id="polar-canvas" width="600" height="600" style="width:100%;max-width:600px;display:block;margin:0 auto"></canvas>
+      <div id="polar-legend" style="font-size:.72rem;color:#8892a4;margin-top:6px;text-align:center"></div>
+    </div>
+    <div id="polar-heatmap-view" style="display:none">
+      <div id="polar-heatmap" style="overflow-x:auto"></div>
+      <div style="font-size:.72rem;color:#8892a4;margin-top:6px;text-align:center">Green = faster than baseline &middot; Red = slower &middot; Gray = no baseline</div>
+    </div>
+    <div id="polar-summary" style="font-size:.78rem;color:#8892a4;margin-top:8px;text-align:center"></div>
+  </div>
 </div>
 
 <div id="video-container" class="card" style="display:none">
@@ -101,11 +114,6 @@
 <div class="card" id="sharing-card" style="display:none">
   <div class="section-title">Co-op Sharing</div>
   <div id="sharing-body"></div>
-</div>
-
-<div class="card" id="polar-card" style="display:none">
-  <div class="section-title" onclick="toggleSection('polar')">Performance <span id="polar-toggle">&#9660;</span></div>
-  <div class="section-body" id="polar-body"></div>
 </div>
 
 <div class="card" id="exports-card" style="display:none">

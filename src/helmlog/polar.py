@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -197,3 +198,155 @@ async def lookup_polar(
     if int(row["session_count"]) < min_sessions:
         return None
     return row
+
+
+# ---------------------------------------------------------------------------
+# Session polar comparison
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PolarCell:
+    """One (TWS, TWA) cell with baseline and session data."""
+
+    tws_bin: int
+    twa_bin: int
+    baseline_mean_bsp: float | None
+    baseline_p90_bsp: float | None
+    session_mean_bsp: float | None
+    session_sample_count: int
+    delta: float | None
+
+
+@dataclass
+class SessionPolarData:
+    """Full polar comparison for a session."""
+
+    cells: list[PolarCell]
+    tws_bins: list[int]
+    twa_bins: list[int]
+    session_sample_count: int
+
+
+async def session_polar_comparison(
+    storage: Storage,
+    session_id: int,
+) -> SessionPolarData | None:
+    """Compare a session's BSP performance against the polar baseline.
+
+    Returns None if the session doesn't exist or hasn't ended.
+    Returns a SessionPolarData with empty cells if no instrument data is available.
+    """
+    db = storage._conn()
+
+    cur = await db.execute("SELECT start_utc, end_utc FROM races WHERE id = ?", (session_id,))
+    row = await cur.fetchone()
+    if row is None or row["end_utc"] is None:
+        return None
+
+    try:
+        start = datetime.fromisoformat(str(row["start_utc"])).replace(tzinfo=UTC)
+        end = datetime.fromisoformat(str(row["end_utc"])).replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+    # Load instrument data for this session
+    speeds = await storage.query_range("speeds", start, end)
+    winds = await storage.query_range("winds", start, end)
+    headings = await storage.query_range("headings", start, end)
+
+    spd_by_s: dict[str, dict[str, Any]] = {}
+    for s in speeds:
+        spd_by_s.setdefault(str(s["ts"])[:19], s)
+
+    hdg_by_s: dict[str, dict[str, Any]] = {}
+    for h in headings:
+        hdg_by_s.setdefault(str(h["ts"])[:19], h)
+
+    tw_by_s: dict[str, dict[str, Any]] = {}
+    for w in winds:
+        if int(w.get("reference", -1)) not in (_WIND_REF_BOAT, _WIND_REF_NORTH):
+            continue
+        tw_by_s.setdefault(str(w["ts"])[:19], w)
+
+    # Bin session samples
+    bin_samples: dict[tuple[int, int], list[float]] = defaultdict(list)
+    for sk, spd_row in spd_by_s.items():
+        wind_row = tw_by_s.get(sk)
+        if wind_row is None:
+            continue
+
+        ref = int(wind_row.get("reference", -1))
+        wind_angle = float(wind_row["wind_angle_deg"])
+        tws_kts = float(wind_row["wind_speed_kts"])
+        bsp_kts = float(spd_row["speed_kts"])
+
+        hdg_row = hdg_by_s.get(sk)
+        heading = float(hdg_row["heading_deg"]) if hdg_row else None
+
+        twa = _compute_twa(wind_angle, ref, heading)
+        if twa is None:
+            continue
+
+        tb = _tws_bin(tws_kts)
+        ab = _twa_bin(twa)
+        bin_samples[(tb, ab)].append(bsp_kts)
+
+    # Load full baseline
+    baseline: dict[tuple[int, int], dict[str, Any]] = {}
+    try:
+        bcur = await db.execute(
+            "SELECT tws_bin, twa_bin, mean_bsp, p90_bsp"
+            " FROM polar_baseline WHERE session_count >= 3"
+        )
+        for br in await bcur.fetchall():
+            baseline[(int(br["tws_bin"]), int(br["twa_bin"]))] = dict(br)
+    except Exception:
+        pass  # no baseline table on un-migrated DB
+
+    # Merge session + baseline into cells
+    all_keys = set(bin_samples.keys()) | set(baseline.keys())
+    cells: list[PolarCell] = []
+    total_samples = 0
+
+    for key in all_keys:
+        tws_b, twa_b = key
+        samples = bin_samples.get(key, [])
+        bl = baseline.get(key)
+
+        session_mean = round(sum(samples) / len(samples), 4) if samples else None
+        bl_mean = float(bl["mean_bsp"]) if bl else None
+        bl_p90 = float(bl["p90_bsp"]) if bl else None
+        delta = (
+            round(session_mean - bl_mean, 4)
+            if session_mean is not None and bl_mean is not None
+            else None
+        )
+
+        n = len(samples)
+        total_samples += n
+
+        # Only include cells where the session has data
+        if n > 0:
+            cells.append(
+                PolarCell(
+                    tws_bin=tws_b,
+                    twa_bin=twa_b,
+                    baseline_mean_bsp=bl_mean,
+                    baseline_p90_bsp=bl_p90,
+                    session_mean_bsp=session_mean,
+                    session_sample_count=n,
+                    delta=delta,
+                )
+            )
+
+    cells.sort(key=lambda c: (c.tws_bin, c.twa_bin))
+    tws_bins = sorted({c.tws_bin for c in cells})
+    twa_bins = sorted({c.twa_bin for c in cells})
+
+    return SessionPolarData(
+        cells=cells,
+        tws_bins=tws_bins,
+        twa_bins=twa_bins,
+        session_sample_count=total_samples,
+    )
