@@ -14,7 +14,6 @@ from helmlog.nmea2000 import (
     WindRecord,
 )
 from helmlog.polar import (
-    SessionPolarData,
     _compute_twa,
     _twa_bin,
     _tws_bin,
