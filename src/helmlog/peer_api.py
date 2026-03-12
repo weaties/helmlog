@@ -413,6 +413,71 @@ async def peer_session_results(
     return JSONResponse({"results": results})
 
 
+@router.get("/{co_op_id}/sessions/{session_id}/wind-field")
+@_limiter.limit("10/minute")
+async def peer_session_wind_field(
+    request: Request,
+    co_op_id: str,
+    session_id: int,
+) -> JSONResponse:
+    """Return wind field parameters and course marks for a shared synthesized session.
+
+    Co-op members can use these to reconstruct the same WindField and synthesize
+    their own races under identical conditions.
+    """
+    peer = await _authenticate_peer(request, co_op_id)
+
+    storage = _get_storage(request)
+
+    if not await storage.is_session_shared(session_id, co_op_id):
+        return JSONResponse(
+            {"detail": "Session not shared with this co-op"},
+            status_code=404,
+        )
+
+    await _check_embargo(storage, session_id, co_op_id)
+
+    params = await storage.get_synth_wind_params(session_id)
+    if params is None:
+        return JSONResponse(
+            {"detail": "No wind field for this session"},
+            status_code=404,
+        )
+
+    marks = await storage.get_synth_course_marks(session_id)
+
+    # Wind field params are synthetic simulation config, not PII
+    resp = {
+        "wind_params": {
+            "seed": params["seed"],
+            "base_twd": params["base_twd"],
+            "tws_low": params["tws_low"],
+            "tws_high": params["tws_high"],
+            "shift_interval_lo": params["shift_interval_lo"],
+            "shift_interval_hi": params["shift_interval_hi"],
+            "shift_magnitude_lo": params["shift_magnitude_lo"],
+            "shift_magnitude_hi": params["shift_magnitude_hi"],
+            "ref_lat": params["ref_lat"],
+            "ref_lon": params["ref_lon"],
+            "duration_s": params["duration_s"],
+            "course_type": params["course_type"],
+            "leg_distance_nm": params["leg_distance_nm"],
+            "laps": params["laps"],
+            "mark_sequence": params["mark_sequence"],
+        },
+        "marks": marks,
+    }
+
+    await _audit_peer(
+        request,
+        "coop.peer.wind_field",
+        peer,
+        co_op_id,
+        resource=f"session={session_id}",
+    )
+    return JSONResponse(resp)
+
+
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------

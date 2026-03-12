@@ -32,6 +32,7 @@ async function init() {
   await Promise.all([loadTrack(), loadVideoPlayer()]);
   loadManeuvers();
   loadVideos();
+  if (_session.has_wind_field) loadWindField();
   if (_session.type !== 'debrief') {
     loadResults();
     loadCrew();
@@ -1129,6 +1130,340 @@ async function detectManeuvers() {
     await loadManeuvers();
   } finally {
     if (btn) { btn.textContent = '↺ Detect'; btn.disabled = false; }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Wind Field visualization
+// ---------------------------------------------------------------------------
+
+let _wfMap = null;
+let _wfCanvas = null;   // Leaflet canvas overlay
+let _wfGrid = null;     // last fetched grid response
+let _wfTimeseries = null;
+let _wfPlaying = false;
+let _wfPlayTimer = null;
+let _wfTrackLine = null;
+let _wfCursor = null;
+let _wfMarkMarkers = [];
+let _wfDuration = 0;
+let _wfDebounce = null;
+
+async function loadWindField() {
+  const card = document.getElementById('wind-field-card');
+  card.style.display = '';
+
+  // Initialize the wind field Leaflet map
+  _wfMap = L.map('wf-map');
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap', maxZoom: 18,
+  }).addTo(_wfMap);
+
+  // Overlay the boat track
+  if (_trackData) {
+    _wfTrackLine = L.polyline(_trackData.latLngs, {
+      color: '#2563eb', weight: 3, opacity: 0.7,
+    }).addTo(_wfMap);
+    _wfCursor = L.circleMarker([0, 0], {
+      radius: 6, color: '#facc15', fillColor: '#facc15', fillOpacity: 1, weight: 2,
+    });
+  }
+
+  // Fetch initial grid (t=0) and timeseries in parallel
+  const [gridR, tsR] = await Promise.all([
+    fetch('/api/sessions/' + SESSION_ID + '/wind-field?elapsed_s=0&grid_size=25'),
+    fetch('/api/sessions/' + SESSION_ID + '/wind-timeseries?step_s=10'),
+  ]);
+  if (!gridR.ok) { card.style.display = 'none'; return; }
+
+  _wfGrid = await gridR.json();
+  _wfTimeseries = tsR.ok ? await tsR.json() : null;
+  _wfDuration = _wfGrid.duration_s;
+
+  // Set slider range
+  const slider = document.getElementById('wf-slider');
+  slider.max = Math.floor(_wfDuration);
+  slider.value = 0;
+  slider.addEventListener('input', () => _onWfSlider(+slider.value));
+
+  // Play button
+  document.getElementById('wf-play-btn').addEventListener('click', _toggleWfPlay);
+
+  // Draw marks
+  _drawWfMarks(_wfGrid.marks);
+
+  // Fit map bounds to grid
+  _wfMap.fitBounds([
+    [_wfGrid.grid.lat_min, _wfGrid.grid.lon_min],
+    [_wfGrid.grid.lat_max, _wfGrid.grid.lon_max],
+  ], {padding: [20, 20]});
+
+  // Create canvas overlay
+  _wfCanvas = _createWfCanvasOverlay();
+  _wfCanvas.addTo(_wfMap);
+
+  // Render initial state
+  _renderWfGrid();
+  if (_wfTimeseries) _renderWfChart(0);
+}
+
+function _drawWfMarks(marks) {
+  for (const mm of _wfMarkMarkers) _wfMap.removeLayer(mm);
+  _wfMarkMarkers = [];
+  for (const m of marks) {
+    const marker = L.circleMarker([m.lat, m.lon], {
+      radius: 5, color: '#f97316', fillColor: '#f97316', fillOpacity: 0.9, weight: 1,
+    }).addTo(_wfMap).bindTooltip(m.mark_name, {permanent: true, direction: 'right',
+      className: 'wf-mark-label', offset: [8, 0]});
+    _wfMarkMarkers.push(marker);
+  }
+}
+
+// Custom Leaflet canvas overlay for wind field rendering
+function _createWfCanvasOverlay() {
+  const Overlay = L.Layer.extend({
+    onAdd(map) {
+      this._map = map;
+      const pane = map.getPane('overlayPane');
+      this._el = L.DomUtil.create('canvas', 'wf-overlay');
+      this._el.style.position = 'absolute';
+      this._el.style.pointerEvents = 'none';
+      pane.appendChild(this._el);
+      map.on('moveend zoomend resize', this._reset, this);
+      this._reset();
+    },
+    onRemove(map) {
+      L.DomUtil.remove(this._el);
+      map.off('moveend zoomend resize', this._reset, this);
+    },
+    _reset() {
+      const size = this._map.getSize();
+      const topLeft = this._map.containerPointToLayerPoint([0, 0]);
+      this._el.width = size.x;
+      this._el.height = size.y;
+      L.DomUtil.setPosition(this._el, topLeft);
+      _renderWfGrid();
+    },
+    getCanvas() { return this._el; },
+  });
+  return new Overlay();
+}
+
+function _renderWfGrid() {
+  if (!_wfCanvas || !_wfGrid) return;
+  const canvas = _wfCanvas.getCanvas();
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const grid = _wfGrid.grid;
+  const cells = grid.cells;
+  const twsLow = _wfGrid.tws_low;
+  const twsHigh = _wfGrid.tws_high;
+  const rows = grid.rows;
+  const cols = grid.cols;
+
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i];
+    const pt = _wfMap.latLngToContainerPoint([cell.lat, cell.lon]);
+
+    // Heatmap cell — color by TWS
+    const norm = Math.max(0, Math.min(1, (cell.tws - twsLow) / (twsHigh - twsLow + 0.01)));
+    const hue = 240 - norm * 240; // blue(low) -> red(high)
+    ctx.fillStyle = 'hsla(' + hue + ', 80%, 50%, 0.35)';
+
+    // Cell size in pixels
+    const halfLat = (grid.lat_max - grid.lat_min) / (rows - 1) / 2;
+    const halfLon = (grid.lon_max - grid.lon_min) / (cols - 1) / 2;
+    const tl = _wfMap.latLngToContainerPoint([cell.lat + halfLat, cell.lon - halfLon]);
+    const br = _wfMap.latLngToContainerPoint([cell.lat - halfLat, cell.lon + halfLon]);
+    ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+
+    // Wind arrow
+    const arrowLen = 12;
+    const twd_rad = cell.twd * Math.PI / 180;
+    const dx = -Math.sin(twd_rad) * arrowLen;
+    const dy = Math.cos(twd_rad) * arrowLen;
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(pt.x - dx * 0.5, pt.y - dy * 0.5);
+    ctx.lineTo(pt.x + dx * 0.5, pt.y + dy * 0.5);
+    ctx.stroke();
+    // Arrowhead
+    const ax = pt.x + dx * 0.5;
+    const ay = pt.y + dy * 0.5;
+    const headLen = 4;
+    const angle = Math.atan2(dy, dx);
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(ax - headLen * Math.cos(angle - 0.5), ay - headLen * Math.sin(angle - 0.5));
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(ax - headLen * Math.cos(angle + 0.5), ay - headLen * Math.sin(angle + 0.5));
+    ctx.stroke();
+  }
+
+  // Draw cursor on track at current elapsed_s
+  if (_wfCursor && _trackData && _wfGrid.elapsed_s != null && _wfGrid.duration_s > 0) {
+    const frac = _wfGrid.elapsed_s / _wfGrid.duration_s;
+    const idx = Math.min(Math.floor(frac * _trackData.latLngs.length), _trackData.latLngs.length - 1);
+    _wfCursor.setLatLng(_trackData.latLngs[idx]).addTo(_wfMap);
+  }
+}
+
+function _onWfSlider(val) {
+  document.getElementById('wf-time-label').textContent = _fmtMmSs(val);
+  if (_wfTimeseries) _renderWfChart(val);
+
+  // Debounce API call for grid fetch
+  if (_wfDebounce) clearTimeout(_wfDebounce);
+  _wfDebounce = setTimeout(async () => {
+    const r = await fetch('/api/sessions/' + SESSION_ID + '/wind-field?elapsed_s=' + val + '&grid_size=25');
+    if (r.ok) {
+      _wfGrid = await r.json();
+      _renderWfGrid();
+    }
+  }, 150);
+}
+
+function _toggleWfPlay() {
+  const btn = document.getElementById('wf-play-btn');
+  const slider = document.getElementById('wf-slider');
+  if (_wfPlaying) {
+    _wfPlaying = false;
+    btn.innerHTML = '&#9654;';
+    if (_wfPlayTimer) { clearInterval(_wfPlayTimer); _wfPlayTimer = null; }
+  } else {
+    _wfPlaying = true;
+    btn.innerHTML = '&#9646;&#9646;';
+    _wfPlayTimer = setInterval(() => {
+      let v = +slider.value + 10;
+      if (v > +slider.max) v = 0;
+      slider.value = v;
+      _onWfSlider(v);
+    }, 200);
+  }
+}
+
+function _fmtMmSs(totalS) {
+  const m = Math.floor(totalS / 60);
+  const s = Math.floor(totalS % 60);
+  return m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+// Comparative wind time series chart (canvas-drawn)
+function _renderWfChart(currentS) {
+  const canvas = document.getElementById('wf-chart');
+  if (!canvas || !_wfTimeseries) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const pad = {l: 50, r: 20, t: 20, b: 30, mid: 20};
+  const chartH = (H - pad.t - pad.b - pad.mid) / 2;
+  const chartW = W - pad.l - pad.r;
+  const series = _wfTimeseries.series;
+  if (!series.length) return;
+
+  const baseTwd = _wfTimeseries.base_twd;
+  const dur = _wfTimeseries.duration_s;
+  const colors = ['#ef4444', '#e8eaf0', '#22c55e']; // port, center, starboard
+
+  // Compute TWD and TWS ranges
+  let twdMin = Infinity, twdMax = -Infinity;
+  let twsMin = Infinity, twsMax = -Infinity;
+  for (const s of series) {
+    for (const v of s.twd) { twdMin = Math.min(twdMin, v); twdMax = Math.max(twdMax, v); }
+    for (const v of s.tws) { twsMin = Math.min(twsMin, v); twsMax = Math.max(twsMax, v); }
+  }
+  twdMin = Math.floor(twdMin - 2); twdMax = Math.ceil(twdMax + 2);
+  twsMin = Math.floor(twsMin - 1); twsMax = Math.ceil(twsMax + 1);
+
+  function xForT(t) { return pad.l + (t / dur) * chartW; }
+
+  // --- TWD chart (top) ---
+  const twdY0 = pad.t;
+  function yForTwd(v) { return twdY0 + chartH - (v - twdMin) / (twdMax - twdMin) * chartH; }
+
+  // Grid
+  ctx.strokeStyle = '#1e3a5f'; ctx.lineWidth = 0.5; ctx.setLineDash([3, 3]);
+  for (let v = twdMin; v <= twdMax; v += 2) {
+    const y = yForTwd(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + chartW, y); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // Axis labels
+  ctx.fillStyle = '#8892a4'; ctx.font = '11px monospace';
+  ctx.fillText('TWD', pad.l - 40, twdY0 + chartH / 2 + 4);
+  ctx.fillText(twdMin + '°', pad.l - 40, twdY0 + chartH - 2);
+  ctx.fillText(twdMax + '°', pad.l - 40, twdY0 + 12);
+
+  // Lines
+  for (let p = 0; p < 3; p++) {
+    ctx.strokeStyle = colors[p]; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    for (let i = 0; i < series.length; i++) {
+      const x = xForT(series[i].t);
+      const y = yForTwd(series[i].twd[p]);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // --- TWS chart (bottom) ---
+  const twsY0 = pad.t + chartH + pad.mid;
+  function yForTws(v) { return twsY0 + chartH - (v - twsMin) / (twsMax - twsMin) * chartH; }
+
+  ctx.strokeStyle = '#1e3a5f'; ctx.lineWidth = 0.5; ctx.setLineDash([3, 3]);
+  for (let v = twsMin; v <= twsMax; v += 2) {
+    const y = yForTws(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + chartW, y); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = '#8892a4';
+  ctx.fillText('TWS', pad.l - 40, twsY0 + chartH / 2 + 4);
+  ctx.fillText(twsMin + '', pad.l - 40, twsY0 + chartH - 2);
+  ctx.fillText(twsMax + '', pad.l - 40, twsY0 + 12);
+
+  for (let p = 0; p < 3; p++) {
+    ctx.strokeStyle = colors[p]; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    for (let i = 0; i < series.length; i++) {
+      const x = xForT(series[i].t);
+      const y = yForTws(series[i].tws[p]);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Time axis labels
+  ctx.fillStyle = '#8892a4';
+  const stepMin = Math.max(1, Math.floor(dur / 60 / 8));
+  for (let m = 0; m <= dur / 60; m += stepMin) {
+    const x = xForT(m * 60);
+    ctx.fillText(m + 'm', x - 6, twsY0 + chartH + 14);
+  }
+
+  // Vertical hairline at current time
+  if (currentS >= 0) {
+    const x = xForT(currentS);
+    ctx.strokeStyle = '#facc15'; ctx.lineWidth = 1.5; ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, twsY0 + chartH); ctx.stroke();
+  }
+
+  // Legend
+  const labels = ['Port', 'Center', 'Stbd'];
+  let lx = pad.l + 10;
+  for (let i = 0; i < 3; i++) {
+    ctx.fillStyle = colors[i];
+    ctx.fillRect(lx, pad.t - 14, 16, 8);
+    ctx.fillStyle = '#8892a4';
+    ctx.fillText(labels[i], lx + 20, pad.t - 6);
+    lx += 70;
   }
 }
 

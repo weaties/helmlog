@@ -1937,6 +1937,33 @@ def create_app(
         await storage.import_synthesized_data(rows, race_id=race_id)
 
         duration_s = (end_utc - start_utc).total_seconds()
+
+        # Persist wind field params and course marks for later visualization
+        await storage.save_synth_wind_params(
+            race_id,
+            {
+                "seed": seed,
+                "base_twd": wind_dir,
+                "tws_low": tws_low,
+                "tws_high": tws_high,
+                "shift_interval_lo": 600.0,
+                "shift_interval_hi": 1200.0,
+                "shift_magnitude_lo": shift_mag_lo,
+                "shift_magnitude_hi": shift_mag_hi,
+                "ref_lat": start_lat,
+                "ref_lon": start_lon,
+                "duration_s": duration_s,
+                "course_type": course_type,
+                "leg_distance_nm": leg_nm,
+                "laps": laps if course_type == "windward_leeward" else None,
+                "mark_sequence": mark_sequence if course_type == "custom" else None,
+            },
+        )
+        marks_to_save = [
+            {"mark_key": k, "mark_name": m.name, "lat": m.lat, "lon": m.lon}
+            for k, m in all_marks.items()
+        ]
+        await storage.save_synth_course_marks(race_id, marks_to_save)
         detail = name + (f" [peer={peer_fingerprint}]" if peer_fingerprint else "")
         await _audit(request, "session.synthesize", detail=detail, user=_user)
 
@@ -2047,6 +2074,13 @@ def create_app(
         )
         arow = await acur.fetchone()
 
+        # Check for wind field params (synthesized sessions)
+        wf_cur = await db.execute(
+            "SELECT 1 FROM synth_wind_params WHERE session_id = ?",
+            (session_id,),
+        )
+        has_wind_field = await wf_cur.fetchone() is not None
+
         return JSONResponse(
             {
                 "id": row["id"],
@@ -2063,6 +2097,179 @@ def create_app(
                 "has_audio": arow is not None,
                 "audio_session_id": arow["id"] if arow else None,
                 "peer_fingerprint": row["peer_fingerprint"],
+                "has_wind_field": has_wind_field,
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # /api/sessions/{id}/wind-field  (spatial wind grid for visualization)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/sessions/{session_id}/wind-field")
+    async def api_session_wind_field(
+        session_id: int,
+        elapsed_s: float = 0.0,
+        grid_size: int = 20,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return a spatial grid of TWD/TWS values and course marks."""
+        from helmlog.wind_field import WindField
+
+        grid_size = min(max(grid_size, 5), 40)
+        params = await storage.get_synth_wind_params(session_id)
+        if params is None:
+            raise HTTPException(status_code=404, detail="No wind field for this session")
+
+        marks = await storage.get_synth_course_marks(session_id)
+        elapsed_s = max(0.0, min(elapsed_s, params["duration_s"]))
+
+        # Compute bounding box from marks + 0.5 nm padding on all sides
+        import math
+
+        pad_nm = 0.5
+        if marks:
+            mark_lats = [m["lat"] for m in marks]
+            mark_lons = [m["lon"] for m in marks]
+            center_lat = (min(mark_lats) + max(mark_lats)) / 2
+            cos_ref = math.cos(math.radians(center_lat))
+            lat_min = min(mark_lats) - pad_nm / 60.0
+            lat_max = max(mark_lats) + pad_nm / 60.0
+            lon_min = min(mark_lons) - pad_nm / 60.0 / cos_ref
+            lon_max = max(mark_lons) + pad_nm / 60.0 / cos_ref
+        else:
+            cos_ref = math.cos(math.radians(params["ref_lat"]))
+            lat_min = params["ref_lat"] - pad_nm / 60.0
+            lat_max = params["ref_lat"] + pad_nm / 60.0
+            lon_min = params["ref_lon"] - pad_nm / 60.0 / cos_ref
+            lon_max = params["ref_lon"] + pad_nm / 60.0 / cos_ref
+
+        # Capture bounds for the thread
+        bounds = (lat_min, lat_max, lon_min, lon_max)
+
+        def _compute() -> list[dict[str, float]]:
+            wf = WindField(
+                base_twd=params["base_twd"],
+                tws_low=params["tws_low"],
+                tws_high=params["tws_high"],
+                duration_s=params["duration_s"],
+                shift_interval=(params["shift_interval_lo"], params["shift_interval_hi"]),
+                shift_magnitude=(params["shift_magnitude_lo"], params["shift_magnitude_hi"]),
+                ref_lat=params["ref_lat"],
+                ref_lon=params["ref_lon"],
+                seed=params["seed"],
+            )
+            b_lat_min, b_lat_max, b_lon_min, b_lon_max = bounds
+
+            cells: list[dict[str, float]] = []
+            for r in range(grid_size):
+                lat = b_lat_min + (b_lat_max - b_lat_min) * r / (grid_size - 1)
+                for c in range(grid_size):
+                    lon = b_lon_min + (b_lon_max - b_lon_min) * c / (grid_size - 1)
+                    twd, tws = wf.at(elapsed_s, lat, lon)
+                    cells.append(
+                        {
+                            "lat": round(lat, 6),
+                            "lon": round(lon, 6),
+                            "twd": round(twd, 1),
+                            "tws": round(tws, 2),
+                        }
+                    )
+            return cells
+
+        cells = await asyncio.to_thread(_compute)
+
+        return JSONResponse(
+            {
+                "elapsed_s": elapsed_s,
+                "duration_s": params["duration_s"],
+                "base_twd": params["base_twd"],
+                "tws_low": params["tws_low"],
+                "tws_high": params["tws_high"],
+                "grid": {
+                    "rows": grid_size,
+                    "cols": grid_size,
+                    "lat_min": round(lat_min, 6),
+                    "lat_max": round(lat_max, 6),
+                    "lon_min": round(lon_min, 6),
+                    "lon_max": round(lon_max, 6),
+                    "cells": cells,
+                },
+                "marks": marks,
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # /api/sessions/{id}/wind-timeseries  (comparative wind time series)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/sessions/{session_id}/wind-timeseries")
+    async def api_session_wind_timeseries(
+        session_id: int,
+        step_s: int = 10,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return TWD/TWS time series at port, center, and starboard positions."""
+        from helmlog.wind_field import WindField
+
+        step_s = min(max(step_s, 5), 60)
+        params = await storage.get_synth_wind_params(session_id)
+        if params is None:
+            raise HTTPException(status_code=404, detail="No wind field for this session")
+
+        def _compute() -> dict[str, Any]:
+            import math
+
+            wf = WindField(
+                base_twd=params["base_twd"],
+                tws_low=params["tws_low"],
+                tws_high=params["tws_high"],
+                duration_s=params["duration_s"],
+                shift_interval=(params["shift_interval_lo"], params["shift_interval_hi"]),
+                shift_magnitude=(params["shift_magnitude_lo"], params["shift_magnitude_hi"]),
+                ref_lat=params["ref_lat"],
+                ref_lon=params["ref_lon"],
+                seed=params["seed"],
+            )
+            cos_ref = math.cos(math.radians(params["ref_lat"]))
+            offset_lon = 0.3 / 60.0 / cos_ref  # 0.3 nm cross-course
+
+            positions = [
+                {
+                    "label": "Port side",
+                    "lat": params["ref_lat"],
+                    "lon": round(params["ref_lon"] - offset_lon, 6),
+                },
+                {"label": "Center", "lat": params["ref_lat"], "lon": params["ref_lon"]},
+                {
+                    "label": "Starboard side",
+                    "lat": params["ref_lat"],
+                    "lon": round(params["ref_lon"] + offset_lon, 6),
+                },
+            ]
+
+            series: list[dict[str, Any]] = []
+            t = 0.0
+            while t <= params["duration_s"]:
+                twd_vals = []
+                tws_vals = []
+                for p in positions:
+                    twd, tws = wf.at(t, p["lat"], p["lon"])
+                    twd_vals.append(round(twd, 1))
+                    tws_vals.append(round(tws, 2))
+                series.append({"t": round(t, 1), "twd": twd_vals, "tws": tws_vals})
+                t += step_s
+
+            return {"positions": positions, "series": series}
+
+        result = await asyncio.to_thread(_compute)
+
+        return JSONResponse(
+            {
+                "duration_s": params["duration_s"],
+                "step_s": step_s,
+                "base_twd": params["base_twd"],
+                "positions": result["positions"],
+                "series": result["series"],
             }
         )
 

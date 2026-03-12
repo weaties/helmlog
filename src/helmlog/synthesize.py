@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from helmlog.courses import CourseLeg
 
 from helmlog.courses import _BBOX_E, _BBOX_N, _BBOX_S, _BBOX_W, is_in_water
+from helmlog.wind_field import WindField
 
 # ---------------------------------------------------------------------------
 # J/105 polar performance table
@@ -311,12 +312,14 @@ def simulate(config: SynthConfig) -> list[SynthRow]:
     and tacking/gybing maneuvers with speed dip profiles.
     """
     rng = random.Random(config.seed)
-    wind = WindModel(
+    wind = WindField(
         base_twd=config.base_twd,
         tws_low=config.tws_low,
         tws_high=config.tws_high,
         shift_interval=config.shift_interval,
         shift_magnitude=config.shift_magnitude,
+        ref_lat=config.start_lat,
+        ref_lon=config.start_lon,
         seed=config.seed,
     )
 
@@ -350,7 +353,7 @@ def simulate(config: SynthConfig) -> list[SynthRow]:
 
         while True:
             t = config.start_time + timedelta(seconds=elapsed)
-            twd, tws = wind.get(elapsed)
+            twd, tws = wind.at(elapsed, lat, lon)
             opt_twa, polar_bsp = interpolate_polar(tws, leg.upwind)
 
             dist = _distance_nm(lat, lon, leg.target.lat, leg.target.lon)
@@ -567,7 +570,7 @@ def simulate(config: SynthConfig) -> list[SynthRow]:
         # so the track ends exactly at the finish line (near the start).
         if leg_idx == len(config.legs) - 1:
             t = config.start_time + timedelta(seconds=elapsed)
-            twd, tws = wind.get(elapsed)
+            twd, tws = wind.at(elapsed, lat, lon)
             twa_actual = (twd - heading + 360) % 360
             aws, awa = apparent_wind(tws, twa_actual, bsp)
             cog = (heading + rng.gauss(0, 0.5)) % 360
@@ -594,7 +597,7 @@ def simulate(config: SynthConfig) -> list[SynthRow]:
         # Mark rounding transition
         if leg_idx < len(config.legs) - 1:
             next_leg = config.legs[leg_idx + 1]
-            twd, tws = wind.get(elapsed)
+            twd, tws = wind.at(elapsed, lat, lon)
             next_opt_twa, _ = interpolate_polar(tws, next_leg.upwind)
             next_stbd = (leg_idx + 1) % 2 == 0
             next_twa = next_opt_twa if next_stbd else (360.0 - next_opt_twa) % 360
@@ -606,7 +609,7 @@ def simulate(config: SynthConfig) -> list[SynthRow]:
 
             for step in range(int(rounding_dur)):
                 t = config.start_time + timedelta(seconds=elapsed)
-                twd, tws = wind.get(elapsed)
+                twd, tws = wind.at(elapsed, lat, lon)
 
                 p = step / rounding_dur
                 smooth_p = 0.5 - 0.5 * math.cos(p * math.pi)

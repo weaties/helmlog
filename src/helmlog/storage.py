@@ -71,7 +71,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 32
+_CURRENT_VERSION: int = 33
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -689,6 +689,38 @@ _MIGRATIONS: dict[int, str] = {
         CREATE INDEX IF NOT EXISTS idx_winds_race_id    ON winds(race_id);
         CREATE INDEX IF NOT EXISTS idx_cogsog_race_id   ON cogsog(race_id);
         CREATE INDEX IF NOT EXISTS idx_depths_race_id   ON depths(race_id);
+    """,
+    33: """
+        -- Wind field parameters and course marks for synthesized sessions (#248)
+        CREATE TABLE IF NOT EXISTS synth_wind_params (
+            session_id        INTEGER PRIMARY KEY REFERENCES races(id) ON DELETE CASCADE,
+            seed              INTEGER NOT NULL,
+            base_twd          REAL NOT NULL,
+            tws_low           REAL NOT NULL,
+            tws_high          REAL NOT NULL,
+            shift_interval_lo REAL NOT NULL,
+            shift_interval_hi REAL NOT NULL,
+            shift_magnitude_lo REAL NOT NULL,
+            shift_magnitude_hi REAL NOT NULL,
+            ref_lat           REAL NOT NULL,
+            ref_lon           REAL NOT NULL,
+            duration_s        REAL NOT NULL,
+            course_type       TEXT NOT NULL,
+            leg_distance_nm   REAL,
+            laps              INTEGER,
+            mark_sequence     TEXT
+        );
+        CREATE TABLE IF NOT EXISTS synth_course_marks (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+            mark_key    TEXT NOT NULL,
+            mark_name   TEXT NOT NULL,
+            lat         REAL NOT NULL,
+            lon         REAL NOT NULL,
+            UNIQUE(session_id, mark_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_synth_course_marks_session
+            ON synth_course_marks(session_id);
     """,
 }
 
@@ -2764,6 +2796,73 @@ class Storage:
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Synthesized wind field params and course marks
+    # ------------------------------------------------------------------
+
+    async def save_synth_wind_params(self, session_id: int, params: dict[str, Any]) -> None:
+        """Persist wind field constructor parameters for a synthesized session."""
+        db = self._conn()
+        await db.execute(
+            "INSERT OR REPLACE INTO synth_wind_params"
+            " (session_id, seed, base_twd, tws_low, tws_high,"
+            "  shift_interval_lo, shift_interval_hi,"
+            "  shift_magnitude_lo, shift_magnitude_hi,"
+            "  ref_lat, ref_lon, duration_s,"
+            "  course_type, leg_distance_nm, laps, mark_sequence)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                session_id,
+                params["seed"],
+                params["base_twd"],
+                params["tws_low"],
+                params["tws_high"],
+                params["shift_interval_lo"],
+                params["shift_interval_hi"],
+                params["shift_magnitude_lo"],
+                params["shift_magnitude_hi"],
+                params["ref_lat"],
+                params["ref_lon"],
+                params["duration_s"],
+                params["course_type"],
+                params.get("leg_distance_nm"),
+                params.get("laps"),
+                params.get("mark_sequence"),
+            ),
+        )
+        await db.commit()
+
+    async def get_synth_wind_params(self, session_id: int) -> dict[str, Any] | None:
+        """Return wind field parameters for a synthesized session, or None."""
+        cur = await self._conn().execute(
+            "SELECT * FROM synth_wind_params WHERE session_id = ?",
+            (session_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def save_synth_course_marks(self, session_id: int, marks: list[dict[str, Any]]) -> None:
+        """Persist course mark positions for a synthesized session."""
+        db = self._conn()
+        await db.execute("DELETE FROM synth_course_marks WHERE session_id = ?", (session_id,))
+        for m in marks:
+            await db.execute(
+                "INSERT INTO synth_course_marks"
+                " (session_id, mark_key, mark_name, lat, lon)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (session_id, m["mark_key"], m["mark_name"], m["lat"], m["lon"]),
+            )
+        await db.commit()
+
+    async def get_synth_course_marks(self, session_id: int) -> list[dict[str, Any]]:
+        """Return course marks for a synthesized session."""
+        cur = await self._conn().execute(
+            "SELECT mark_key, mark_name, lat, lon"
+            " FROM synth_course_marks WHERE session_id = ? ORDER BY mark_key",
+            (session_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
 
     # ------------------------------------------------------------------
     # Auth: users, invite tokens, sessions
