@@ -174,6 +174,40 @@ async def fetch_session_results(
     return []
 
 
+async def fetch_session_wind_field(
+    peer_ip: str,
+    co_op_id: str,
+    session_id: int,
+    private_key: Ed25519PrivateKey,
+    fingerprint: str,
+    *,
+    port: int = 80,
+) -> dict[str, Any] | None:
+    """Fetch wind field params, course marks, and start time from a remote peer.
+
+    Returns the full response dict (start_utc, wind_params, marks) or None on failure.
+    """
+    path = f"/co-op/{co_op_id}/sessions/{session_id}/wind-field"
+    url = f"http://{peer_ip}:{port}{path}"
+    headers = sign_request(private_key, fingerprint, "GET", path)
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 200:
+                data: dict[str, Any] = resp.json()
+                return data
+            logger.warning(
+                "Peer {} returned {} for wind-field: {}",
+                peer_ip,
+                resp.status_code,
+                resp.text[:200],
+            )
+    except Exception as exc:
+        logger.warning("Failed to fetch wind-field from {}: {}", peer_ip, exc)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Aggregate: fetch all peer sessions for a co-op
 # ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@ import math
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from helmlog.courses import CourseLeg
@@ -237,6 +237,23 @@ _DEFAULT_HEADER_RESPONSE = HeaderResponseConfig()
 
 
 @dataclass(frozen=True)
+class CollisionAvoidanceConfig:
+    """Configuration for collision avoidance with other boats' tracks.
+
+    During synthesis, the engine checks proposed positions against all other
+    boats' positions at the same timestamp.  If a collision would occur,
+    it adjusts speed to maintain separation.
+    """
+
+    min_separation_m: float = 30.0
+    """Minimum distance in metres between any two boats at the same timestamp.
+    Default is ~3 J/105 boat lengths (~30 m)."""
+
+
+_DEFAULT_COLLISION_AVOIDANCE = CollisionAvoidanceConfig()
+
+
+@dataclass(frozen=True)
 class SynthConfig:
     """Configuration for a synthesized race simulation."""
 
@@ -250,7 +267,71 @@ class SynthConfig:
     legs: list[CourseLeg]
     seed: int
     start_time: datetime
+    wind_seed: int | None = None
+    """Seed for the WindField.  When None, ``seed`` is used for both the
+    wind model and the boat behaviour RNG (backwards-compatible default).
+    Set this to a shared value across boats to give them identical wind
+    while each boat's ``seed`` drives its own sailing RNG."""
     header_response: HeaderResponseConfig = _DEFAULT_HEADER_RESPONSE
+    collision_avoidance: CollisionAvoidanceConfig = _DEFAULT_COLLISION_AVOIDANCE
+
+
+# ---------------------------------------------------------------------------
+# Collision avoidance — check against other boats' tracks (#246)
+# ---------------------------------------------------------------------------
+
+# One metre in nautical miles (for separation distance conversion)
+_METRES_PER_NM = 1852.0
+
+
+def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Approximate distance in metres (flat earth, fine for < 5 nm)."""
+    dlat = (lat2 - lat1) * 60.0
+    dlon = (lon2 - lon1) * 60.0 * math.cos(math.radians((lat1 + lat2) / 2))
+    return math.sqrt(dlat * dlat + dlon * dlon) * _METRES_PER_NM
+
+
+class TrackIndex:
+    """Time-indexed position lookup for other boats' tracks.
+
+    Accepts a list of tracks, each being a list of ``{timestamp, LAT, LON}``
+    dicts (the format returned by the peer API track endpoint).
+    Provides fast lookup of all boat positions at a given ISO-second timestamp.
+    """
+
+    def __init__(self, tracks: list[list[dict[str, Any]]]) -> None:
+        # Index: timestamp_str -> list[(lat, lon)]
+        self._positions: dict[str, list[tuple[float, float]]] = {}
+        for track in tracks:
+            for pt in track:
+                ts = str(pt.get("timestamp", ""))[:19]
+                lat = pt.get("LAT")
+                lon = pt.get("LON")
+                if ts and lat is not None and lon is not None:
+                    self._positions.setdefault(ts, []).append((float(lat), float(lon)))
+
+    def positions_at(self, ts_iso: str) -> list[tuple[float, float]]:
+        """Return all other-boat positions at the given ISO-second timestamp."""
+        return self._positions.get(ts_iso[:19], [])
+
+    def __len__(self) -> int:
+        return len(self._positions)
+
+
+def _has_collision(
+    lat: float,
+    lon: float,
+    ts_iso: str,
+    track_index: TrackIndex | None,
+    min_separation_m: float,
+) -> bool:
+    """Return True if (lat, lon) at ts_iso is within min_separation_m of any other boat."""
+    if track_index is None:
+        return False
+    for other_lat, other_lon in track_index.positions_at(ts_iso):
+        if _distance_m(lat, lon, other_lat, other_lon) < min_separation_m:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -339,13 +420,25 @@ def _clamp_to_bbox(lat: float, lon: float) -> tuple[float, float]:
     return lat, lon
 
 
-def simulate(config: SynthConfig) -> list[SynthRow]:
+def simulate(
+    config: SynthConfig,
+    other_tracks: list[list[dict[str, Any]]] | None = None,
+) -> list[SynthRow]:
     """Simulate a full race, returning 1 Hz data rows.
 
     Uses J/105 polars for boat speed, a WindModel for realistic wind shifts,
     and tacking/gybing maneuvers with speed dip profiles.
+
+    Args:
+        config: Simulation configuration.
+        other_tracks: Optional list of other boats' tracks (each a list of
+            ``{timestamp, LAT, LON, ...}`` dicts from the peer track endpoint).
+            When provided, the engine ensures the generated track maintains
+            at least ``config.collision_avoidance.min_separation_m`` from all
+            other boats at each timestamp.
     """
     rng = random.Random(config.seed)
+    w_seed = config.wind_seed if config.wind_seed is not None else config.seed
     wind = WindField(
         base_twd=config.base_twd,
         tws_low=config.tws_low,
@@ -354,8 +447,14 @@ def simulate(config: SynthConfig) -> list[SynthRow]:
         shift_magnitude=config.shift_magnitude,
         ref_lat=config.start_lat,
         ref_lon=config.start_lon,
-        seed=config.seed,
+        seed=w_seed,
     )
+
+    # Collision avoidance index (#246)
+    track_idx: TrackIndex | None = None
+    if other_tracks:
+        track_idx = TrackIndex(other_tracks)
+    ca_min_sep = config.collision_avoidance.min_separation_m
 
     lat, lon = config.start_lat, config.start_lon
     heading = 0.0
@@ -624,6 +723,31 @@ def simulate(config: SynthConfig) -> list[SynthRow]:
                         new_lat, new_lon = lat, lon
 
             lat, lon = new_lat, new_lon
+
+            # Collision avoidance (#246): if the new position would collide
+            # with another boat at this timestamp, recompute from the
+            # previous position at progressively reduced speeds.
+            ts_iso = t.isoformat()[:19]
+            if _has_collision(lat, lon, ts_iso, track_idx, ca_min_sep):
+                prev_lat = rows[-1].lat if rows else config.start_lat
+                prev_lon = rows[-1].lon if rows else config.start_lon
+                hdg_r = math.radians(heading)
+                for speed_frac in (0.6, 0.3, 0.0):
+                    ca_bsp = bsp * speed_frac
+                    ca_deg_s = ca_bsp / 3600.0 / 60.0
+                    ca_lat = prev_lat + ca_deg_s * math.cos(hdg_r) * dt
+                    ca_lon = prev_lon + ca_deg_s * math.sin(hdg_r) * dt / math.cos(
+                        math.radians(prev_lat)
+                    )
+                    ca_lat, ca_lon = _clamp_to_bbox(ca_lat, ca_lon)
+                    if not _has_collision(ca_lat, ca_lon, ts_iso, track_idx, ca_min_sep):
+                        lat, lon = ca_lat, ca_lon
+                        bsp = ca_bsp
+                        break
+                else:
+                    # All speeds still collide — hold position
+                    lat, lon = prev_lat, prev_lon
+                    bsp = 0.0
 
             # Compute TWA and apparent wind
             twa_actual = (twd - heading + 360) % 360

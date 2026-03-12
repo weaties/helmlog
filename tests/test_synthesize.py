@@ -9,11 +9,14 @@ import pytest
 from helmlog.courses import build_triangle_course, build_wl_course, is_in_water
 from helmlog.synthesize import (
     _DEPTH_FLOOR,
+    CollisionAvoidanceConfig,
     HeaderResponseConfig,
     SynthConfig,
     SynthRow,
+    TrackIndex,
     WindModel,
     _distance_nm,
+    _has_collision,
     apparent_wind,
     interpolate_polar,
     simulate,
@@ -146,6 +149,58 @@ class TestSimulate:
         assert len(rows1) == len(rows2)
         assert rows1[0].lat == rows2[0].lat
         assert rows1[-1].lat == rows2[-1].lat
+
+
+class TestWindSeedSeparation:
+    """Verify wind_seed produces identical wind but different boat behaviour."""
+
+    def test_same_wind_seed_different_boat_seed(self) -> None:
+        """Two boats with same wind_seed but different seed get same TWD but different tracks."""
+        legs = build_wl_course(47.70, -122.44, 0.0, laps=1)
+        base = {
+            "start_lat": 47.70,
+            "start_lon": -122.44,
+            "base_twd": 0.0,
+            "tws_low": 10.0,
+            "tws_high": 12.0,
+            "shift_interval": (600.0, 1200.0),
+            "shift_magnitude": (5.0, 10.0),
+            "legs": legs,
+            "start_time": datetime(2025, 8, 10, 18, 0, 0, tzinfo=UTC),
+            "wind_seed": 999,
+        }
+        rows_a = simulate(SynthConfig(**base, seed=1))
+        rows_b = simulate(SynthConfig(**base, seed=2))
+        # Same wind field: TWS at the very first point (same position) is identical
+        assert rows_a[0].tws == rows_b[0].tws
+        # Different boat behaviour: positions should diverge after some time
+        diverged = any(
+            rows_a[i].lat != rows_b[i].lat or rows_a[i].lon != rows_b[i].lon
+            for i in range(min(len(rows_a), len(rows_b)))
+        )
+        assert diverged
+
+    def test_wind_seed_none_uses_seed(self) -> None:
+        """When wind_seed is None, seed drives both wind and boat (backwards-compatible)."""
+        legs = build_wl_course(47.70, -122.44, 0.0, laps=1)
+        cfg = SynthConfig(
+            start_lat=47.70,
+            start_lon=-122.44,
+            base_twd=0.0,
+            tws_low=10.0,
+            tws_high=12.0,
+            shift_interval=(600.0, 1200.0),
+            shift_magnitude=(5.0, 10.0),
+            legs=legs,
+            seed=42,
+            start_time=datetime(2025, 8, 10, 18, 0, 0, tzinfo=UTC),
+        )
+        rows1 = simulate(cfg)
+        rows2 = simulate(cfg)
+        # Fully deterministic — identical output
+        assert len(rows1) == len(rows2)
+        assert rows1[50].lat == rows2[50].lat
+        assert rows1[50].tws == rows2[50].tws
 
 
 class TestSimulateWindAngles:
@@ -432,3 +487,155 @@ class TestHeaderResponse:
         assert tacks_tired <= tacks_fresh + 2, (
             f"Fatigued ({tacks_tired}) should not tack much more than fresh ({tacks_fresh})"
         )
+
+
+class TestTrackIndex:
+    """Tests for the TrackIndex collision lookup structure."""
+
+    def test_empty_index(self) -> None:
+        idx = TrackIndex([])
+        assert len(idx) == 0
+        assert idx.positions_at("2025-08-10T18:00:00") == []
+
+    def test_single_track(self) -> None:
+        track = [
+            {"timestamp": "2025-08-10T18:00:00", "LAT": 47.63, "LON": -122.40},
+            {"timestamp": "2025-08-10T18:00:01", "LAT": 47.631, "LON": -122.401},
+        ]
+        idx = TrackIndex([track])
+        assert len(idx) == 2
+        positions = idx.positions_at("2025-08-10T18:00:00")
+        assert len(positions) == 1
+        assert positions[0] == (47.63, -122.40)
+
+    def test_multiple_tracks_same_timestamp(self) -> None:
+        track_a = [{"timestamp": "2025-08-10T18:00:00", "LAT": 47.63, "LON": -122.40}]
+        track_b = [{"timestamp": "2025-08-10T18:00:00", "LAT": 47.64, "LON": -122.41}]
+        idx = TrackIndex([track_a, track_b])
+        positions = idx.positions_at("2025-08-10T18:00:00")
+        assert len(positions) == 2
+
+
+class TestHasCollision:
+    def test_no_collision_without_index(self) -> None:
+        assert not _has_collision(47.63, -122.40, "2025-08-10T18:00:00", None, 30.0)
+
+    def test_collision_same_position(self) -> None:
+        track = [{"timestamp": "2025-08-10T18:00:00", "LAT": 47.63, "LON": -122.40}]
+        idx = TrackIndex([track])
+        assert _has_collision(47.63, -122.40, "2025-08-10T18:00:00", idx, 30.0)
+
+    def test_no_collision_far_away(self) -> None:
+        track = [{"timestamp": "2025-08-10T18:00:00", "LAT": 47.63, "LON": -122.40}]
+        idx = TrackIndex([track])
+        # ~1 nm away — well beyond 30m separation
+        assert not _has_collision(47.65, -122.40, "2025-08-10T18:00:00", idx, 30.0)
+
+    def test_no_collision_different_timestamp(self) -> None:
+        track = [{"timestamp": "2025-08-10T18:00:00", "LAT": 47.63, "LON": -122.40}]
+        idx = TrackIndex([track])
+        assert not _has_collision(47.63, -122.40, "2025-08-10T18:01:00", idx, 30.0)
+
+
+class TestCollisionAvoidance:
+    """Verify collision avoidance in the simulation engine (#246)."""
+
+    _START = (47.70, -122.44)
+
+    def _make_config(
+        self,
+        seed: int = 42,
+        min_separation_m: float = 30.0,
+    ) -> SynthConfig:
+        legs = build_wl_course(*self._START, 0.0, 1.0, laps=1)
+        return SynthConfig(
+            start_lat=self._START[0],
+            start_lon=self._START[1],
+            base_twd=0.0,
+            tws_low=10.0,
+            tws_high=12.0,
+            shift_interval=(600.0, 1200.0),
+            shift_magnitude=(5.0, 10.0),
+            legs=legs,
+            seed=seed,
+            start_time=datetime(2025, 8, 10, 18, 0, 0, tzinfo=UTC),
+            collision_avoidance=CollisionAvoidanceConfig(
+                min_separation_m=min_separation_m,
+            ),
+        )
+
+    def test_no_collision_with_other_track(self) -> None:
+        """When given another boat's track, synthesized track should avoid collisions."""
+        # Generate a reference track (boat A)
+        config_a = self._make_config(seed=42)
+        rows_a = simulate(config_a)
+
+        # Convert to peer-API track format
+        track_a = [
+            {
+                "timestamp": r.ts.isoformat()[:19],
+                "LAT": r.lat,
+                "LON": r.lon,
+            }
+            for r in rows_a
+        ]
+
+        # Generate boat B with collision avoidance against boat A
+        config_b = self._make_config(seed=99, min_separation_m=30.0)
+        rows_b = simulate(config_b, other_tracks=[track_a])
+
+        # Check for collisions
+        track_a_idx = TrackIndex([track_a])
+        collisions = 0
+        for r in rows_b:
+            ts = r.ts.isoformat()[:19]
+            if _has_collision(r.lat, r.lon, ts, track_a_idx, 30.0):
+                collisions += 1
+
+        # Allow a very small number of collisions (edge cases during mark rounding)
+        max_allowed = max(5, len(rows_b) // 100)  # < 1% collision rate
+        assert collisions <= max_allowed, (
+            f"{collisions} collisions in {len(rows_b)} points (> {max_allowed} allowed)"
+        )
+
+    def test_without_other_tracks_unchanged(self) -> None:
+        """Simulation without other_tracks should produce identical results."""
+        config = self._make_config(seed=42)
+        rows_a = simulate(config)
+        rows_b = simulate(config, other_tracks=None)
+        assert len(rows_a) == len(rows_b)
+        assert rows_a[0].lat == rows_b[0].lat
+        assert rows_a[-1].lat == rows_b[-1].lat
+
+    def test_configurable_separation_distance(self) -> None:
+        """Different separation distances should be respected."""
+        config_a = self._make_config(seed=42)
+        rows_a = simulate(config_a)
+        track_a = [{"timestamp": r.ts.isoformat()[:19], "LAT": r.lat, "LON": r.lon} for r in rows_a]
+
+        # Use a large separation (100m) — should force more avoidance
+        config_b = self._make_config(seed=99, min_separation_m=100.0)
+        rows_b = simulate(config_b, other_tracks=[track_a])
+
+        track_a_idx = TrackIndex([track_a])
+        violations_100m = sum(
+            1
+            for r in rows_b
+            if _has_collision(r.lat, r.lon, r.ts.isoformat()[:19], track_a_idx, 100.0)
+        )
+        # 100m is very large (~3× J/105 LOA) — mark roundings and tight
+        # tactical situations make zero violations unrealistic, so allow 5%
+        max_allowed = max(10, len(rows_b) // 20)
+        assert violations_100m <= max_allowed, (
+            f"{violations_100m} violations at 100m in {len(rows_b)} points"
+        )
+
+    def test_still_finishes(self) -> None:
+        """Collision avoidance should not prevent course completion."""
+        config_a = self._make_config(seed=42)
+        rows_a = simulate(config_a)
+        track_a = [{"timestamp": r.ts.isoformat()[:19], "LAT": r.lat, "LON": r.lon} for r in rows_a]
+
+        config_b = self._make_config(seed=99, min_separation_m=30.0)
+        rows_b = simulate(config_b, other_tracks=[track_a])
+        assert len(rows_b) > 100, "Track should still produce substantial output"

@@ -1835,7 +1835,12 @@ def create_app(
             validate_course_marks,
         )
         from helmlog.races import build_race_name, local_today
-        from helmlog.synthesize import HeaderResponseConfig, SynthConfig, simulate
+        from helmlog.synthesize import (
+            CollisionAvoidanceConfig,
+            HeaderResponseConfig,
+            SynthConfig,
+            simulate,
+        )
 
         body = await request.json()
         course_type = body.get("course_type", "windward_leeward")
@@ -1849,9 +1854,17 @@ def create_app(
         leg_nm = float(body.get("leg_distance_nm", 1.0))
         laps = int(body.get("laps", 2))
         seed = int(body.get("seed", 42))
+        raw_wind_seed = body.get("wind_seed")
+        wind_seed: int | None = int(raw_wind_seed) if raw_wind_seed is not None else None
         mark_sequence = body.get("mark_sequence", "")
         peer_fingerprint: str | None = body.get("peer_fingerprint") or None
         peer_co_op_id: str | None = body.get("peer_co_op_id") or None
+        raw_start_utc: str | None = body.get("start_utc")  # imported source session start
+
+        # Collision avoidance — other boats' tracks to avoid (#246)
+        raw_other_tracks: list[list[dict[str, Any]]] | None = body.get("other_tracks")
+        min_separation_m = float(body.get("min_separation_m", 30.0))
+        collision_avoidance = CollisionAvoidanceConfig(min_separation_m=min_separation_m)
 
         # Header response model — probabilistic tacking on wind shifts (#247)
         hr_raw = body.get("header_response")
@@ -1908,7 +1921,10 @@ def create_app(
                 all_marks[key] = leg.target
         mark_warnings = validate_course_marks(all_marks)
 
-        now = datetime.now(UTC)
+        if raw_start_utc:
+            start_time = datetime.fromisoformat(raw_start_utc.replace("Z", "+00:00"))
+        else:
+            start_time = datetime.now(UTC)
         config = SynthConfig(
             start_lat=start_lat,
             start_lon=start_lon,
@@ -1919,11 +1935,13 @@ def create_app(
             shift_magnitude=(shift_mag_lo, shift_mag_hi),
             legs=legs,
             seed=seed,
-            start_time=now,
+            start_time=start_time,
+            wind_seed=wind_seed,
             header_response=header_response,
+            collision_avoidance=collision_avoidance,
         )
 
-        rows = await asyncio.to_thread(simulate, config)
+        rows = await asyncio.to_thread(simulate, config, raw_other_tracks)
         if not rows:
             raise HTTPException(status_code=500, detail="Simulation produced no data points")
 
@@ -1965,7 +1983,7 @@ def create_app(
         await storage.save_synth_wind_params(
             race_id,
             {
-                "seed": seed,
+                "seed": wind_seed if wind_seed is not None else seed,
                 "base_twd": wind_dir,
                 "tws_low": tws_low,
                 "tws_high": tws_high,
@@ -4505,5 +4523,47 @@ def create_app(
             user=_user,
         )
         return JSONResponse({"track": track, "count": len(track)})
+
+    @app.get(
+        "/api/federation/co-ops/{co_op_id}/peers/{fingerprint}/sessions/{session_id}/wind-field",
+    )
+    @limiter.limit("10/minute")
+    async def api_peer_session_wind_field(
+        request: Request,
+        co_op_id: str,
+        fingerprint: str,
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Proxy wind-field data from a specific remote peer (#246)."""
+        from helmlog.federation import load_identity
+        from helmlog.peer_client import fetch_session_wind_field
+
+        try:
+            private_key, card = load_identity()
+        except FileNotFoundError:
+            raise HTTPException(409, "Initialize identity first")  # noqa: B904
+
+        peer = await storage.get_co_op_peer(co_op_id, fingerprint)
+        if not peer or not peer.get("tailscale_ip"):
+            raise HTTPException(404, "Peer not found or no Tailscale IP")
+
+        data = await fetch_session_wind_field(
+            peer["tailscale_ip"],
+            co_op_id,
+            session_id,
+            private_key,
+            card.fingerprint,
+        )
+        if data is None:
+            raise HTTPException(502, "Failed to fetch wind-field from peer")
+
+        await _audit(
+            request,
+            "coop.proxy.peer_wind_field",
+            detail=f"co_op={co_op_id} peer={fingerprint} session={session_id}",
+            user=_user,
+        )
+        return JSONResponse(data)
 
     return app

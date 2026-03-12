@@ -446,8 +446,18 @@ async def peer_session_wind_field(
 
     marks = await storage.get_synth_course_marks(session_id)
 
+    # Look up session start_utc for co-op synthesis (#246)
+    db = storage._conn()
+    cur = await db.execute(
+        "SELECT start_utc FROM races WHERE id = ?",
+        (session_id,),
+    )
+    race = await cur.fetchone()
+    start_utc = dict(race)["start_utc"] if race else None
+
     # Wind field params are synthetic simulation config, not PII
     resp = {
+        "start_utc": start_utc,
         "wind_params": {
             "seed": params["seed"],
             "base_twd": params["base_twd"],
