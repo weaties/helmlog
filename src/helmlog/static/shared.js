@@ -93,10 +93,12 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 
 let _isDeveloper = false;
+let _userRole = 'viewer';
 
 function initNav() {
   fetch('/api/me').then(r => r.json()).then(u => {
     _isDeveloper = !!u.is_developer;
+    _userRole = u.role || 'viewer';
     if (u.role === 'admin') {
       document.querySelectorAll('.admin-link').forEach(el => el.style.setProperty('display', 'inline', 'important'));
     }

@@ -292,6 +292,8 @@ async function loadSetupParams() {
 
 function renderSetupPanel(data) {
   const container = document.getElementById('setup-categories');
+  const role = typeof _userRole !== 'undefined' ? _userRole : 'viewer';
+  const canEdit = role === 'admin' || role === 'crew';
   let html = '';
   for (const cat of data.categories) {
     const isOpen = setupCatExpanded[cat.category] || false;
@@ -308,7 +310,9 @@ function renderSetupPanel(data) {
       html += '<span class="setup-label">' + escHtml(p.label) + '</span>';
       if (p.name === 'weight_distribution') {
         html += '<select class="setup-select' + (curVal ? ' has-value' : '') + '" '
-          + 'id="setup-' + p.name + '" onchange="onSetupChange(\'' + p.name + '\')">';
+          + 'id="setup-' + p.name + '" '
+          + (canEdit ? 'onchange="onSetupChange(\'' + p.name + '\')"' : 'disabled')
+          + '>';
         html += '<option value="">--</option>';
         for (const preset of data.weight_distribution_presets) {
           const sel = curVal === preset ? ' selected' : '';
@@ -321,8 +325,8 @@ function renderSetupPanel(data) {
           + 'type="number" step="any" id="setup-' + p.name + '" '
           + 'value="' + escAttr(curVal) + '" '
           + 'inputmode="decimal" '
-          + 'onchange="onSetupChange(\'' + p.name + '\')" '
-          + 'placeholder="\u2014"/>';
+          + (canEdit ? 'onchange="onSetupChange(\'' + p.name + '\')"' : 'readonly')
+          + ' placeholder="\u2014"/>';
       }
       if (p.unit) html += '<span class="setup-unit">' + escHtml(p.unit) + '</span>';
       html += '</div>';
