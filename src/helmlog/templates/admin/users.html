@@ -34,6 +34,14 @@ input,select{background:#0a1628;border:1px solid #2563eb;border-radius:6px;paddi
 </form>
 <div id="invite-result"></div>
 </div>
+{% if invite_rows %}
+<div class="card">
+<h2>Pending invitations</h2>
+<table><thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Dev</th><th>Expires</th><th></th></tr></thead>
+<tbody>{{ invite_rows|safe }}</tbody>
+</table>
+</div>
+{% endif %}
 <div class="card">
 <h2>Active sessions</h2>
 <table><thead><tr><th>User</th><th>Role</th><th>IP</th><th>Created</th><th>Expires</th><th></th></tr></thead>
@@ -70,6 +78,10 @@ async function toggleDev(userId, value) {
 }
 async function revokeSession(sid) {
   await fetch('/admin/sessions/' + sid, {method:'DELETE'});
+  location.reload();
+}
+async function revokeInvite(invId) {
+  await fetch('/admin/invitations/' + invId + '/revoke', {method:'POST'});
   location.reload();
 }
 </script>

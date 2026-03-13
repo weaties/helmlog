@@ -931,14 +931,22 @@ async def _add_user(email: str, name: str | None, role: str) -> None:
             user_id = await storage.create_user(email, name, role)
             logger.info("Created user id={} email={} name={!r} role={}", user_id, email, name, role)
 
-        # Generate an invite token so the user can log in
+        # Generate an invitation so the user can set up their account
         token = generate_token()
-        await storage.create_invite_token(token, email, role, user_id, invite_expires_at())
+        await storage.create_invitation(
+            token,
+            email,
+            role,
+            name,
+            is_developer=False,
+            invited_by=None,
+            expires_at=invite_expires_at(),
+        )
         base = os.environ.get(
             "PUBLIC_URL", f"http://localhost:{os.environ.get('WEB_PORT', '3002')}"
         ).rstrip(".")
-        login_url = f"{base}/login?token={token}"
-        logger.info("Login link (expires in 7 days):\n  {}", login_url)
+        login_url = f"{base}/auth/accept-invite?token={token}"
+        logger.info("Invite link (expires in 7 days):\n  {}", login_url)
 
         from helmlog.email import send_welcome_email, smtp_configured
 

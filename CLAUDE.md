@@ -315,3 +315,4 @@ docker compose -f tests/integration/docker-compose.yml up --build --abort-on-con
 | `/pr-checklist` | Pre-PR verification (tests, lint, types, docs) |
 | `/data-license` | Review changes against the data licensing policy |
 | `/integration-test` | Run federation integration tests (Layer 1/2/3) |
+| `/ideate` | Capture half-baked ideas into the ideation log |
