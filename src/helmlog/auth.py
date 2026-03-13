@@ -49,6 +49,7 @@ _MOCK_ADMIN: dict[str, Any] = {
     "email": "admin@local",
     "name": "Local Admin",
     "role": "admin",
+    "is_developer": 1,
     "created_at": "1970-01-01T00:00:00+00:00",
     "last_seen": None,
     "is_active": 1,
