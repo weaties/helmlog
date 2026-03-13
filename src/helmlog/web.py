@@ -310,6 +310,25 @@ def create_app(
     app = FastAPI(title="HelmLog", docs_url=None, redoc_url=None)
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+
+    # SessionMiddleware is required by Authlib's OAuth integration (request.session)
+    from starlette.middleware.sessions import SessionMiddleware
+
+    session_secret = os.getenv("SESSION_SECRET", "")
+    if not session_secret:
+        from helmlog.auth import generate_token
+
+        session_secret = generate_token()
+        logger.warning(
+            "SESSION_SECRET not set — generated an ephemeral key (OAuth state will not survive restarts)"
+        )
+    app.add_middleware(SessionMiddleware, secret_key=session_secret)
+
+    # Initialize OAuth providers
+    from helmlog.oauth import init_oauth
+
+    init_oauth()
+
     app.state.storage = storage
     _audio_session_id: int | None = None
     _debrief_audio_session_id: int | None = None
@@ -771,29 +790,51 @@ def create_app(
         if client is None:
             raise HTTPException(status_code=404, detail=f"Unknown OAuth provider: {provider}")
 
-        tok = await client.authorize_access_token(request)
+        try:
+            tok = await client.authorize_access_token(request)
+        except Exception as exc:
+            logger.warning("OAuth token exchange failed for {}: {}", provider, exc)
+            return HTMLResponse(
+                "<h1>OAuth login failed.</h1><p>Could not complete sign-in. Please try again.</p>",
+                status_code=400,
+            )
+
         if provider == "google":
             user_info = tok.get("userinfo", {})
             provider_email = user_info.get("email", "")
             provider_uid = user_info.get("sub", "")
             provider_name = user_info.get("name")
         elif provider == "github":
-            resp = await client.get("user")
-            user_info = resp.json()
-            provider_email = user_info.get("email", "")
-            provider_uid = str(user_info.get("id", ""))
-            provider_name = user_info.get("name")
-            if not provider_email:
-                email_resp = await client.get("user/emails")
-                for e in email_resp.json():
-                    if e.get("primary"):
-                        provider_email = e["email"]
-                        break
+            try:
+                resp = await client.get("user")
+                user_info = resp.json()
+                provider_email = user_info.get("email", "")
+                provider_uid = str(user_info.get("id", ""))
+                provider_name = user_info.get("name")
+                if not provider_email:
+                    email_resp = await client.get("user/emails")
+                    for e in email_resp.json():
+                        if e.get("primary"):
+                            provider_email = e["email"]
+                            break
+            except Exception as exc:
+                logger.warning("GitHub API call failed: {}", exc)
+                return HTMLResponse(
+                    "<h1>OAuth login failed.</h1><p>Could not retrieve GitHub profile. Please try again.</p>",
+                    status_code=400,
+                )
         else:  # apple
             user_info = tok.get("userinfo", {})
             provider_email = user_info.get("email", "")
             provider_uid = user_info.get("sub", "")
             provider_name = user_info.get("name")
+
+        if not provider_uid:
+            logger.warning("OAuth provider {} returned empty user ID", provider)
+            return HTMLResponse(
+                "<h1>OAuth login failed.</h1><p>Provider did not return a user identifier.</p>",
+                status_code=400,
+            )
 
         # Look up existing credential
         cred = await storage.get_credential_by_provider_uid(provider, provider_uid)

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any
 
 from authlib.integrations.starlette_client import OAuth
 from loguru import logger
@@ -89,7 +88,6 @@ def enabled_providers() -> list[str]:
     return providers
 
 
-def init_oauth(app: Any) -> None:  # noqa: ANN401
-    """Initialize OAuth with the FastAPI/Starlette app."""
+def init_oauth() -> None:
+    """Register OAuth providers that have env vars configured."""
     _configure_providers()
-    oauth.init_app(app)
