@@ -1,13 +1,11 @@
 """Authentication and authorisation helpers for the HelmLog web interface.
 
-Magic-link / invite-token flow:
-  1. Admin generates a single-use invite token via POST /admin/users/invite.
-  2. Token is emailed or copied to the recipient as a URL: GET /login?token=<token>.
-  3. Recipient's browser GETs that URL; the server redeems the token, creates a
-     user (or finds the existing user by email), creates an auth_session, and
-     sets a ``session`` cookie.
-  4. Subsequent requests carry the cookie; ``require_auth`` validates it and
-     attaches the user to the request state.
+Invitation + flexible authentication flow (#268):
+  1. Admin creates an invitation via POST /admin/users/invite.
+  2. Invitation link is sent or copied: GET /auth/accept-invite?token=<token>.
+  3. Recipient registers (password or OAuth), creating a user + credential.
+  4. Subsequent logins use email+password or OAuth provider.
+  5. ``require_auth`` validates the session cookie and attaches the user.
 
 Auth can be disabled entirely (e.g. in tests) by setting the env var
 ``AUTH_DISABLED=true``.  In that mode every request is treated as an admin.
@@ -54,6 +52,7 @@ _MOCK_ADMIN: dict[str, Any] = {
     "is_developer": 1,
     "created_at": "1970-01-01T00:00:00+00:00",
     "last_seen": None,
+    "is_active": 1,
 }
 
 
@@ -90,6 +89,10 @@ async def _resolve_user(
 
     user = await storage.get_user_by_id(session_row["user_id"])
     if not user:
+        return None
+
+    # Reject deactivated users (#268)
+    if not user.get("is_active", 1):
         return None
 
     # Fire-and-forget last_seen update (best effort)
@@ -185,3 +188,33 @@ def session_expires_at() -> str:
 def invite_expires_at(days: int = 7) -> str:
     """Return the ISO-8601 expiry datetime for a new invite token (default 7 days)."""
     return (datetime.now(UTC) + timedelta(days=days)).isoformat()
+
+
+def reset_token_expires_at(hours: int = 1) -> str:
+    """Return the ISO-8601 expiry datetime for a password reset token."""
+    return (datetime.now(UTC) + timedelta(hours=hours)).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Password hashing (argon2)
+# ---------------------------------------------------------------------------
+
+
+def hash_password(password: str) -> str:
+    """Hash a password using Argon2id."""
+    from argon2 import PasswordHasher
+
+    ph = PasswordHasher()
+    return ph.hash(password)
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify a password against an Argon2 hash. Returns False on mismatch."""
+    from argon2 import PasswordHasher
+    from argon2.exceptions import VerificationError
+
+    ph = PasswordHasher()
+    try:
+        return ph.verify(password_hash, password)
+    except VerificationError:
+        return False

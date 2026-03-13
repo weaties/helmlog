@@ -84,6 +84,21 @@ async def send_login_link_email(name: str | None, email: str, login_url: str) ->
     return await send_email(email, subject, body)
 
 
+async def send_password_reset_email(name: str | None, email: str, reset_url: str) -> bool:
+    """Send a password reset email with the reset link."""
+    greeting = f"Hi {name}" if name else "Hi"
+    subject = "Reset your password — HelmLog"
+    body = (
+        f"{greeting},\n\n"
+        f"You requested a password reset for HelmLog.\n\n"
+        f"Click the link below to reset your password (expires in 1 hour):\n"
+        f"  {reset_url}\n\n"
+        f"If you didn't request this, you can safely ignore this email.\n\n"
+        f"Fair winds!"
+    )
+    return await send_email(email, subject, body)
+
+
 async def send_device_alert(user_email: str, ip: str | None, user_agent: str | None) -> bool:
     """Notify a user about a new device login."""
     subject = "New device login — HelmLog"
