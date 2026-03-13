@@ -19,8 +19,8 @@ to one or more GitHub issues and its status changes to `promoted`.
 
 - **Date captured:** 2026-03-13
 - **Origin:** Discussion about threaded comments feature
-- **Status:** `raw`
-- **Related:** `docs/data-licensing.md`, `docs/federation-design.md`, threaded comments feature
+- **Status:** `evolving`
+- **Related:** `docs/data-licensing.md`, `docs/federation-design.md`, threaded comments feature, IDX-007
 
 **Description:**
 Discussion threads that span across co-ops (not just within a single co-op).
@@ -32,6 +32,10 @@ data-licensing.md and federation-design.md.
 **Notes:**
 - *2026-03-13:* Initial capture. Data-licensing implications are the main blocker
   — cross-co-op threads would need to reconcile different co-ops' data policies.
+- *2026-03-13:* IDX-007 explores a simpler approach inspired by Craig Mod's TGP —
+  a constrained social feed rather than full threaded discussion in the federation
+  protocol. May sidestep the data-licensing complexity by keeping the feed separate
+  from co-op instrument data.
 
 ---
 
@@ -118,8 +122,8 @@ future feature during the boat settings design.
 
 - **Date captured:** 2026-03-13
 - **Origin:** Discussion about threaded comments feature
-- **Status:** `raw`
-- **Related:** threaded comments feature, GitHub repo
+- **Status:** `evolving`
+- **Related:** threaded comments feature, GitHub repo, IDX-007
 
 **Description:**
 Platform-level discussion (not boat or co-op level) should live in the GitHub
@@ -130,3 +134,65 @@ discussion threads.
 **Notes:**
 - *2026-03-13:* Initial capture. GitHub Discussions is zero-cost and already
   integrated with the development workflow.
+- *2026-03-13:* IDX-007 proposes a TGP-style constrained social feed that could
+  serve this need with a more intentional, sailing-community-native UX. GitHub
+  Discussions remains the right place for developer/contributor discussion; IDX-007
+  would cover the broader community/social layer.
+
+---
+
+## IDX-007: TGP-style constrained social feed for the HelmLog community
+
+- **Date captured:** 2026-03-13
+- **Origin:** Craig Mod's "The Good Place" (craigmod.com/roden/102) — a members-only reverse-chron social feed with intentional constraints, built in ~10 hours with Claude Code
+- **Status:** `raw`
+- **Related:** IDX-001 (cross-co-op discussion), IDX-006 (platform discussion), federation, `auth.py`
+
+**Description:**
+A lightweight, constrained social feed for inter-co-op communication and HelmLog
+platform discussion — inspired by Craig Mod's "The Good Place." Instead of
+building full threaded comments into the federation protocol (IDX-001, complex
+data-licensing implications) or defaulting to GitHub Discussions (IDX-006,
+developer-facing), build a standalone social space with intentional constraints
+that reflect sailing culture.
+
+Craig Mod's design tenets and how they'd map to HelmLog:
+
+| TGP | HelmLog adaptation |
+|---|---|
+| 2 posts/day limit | Similar — prevents firehose; encourages quality |
+| 20 replies/day | Conversations are good, flooding isn't |
+| Text-first, 1-bit inline photos | Fits Pi/low-bandwidth ethos; full color on click |
+| Posts expire in 7 days (kept alive by replies) | Ephemeral by default — sailing is seasonal, keep it fresh |
+| Single RSS feed | Async-first, no real-time pressure — fits offshore/intermittent connectivity |
+| No follows/following | Natural scale cap via co-op membership |
+| Links celebrated, with aggregation page | Sailing content curation — articles, weather, regattas |
+| No read receipts, no real-time | Async matches the sailing rhythm |
+
+**Key design questions:**
+- **Auth:** Magic-link auth (already in `auth.py`) or co-op membership as access gate?
+- **Hosting:** Centralized service vs. federated across boats? Centralized is simpler
+  and avoids the data-licensing knots of IDX-001. Could run on a cheap VPS alongside
+  the co-op registry.
+- **Scope:** One feed per co-op? One global feed? Both? A single global feed with
+  co-op tags might be simplest to start.
+- **Data policy:** Since posts are text (not instrument data), they may sit outside
+  the co-op data-licensing framework entirely. Ephemeral by default makes privacy
+  simpler.
+- **Relationship to in-app comments:** This is a *community* space, not race
+  analysis discussion. Session-specific comments (IDX-001 territory) remain separate.
+
+**Why this is exciting:**
+Craig Mod's experience validates that constraints-as-features produce better
+communities. The members-only, post-limited, ephemeral model naturally avoids
+the failure modes of Discord/Slack/Twitter. And the implementation cost is
+trivially small — Mod built TGP in 10 hours. HelmLog already has auth, FastAPI,
+templates, and a community of boat owners who'd benefit from a shared space that
+isn't a group chat.
+
+**Notes:**
+- *2026-03-13:* Initial capture. This could be the simplest path to both inter-co-op
+  communication and platform community — sidesteps the federation protocol complexity
+  of IDX-001 and the developer-facing nature of IDX-006. Start with a single global
+  feed gated by any co-op membership. The 7-day expiry and post limits are the key
+  insight — they make moderation almost unnecessary.
