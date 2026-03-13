@@ -290,3 +290,71 @@ studying:
   The existing `insta360.py` metadata extraction and `video.py` sync-point model
   provide a foundation. Storage is the main architectural question — Pi disk is
   precious, but a 90-day / 1000-minute model with cloud offload could work.
+
+---
+
+## IDX-010: Agentic manual testing — Claude Code as a browser tester
+
+- **Date captured:** 2026-03-13
+- **Origin:** PR #262 (Playwright E2E scaffold) + Simon Willison's agentic manual testing patterns (simonwillison.net/guides/agentic-engineering-patterns/agentic-manual-testing/)
+- **Status:** `raw`
+- **Related:** PR #262 (Playwright infrastructure), `/tdd` skill, `tests/e2e/`
+
+**Description:**
+PR #262 scaffolds Playwright E2E testing for HelmLog — `playwright.config.ts`,
+smoke tests, CI workflow. That gives us regression testing in CI. But Willison's
+article describes a more ambitious pattern: agents using browser automation
+*during development* to interactively test UI changes they've just made.
+
+The core insight from Willison: "The defining characteristic of a coding agent is
+that it can execute the code that it writes." For web UIs, this means the agent
+should spin up the dev server, navigate the UI with Playwright, take screenshots,
+verify behavior, and fix issues — all before committing. Key patterns:
+
+1. **Agent-driven exploratory testing** — after making a UI change, Claude Code
+   runs Playwright to navigate the affected pages, screenshots the result, and
+   visually verifies the change looks correct. This catches CSS regressions,
+   broken layouts, and rendering issues that unit tests miss.
+
+2. **Documented test runs (Showboat pattern)** — Willison's `showboat` tool
+   records manual testing as Markdown documents with embedded commands, outputs,
+   and screenshots. HelmLog could adopt a similar pattern: after implementing a
+   UI feature, Claude Code produces a test-run document proving the feature works.
+   This is especially valuable for PR review — reviewers see screenshots, not
+   just code diffs.
+
+3. **Red-green TDD from manual findings** — when exploratory testing reveals an
+   issue, the agent writes a failing test first (red), then fixes the code
+   (green). This converts manual testing discoveries into permanent regression
+   coverage. Complements the existing `/tdd` skill.
+
+4. **API exercising via curl** — for non-UI changes, agents should `curl` API
+   endpoints after implementation to verify behavior with real HTTP requests,
+   not just `httpx.AsyncClient` in-process tests.
+
+**What HelmLog already has:**
+- PR #262's Playwright config with auto-start of the FastAPI server
+- Screenshot-on-failure and trace retention
+- The `/tdd` skill for test-driven development
+- `httpx.AsyncClient` + `ASGITransport` for in-process API testing
+
+**What's missing / design questions:**
+- **Claude Code + Playwright integration:** Can Claude Code run `npx playwright
+  test` mid-conversation and interpret results? Can it take ad-hoc screenshots
+  via Playwright's API? The tooling exists (PR #262) but the workflow pattern
+  isn't established.
+- **Screenshot review:** Claude Code can read images. A workflow of "run
+  Playwright → screenshot → read screenshot → verify" could work today.
+- **Test-run documentation:** Should we adopt a showboat-like pattern for
+  recording exploratory test sessions? Or is the PR description + screenshots
+  sufficient?
+- **Scope creep risk:** Agentic manual testing is powerful but slow. Need clear
+  guidance on when to use it (UI changes, new pages) vs. when unit/integration
+  tests suffice (API logic, data processing).
+
+**Notes:**
+- *2026-03-13:* Initial capture. PR #262 is currently open — once merged, the
+  Playwright infrastructure is in place. The next step would be establishing a
+  workflow pattern (possibly a new skill or extension of `/tdd`) for Claude Code
+  to use Playwright interactively during UI development. Start simple: after any
+  template/CSS/JS change, run the smoke suite and screenshot the affected page.
