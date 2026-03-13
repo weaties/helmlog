@@ -718,6 +718,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now loki promtail
 info "Loki (port 3100) + Promtail installed and running."
 
+# daemon-reload can deactivate helmlog — ensure it's still running.
+if sudo systemctl is-enabled --quiet helmlog.service 2>/dev/null &&
+   ! sudo systemctl is-active --quiet helmlog.service 2>/dev/null; then
+    sudo systemctl restart helmlog.service
+    info "Re-started helmlog after daemon-reload."
+fi
+
 # ---------------------------------------------------------------------------
 # k.2) nginx reverse proxy — single-port access to all services
 #      Proxies helmlog (/), Grafana (/grafana/), Signal K (/signalk/)
