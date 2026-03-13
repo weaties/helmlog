@@ -18,6 +18,7 @@ from helmlog.synthesize import (
     _distance_nm,
     _has_collision,
     apparent_wind,
+    generate_boat_settings,
     interpolate_polar,
     simulate,
 )
@@ -639,3 +640,84 @@ class TestCollisionAvoidance:
         config_b = self._make_config(seed=99, min_separation_m=30.0)
         rows_b = simulate(config_b, other_tracks=[track_a])
         assert len(rows_b) > 100, "Track should still produce substantial output"
+
+
+class TestGenerateBoatSettings:
+    """Tests for synthesized boat settings generation."""
+
+    def _make_config(self, seed: int = 42) -> SynthConfig:
+        legs = build_wl_course(47.63, -122.40, 0.0, 0.5, 1)
+        return SynthConfig(
+            start_lat=47.63,
+            start_lon=-122.40,
+            base_twd=0.0,
+            tws_low=8.0,
+            tws_high=14.0,
+            shift_interval=(600.0, 1200.0),
+            shift_magnitude=(5.0, 14.0),
+            legs=legs,
+            seed=seed,
+            start_time=datetime(2026, 3, 13, 14, 0, 0, tzinfo=UTC),
+        )
+
+    def test_generates_boat_and_race_settings(self) -> None:
+        """Should produce both boat-level and race-specific entries."""
+        config = self._make_config()
+        rows = simulate(config)
+        settings = generate_boat_settings(rows, config)
+
+        boat_level = [s for s in settings if s.race_id_is_null]
+        race_level = [s for s in settings if not s.race_id_is_null]
+
+        assert len(boat_level) >= 5, "Should have dock defaults for rig, crew, cars, backstay"
+        assert len(race_level) >= 5, "Should have race-specific sail controls"
+
+    def test_boat_level_before_race_start(self) -> None:
+        """Boat-level settings should be timestamped before race start."""
+        config = self._make_config()
+        rows = simulate(config)
+        settings = generate_boat_settings(rows, config)
+
+        start_ts = rows[0].ts.isoformat()
+        for s in settings:
+            if s.race_id_is_null:
+                assert s.ts < start_ts, f"Dock setting {s.parameter} should be before race start"
+
+    def test_race_settings_include_overrides(self) -> None:
+        """Race-specific backstay should differ from boat-level default."""
+        config = self._make_config()
+        rows = simulate(config)
+        settings = generate_boat_settings(rows, config)
+
+        boat_backstay = next(
+            (s for s in settings if s.race_id_is_null and s.parameter == "backstay"), None
+        )
+        race_backstay = next(
+            (s for s in settings if not s.race_id_is_null and s.parameter == "backstay"), None
+        )
+        assert boat_backstay is not None
+        assert race_backstay is not None
+        assert boat_backstay.value != race_backstay.value, "Race should override dock backstay"
+
+    def test_mid_race_adjustments_exist(self) -> None:
+        """Should have backstay/vang adjustments after race start."""
+        config = self._make_config()
+        rows = simulate(config)
+        settings = generate_boat_settings(rows, config)
+
+        start_ts = rows[0].ts.isoformat()
+        mid_race = [s for s in settings if not s.race_id_is_null and s.ts > start_ts]
+        assert len(mid_race) >= 2, "Should have mid-race setting adjustments"
+
+    def test_deterministic_with_seed(self) -> None:
+        """Same seed produces identical settings."""
+        config = self._make_config(seed=123)
+        rows = simulate(config)
+        s1 = generate_boat_settings(rows, config)
+        s2 = generate_boat_settings(rows, config)
+        assert [(s.parameter, s.value) for s in s1] == [(s.parameter, s.value) for s in s2]
+
+    def test_empty_rows(self) -> None:
+        """Empty rows should produce no settings."""
+        config = self._make_config()
+        assert generate_boat_settings([], config) == []

@@ -2664,6 +2664,54 @@ async def test_boat_settings_null_race_id(storage: Storage) -> None:
 
 
 @pytest.mark.asyncio
+async def test_boat_settings_resolve(storage: Storage) -> None:
+    """GET /api/boat-settings/resolve merges race-specific over boat-level."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id = await _make_race_for_settings(client)
+        ts_dock = datetime(2026, 3, 12, 13, 0, 0, tzinfo=UTC).isoformat()
+        ts_race = datetime(2026, 3, 12, 14, 5, 0, tzinfo=UTC).isoformat()
+        as_of = datetime(2026, 3, 12, 14, 10, 0, tzinfo=UTC).isoformat()
+
+        # Boat-level default
+        await client.post(
+            "/api/boat-settings",
+            json={
+                "race_id": None,
+                "source": "manual",
+                "entries": [
+                    {"ts": ts_dock, "parameter": "backstay", "value": "3.0"},
+                    {"ts": ts_dock, "parameter": "vang", "value": "2.0"},
+                ],
+            },
+        )
+        # Race-specific override
+        await client.post(
+            "/api/boat-settings",
+            json={
+                "race_id": race_id,
+                "source": "transcript:whisper-base",
+                "entries": [{"ts": ts_race, "parameter": "backstay", "value": "5.0"}],
+            },
+        )
+
+        resp = await client.get(f"/api/boat-settings/resolve?race_id={race_id}&as_of={as_of}")
+        assert resp.status_code == 200
+        data = resp.json()
+        by_param = {r["parameter"]: r for r in data}
+
+        # backstay: race-specific wins
+        assert by_param["backstay"]["value"] == "5.0"
+        assert by_param["backstay"]["supersedes_value"] == "3.0"
+
+        # vang: boat-level fallback
+        assert by_param["vang"]["value"] == "2.0"
+        assert by_param["vang"]["supersedes_value"] is None
+
+
+@pytest.mark.asyncio
 async def test_home_page_has_setup_panel(storage: Storage) -> None:
     """GET / includes the boat setup accordion card."""
     app = create_app(storage)

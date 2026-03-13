@@ -636,6 +636,67 @@ nav.site-nav {
 }
 
 /* --------------------------------------------------------------------------
+   Session Boat Settings (read-only panel with override annotations)
+   -------------------------------------------------------------------------- */
+
+.bs-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 0.8rem;
+}
+
+.bs-label {
+  min-width: 110px;
+  color: #8892a4;
+  flex-shrink: 0;
+}
+
+.bs-value {
+  color: #e8eaf0;
+  font-variant-numeric: tabular-nums;
+}
+
+.bs-unit {
+  font-size: 0.72rem;
+  color: #8892a4;
+  flex-shrink: 0;
+}
+
+.bs-superseded {
+  font-size: 0.72rem;
+  color: #6b7280;
+  text-decoration: line-through;
+  margin-left: 6px;
+}
+
+.bs-source-badge {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 4px;
+}
+
+.bs-source-badge.race {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.12);
+}
+
+.bs-source-badge.transcript {
+  color: #fb923c;
+  background: rgba(251, 146, 60, 0.12);
+}
+
+.bs-empty {
+  color: #6b7280;
+  font-size: 0.78rem;
+  font-style: italic;
+}
+
+/* --------------------------------------------------------------------------
    Instruments Grid
    -------------------------------------------------------------------------- */
 

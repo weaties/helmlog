@@ -1159,3 +1159,74 @@ class TestBoatSettings:
         current = await storage.current_boat_settings(None)
         assert len(current) == 1
         assert current[0]["value"] == "30"
+
+    async def test_resolve_merges_boat_and_race_settings(self, storage: Storage) -> None:
+        """resolve_boat_settings merges race-specific over boat-level defaults."""
+        race_id = await self._make_race(storage)
+        ts_dock = (_BS_START - timedelta(hours=1)).isoformat()
+        ts_race = (_BS_START + timedelta(minutes=5)).isoformat()
+        as_of = (_BS_START + timedelta(minutes=10)).isoformat()
+
+        # Boat-level defaults (set at the dock)
+        await storage.create_boat_settings(
+            None,
+            [
+                {"ts": ts_dock, "parameter": "backstay", "value": "3.0"},
+                {"ts": ts_dock, "parameter": "vang", "value": "2.0"},
+            ],
+            source="manual",
+        )
+        # Race-specific override for backstay only
+        await storage.create_boat_settings(
+            race_id,
+            [{"ts": ts_race, "parameter": "backstay", "value": "5.0"}],
+            source="transcript:whisper-base",
+        )
+
+        resolved = await storage.resolve_boat_settings(race_id, as_of)
+        by_param = {r["parameter"]: r for r in resolved}
+
+        # backstay: race-specific wins, supersedes boat-level
+        assert by_param["backstay"]["value"] == "5.0"
+        assert by_param["backstay"]["race_id"] == race_id
+        assert by_param["backstay"]["supersedes_value"] == "3.0"
+        assert by_param["backstay"]["supersedes_source"] == "manual"
+
+        # vang: boat-level fallback, no override
+        assert by_param["vang"]["value"] == "2.0"
+        assert by_param["vang"]["race_id"] is None
+        assert by_param["vang"]["supersedes_value"] is None
+
+    async def test_resolve_respects_timestamp(self, storage: Storage) -> None:
+        """resolve_boat_settings only considers settings at or before as_of."""
+        race_id = await self._make_race(storage)
+        ts1 = _BS_START.isoformat()
+        ts2 = (_BS_START + timedelta(minutes=10)).isoformat()
+
+        await storage.create_boat_settings(
+            race_id,
+            [{"ts": ts1, "parameter": "backstay", "value": "3.0"}],
+            source="manual",
+        )
+        await storage.create_boat_settings(
+            race_id,
+            [{"ts": ts2, "parameter": "backstay", "value": "5.0"}],
+            source="manual",
+        )
+
+        # Query at ts1+5min — should see 3.0 (ts2 hasn't happened yet)
+        as_of = (_BS_START + timedelta(minutes=5)).isoformat()
+        resolved = await storage.resolve_boat_settings(race_id, as_of)
+        by_param = {r["parameter"]: r for r in resolved}
+        assert by_param["backstay"]["value"] == "3.0"
+
+        # Query at ts2 — should see 5.0
+        resolved2 = await storage.resolve_boat_settings(race_id, ts2)
+        by_param2 = {r["parameter"]: r for r in resolved2}
+        assert by_param2["backstay"]["value"] == "5.0"
+
+    async def test_resolve_empty_when_no_settings(self, storage: Storage) -> None:
+        """resolve_boat_settings returns [] when no settings exist."""
+        race_id = await self._make_race(storage)
+        resolved = await storage.resolve_boat_settings(race_id, _BS_START.isoformat())
+        assert resolved == []

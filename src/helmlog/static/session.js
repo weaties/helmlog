@@ -37,6 +37,7 @@ async function init() {
     loadResults();
     loadCrew();
     loadSails();
+    loadBoatSettings();
     loadNotes();
     if (_session.end_utc) loadPolar();
   }
@@ -105,11 +106,12 @@ async function loadTrack() {
 
   _trackData = {latLngs, timestamps, line, cursor};
 
-  // Click track → seek video
+  // Click track → seek video + update boat settings
   line.on('click', function(e) {
     const idx = _nearestIndex(e.latlng);
     _moveCursorToIndex(idx);
     _seekVideoToIndex(idx);
+    _updateBoatSettingsForUtc(_utcForIndex(idx));
   });
 
   _map.fitBounds(line.getBounds(), {padding: [20, 20]});
@@ -268,6 +270,7 @@ function _syncMapToVideo() {
 
   const idx = _indexForUtc(utc);
   _moveCursorToIndex(idx);
+  _updateBoatSettingsForUtc(utc);
 }
 
 // Convert video playback seconds → UTC
@@ -300,7 +303,7 @@ function _seekVideoToIndex(idx) {
 // Section toggle
 // ---------------------------------------------------------------------------
 
-const _collapsed = {};
+const _collapsed = {'boat-settings': true};
 
 function toggleSection(name) {
   const body = document.getElementById(name + '-body');
@@ -1465,6 +1468,116 @@ function _renderWfChart(currentS) {
     ctx.fillText(labels[i], lx + 20, pad.t - 6);
     lx += 70;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Boat Settings (read-only, time-synced)
+// ---------------------------------------------------------------------------
+
+let _bsParams = null;       // parameter definitions from /api/boat-settings/parameters
+let _bsResolved = null;     // resolved settings at current playback time
+let _bsLastAsOf = null;     // debounce: last as_of value we fetched
+
+async function loadBoatSettings() {
+  const card = document.getElementById('boat-settings-card');
+  if (_session.type === 'debrief') return;
+  card.style.display = '';
+
+  try {
+    const r = await fetch('/api/boat-settings/parameters');
+    _bsParams = await r.json();
+  } catch (e) { console.error('boat settings params error', e); return; }
+
+  // Resolve settings at race start time initially
+  const asOf = _session.end_utc || _session.start_utc;
+  await _fetchAndRenderBoatSettings(asOf);
+}
+
+async function _fetchAndRenderBoatSettings(asOf) {
+  if (!asOf || !_bsParams) return;
+  _bsLastAsOf = asOf;
+  try {
+    const r = await fetch('/api/boat-settings/resolve?race_id=' + SESSION_ID
+      + '&as_of=' + encodeURIComponent(asOf));
+    _bsResolved = await r.json();
+  } catch (e) { console.error('boat settings resolve error', e); return; }
+  _renderBoatSettingsPanel();
+}
+
+function _renderBoatSettingsPanel() {
+  const body = document.getElementById('boat-settings-body');
+  if (!_bsParams || !_bsResolved) return;
+
+  // Build lookup: parameter name → resolved entry
+  const byParam = {};
+  for (const entry of _bsResolved) byParam[entry.parameter] = entry;
+
+  let html = '';
+  let anyValue = false;
+
+  for (const cat of _bsParams.categories) {
+    // Check if any param in this category has a value
+    const catHasValues = cat.parameters.some(p => byParam[p.name]);
+    if (!catHasValues) continue;
+
+    html += '<div class="setup-cat-header" onclick="toggleSetupCatSession(\'' + cat.category + '\')">';
+    html += '<span class="setup-cat-label">' + esc(cat.label) + '</span>';
+    html += '<span class="setup-cat-chevron" id="bs-cat-chev-' + cat.category + '">\u25BC</span>';
+    html += '</div>';
+    html += '<div class="setup-cat-body" id="bs-cat-' + cat.category + '">';
+
+    for (const p of cat.parameters) {
+      const entry = byParam[p.name];
+      if (!entry) continue;
+      anyValue = true;
+
+      html += '<div class="bs-row">';
+      html += '<span class="bs-label">' + esc(p.label) + '</span>';
+      html += '<span class="bs-value">' + esc(entry.value) + '</span>';
+      if (p.unit) html += '<span class="bs-unit">' + esc(p.unit) + '</span>';
+
+      // Source badge for race-specific or transcript settings
+      if (entry.race_id !== null) {
+        const src = entry.source.startsWith('transcript') ? 'transcript' : 'race';
+        const srcLabel = entry.source.startsWith('transcript') ? 'transcript' : 'race';
+        html += '<span class="bs-source-badge ' + src + '">' + srcLabel + '</span>';
+      }
+
+      // Show superseded boat-level value
+      if (entry.supersedes_value) {
+        html += '<span class="bs-superseded">' + esc(entry.supersedes_value);
+        if (p.unit) html += ' ' + esc(p.unit);
+        html += '</span>';
+      }
+
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  if (!anyValue) {
+    html = '<span class="bs-empty">No boat settings recorded</span>';
+  }
+
+  body.innerHTML = html;
+}
+
+function toggleSetupCatSession(cat) {
+  const body = document.getElementById('bs-cat-' + cat);
+  const chev = document.getElementById('bs-cat-chev-' + cat);
+  if (!body) return;
+  const hidden = body.style.display === 'none';
+  body.style.display = hidden ? '' : 'none';
+  if (chev) chev.textContent = hidden ? '\u25BC' : '\u25B6';
+}
+
+// Called when the playback position changes (track click or video sync)
+function _updateBoatSettingsForUtc(utcDate) {
+  if (!_bsParams || !utcDate) return;
+  const asOf = utcDate.toISOString();
+  // Debounce: skip if same second
+  if (_bsLastAsOf && _bsLastAsOf.slice(0, 19) === asOf.slice(0, 19)) return;
+  _fetchAndRenderBoatSettings(asOf);
 }
 
 // ---------------------------------------------------------------------------

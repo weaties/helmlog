@@ -2219,6 +2219,7 @@ def create_app(
             CollisionAvoidanceConfig,
             HeaderResponseConfig,
             SynthConfig,
+            generate_boat_settings,
             simulate,
         )
 
@@ -2385,6 +2386,24 @@ def create_app(
             for k, m in all_marks.items()
         ]
         await storage.save_synth_course_marks(race_id, marks_to_save)
+
+        # Generate and persist synthesized boat settings
+        synth_settings = generate_boat_settings(rows, config)
+        boat_level = [s for s in synth_settings if s.race_id_is_null]
+        race_level = [s for s in synth_settings if not s.race_id_is_null]
+        if boat_level:
+            await storage.create_boat_settings(
+                None,
+                [{"ts": s.ts, "parameter": s.parameter, "value": s.value} for s in boat_level],
+                source="synthesized",
+            )
+        if race_level:
+            await storage.create_boat_settings(
+                race_id,
+                [{"ts": s.ts, "parameter": s.parameter, "value": s.value} for s in race_level],
+                source="synthesized",
+            )
+
         detail = name + (f" [peer={peer_fingerprint}]" if peer_fingerprint else "")
         await _audit(request, "session.synthesize", detail=detail, user=_user)
 
@@ -3619,6 +3638,21 @@ def create_app(
     ) -> JSONResponse:
         """Return the latest value for each parameter in a race."""
         rows = await storage.current_boat_settings(race_id)
+        return JSONResponse(rows)
+
+    @app.get("/api/boat-settings/resolve")
+    async def api_resolve_boat_settings(
+        race_id: int = Query(...),
+        as_of: str = Query(...),
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Resolve boat settings at a specific timestamp for a race.
+
+        Merges race-specific settings over boat-level defaults.  Each entry
+        includes ``supersedes_value`` / ``supersedes_source`` when a race-level
+        value overrides a boat-level default.
+        """
+        rows = await storage.resolve_boat_settings(race_id, as_of)
         return JSONResponse(rows)
 
     @app.delete("/api/boat-settings/extraction-run/{extraction_run_id}", status_code=200)

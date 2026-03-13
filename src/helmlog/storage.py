@@ -4181,6 +4181,67 @@ class Storage:
         rows = await cur.fetchall()
         return [dict(row) for row in rows]
 
+    async def resolve_boat_settings(
+        self,
+        race_id: int,
+        as_of: str,
+    ) -> list[dict[str, Any]]:
+        """Resolve boat settings at a specific timestamp with override tracking.
+
+        Returns the latest value per parameter at or before *as_of*, merging
+        race-specific (``race_id``) settings over boat-level (``race_id IS NULL``)
+        defaults.  When a race-specific value overrides a boat-level default the
+        result includes the superseded value so the UI can annotate the change.
+        """
+        db = self._conn()
+
+        async def _latest_per_param(
+            where: str,
+            params: tuple[object, ...],
+        ) -> dict[str, dict[str, Any]]:
+            cur = await db.execute(
+                "SELECT id, race_id, ts, parameter, value, source,"
+                "       extraction_run_id, created_at"
+                " FROM boat_settings"
+                f" WHERE {where} AND ts <= ?"
+                "   AND id IN ("
+                "     SELECT id FROM ("
+                "       SELECT id, ROW_NUMBER() OVER"
+                "         (PARTITION BY parameter ORDER BY ts DESC, id DESC) AS rn"
+                f"       FROM boat_settings WHERE {where} AND ts <= ?"
+                "     ) WHERE rn = 1"
+                "   ) ORDER BY parameter",
+                params + (as_of,) + params + (as_of,),
+            )
+            rows = await cur.fetchall()
+            return {row["parameter"]: dict(row) for row in rows}
+
+        boat_level = await _latest_per_param("race_id IS NULL", ())
+        race_level = await _latest_per_param("race_id = ?", (race_id,))
+
+        # Merge: race-specific wins; track what it supersedes
+        from helmlog.boat_settings import PARAMETER_NAMES
+
+        result: list[dict[str, Any]] = []
+        for param in sorted(PARAMETER_NAMES):
+            race_row = race_level.get(param)
+            boat_row = boat_level.get(param)
+            if race_row:
+                entry = dict(race_row)
+                if boat_row and boat_row["value"] != race_row["value"]:
+                    entry["supersedes_value"] = boat_row["value"]
+                    entry["supersedes_source"] = boat_row["source"]
+                else:
+                    entry["supersedes_value"] = None
+                    entry["supersedes_source"] = None
+                result.append(entry)
+            elif boat_row:
+                entry = dict(boat_row)
+                entry["supersedes_value"] = None
+                entry["supersedes_source"] = None
+                result.append(entry)
+        return result
+
     async def delete_boat_settings_extraction_run(self, extraction_run_id: int) -> int:
         """Delete all boat settings from a specific extraction run.
 
