@@ -2219,6 +2219,7 @@ def create_app(
             CollisionAvoidanceConfig,
             HeaderResponseConfig,
             SynthConfig,
+            generate_boat_settings,
             simulate,
         )
 
@@ -2385,6 +2386,24 @@ def create_app(
             for k, m in all_marks.items()
         ]
         await storage.save_synth_course_marks(race_id, marks_to_save)
+
+        # Generate and persist synthesized boat settings
+        synth_settings = generate_boat_settings(rows, config)
+        boat_level = [s for s in synth_settings if s.race_id_is_null]
+        race_level = [s for s in synth_settings if not s.race_id_is_null]
+        if boat_level:
+            await storage.create_boat_settings(
+                None,
+                [{"ts": s.ts, "parameter": s.parameter, "value": s.value} for s in boat_level],
+                source="synthesized",
+            )
+        if race_level:
+            await storage.create_boat_settings(
+                race_id,
+                [{"ts": s.ts, "parameter": s.parameter, "value": s.value} for s in race_level],
+                source="synthesized",
+            )
+
         detail = name + (f" [peer={peer_fingerprint}]" if peer_fingerprint else "")
         await _audit(request, "session.synthesize", detail=detail, user=_user)
 

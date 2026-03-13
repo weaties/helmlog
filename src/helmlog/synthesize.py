@@ -891,3 +891,124 @@ def simulate(
                 elapsed += dt
 
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Synthesized boat settings — realistic J/105 tuning entries
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SynthSettingEntry:
+    """One synthesized boat setting value."""
+
+    ts: str  # ISO 8601 timestamp
+    parameter: str
+    value: str
+    race_id_is_null: bool  # True = boat-level default, False = race-specific
+
+
+def generate_boat_settings(
+    rows: list[SynthRow],
+    config: SynthConfig,
+) -> list[SynthSettingEntry]:
+    """Generate realistic J/105 boat settings for a synthesized race.
+
+    Produces:
+    - Boat-level defaults (``race_id_is_null=True``) set 30 min before start
+      — rig tensions, crew weight, car positions.
+    - Race-specific values (``race_id_is_null=False``) at race start and at
+      points during the race where sail controls would realistically change
+      (e.g. backstay/vang adjustments with wind shifts).
+
+    Some race-specific values deliberately override boat-level defaults so
+    the session page can show the override annotation.
+    """
+    if not rows:
+        return []
+
+    rng = random.Random(config.seed ^ 0x53455455)  # "SETU" in ASCII
+    start_ts = rows[0].ts
+    dock_ts = (start_ts - timedelta(minutes=30)).isoformat()
+    avg_tws = sum(r.tws for r in rows) / len(rows)
+
+    entries: list[SynthSettingEntry] = []
+
+    def _boat(param: str, value: float | str) -> None:
+        entries.append(SynthSettingEntry(dock_ts, param, str(value), race_id_is_null=True))
+
+    def _race(ts: datetime, param: str, value: float | str) -> None:
+        entries.append(SynthSettingEntry(ts.isoformat(), param, str(value), race_id_is_null=False))
+
+    # -- Boat-level defaults (set at the dock) --
+    # Rig tensions — vary slightly with wind strength
+    base_upper = round(26 + avg_tws * 0.3 + rng.gauss(0, 0.5), 1)
+    _boat("shroud_tension_upper", base_upper)
+    _boat("shroud_tension_d2", round(base_upper - 4 + rng.gauss(0, 0.3), 1))
+    _boat("shroud_tension_lowers", round(base_upper - 8 + rng.gauss(0, 0.3), 1))
+
+    # Crew weight and distribution
+    crew_wt = round(rng.uniform(840, 920))
+    _boat("crew_weight", crew_wt)
+    _boat("weight_distribution", rng.choice(["rail", "hike", "stack to weather"]))
+
+    # Car positions (set at dock, occasionally adjusted during race)
+    dock_car = rng.randint(4, 7)
+    _boat("car_position_port", dock_car)
+    _boat("car_position_starboard", dock_car)
+
+    # Backstay — set a dock default that will be overridden during the race
+    dock_backstay = round(rng.uniform(2.0, 3.5), 1)
+    _boat("backstay", dock_backstay)
+
+    # -- Race-specific values at start --
+    # Sail controls: backstay, vang, cunningham, outhaul, traveler
+    # These override the dock backstay intentionally
+    start_backstay = round(dock_backstay + rng.uniform(0.5, 2.0), 1)
+    start_vang = round(rng.uniform(1.0, 3.0), 1)
+    _race(start_ts, "backstay", start_backstay)
+    _race(start_ts, "vang", start_vang)
+    _race(start_ts, "cunningham", round(rng.uniform(0, 1.0), 1))
+    _race(start_ts, "outhaul", round(rng.uniform(2.0, 4.0), 1))
+    _race(start_ts, "traveler_position", round(rng.uniform(-2.0, 2.0), 1))
+    _race(start_ts, "main_sheet_tension", round(rng.uniform(8.0, 12.0), 1))
+
+    # Sheet tensions
+    start_jib_tension = round(rng.uniform(6.0, 10.0), 1)
+    _race(start_ts, "jib_sheet_tension_port", start_jib_tension)
+    _race(start_ts, "jib_sheet_tension_starboard", start_jib_tension)
+
+    # -- Mid-race adjustments --
+    # Pick 2-4 points during the race where the crew adjusts settings
+    duration_s = (rows[-1].ts - start_ts).total_seconds()
+    n_adjustments = rng.randint(2, 4)
+    adjust_times = sorted(
+        start_ts + timedelta(seconds=rng.uniform(duration_s * 0.15, duration_s * 0.85))
+        for _ in range(n_adjustments)
+    )
+
+    prev_backstay = start_backstay
+    prev_vang = start_vang
+    for adj_ts in adjust_times:
+        # Find the TWS at this moment for context-sensitive adjustments
+        adj_elapsed = (adj_ts - start_ts).total_seconds()
+        nearest_row = min(rows, key=lambda r: abs((r.ts - start_ts).total_seconds() - adj_elapsed))
+        tws = nearest_row.tws
+
+        # Backstay: heavier air = more backstay
+        new_backstay = round(prev_backstay + (tws - 10) * 0.15 + rng.gauss(0, 0.3), 1)
+        new_backstay = round(max(1.0, min(8.0, new_backstay)), 1)
+        _race(adj_ts, "backstay", new_backstay)
+        prev_backstay = new_backstay
+
+        # Vang: adjust with wind
+        new_vang = round(prev_vang + rng.gauss(0, 0.5), 1)
+        new_vang = round(max(0.5, min(5.0, new_vang)), 1)
+        _race(adj_ts, "vang", new_vang)
+        prev_vang = new_vang
+
+        # Occasionally adjust traveler
+        if rng.random() > 0.5:
+            _race(adj_ts, "traveler_position", round(rng.uniform(-3.0, 3.0), 1))
+
+    return entries
