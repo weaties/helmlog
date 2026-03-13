@@ -153,14 +153,7 @@ bootstrap() {
         return 1
     fi
 
-    # Ensure helmlog is running — setup.sh may have started it earlier, but
-    # subsequent daemon-reload / apt activity can stop it before we get here.
-    if ! sudo systemctl is-active --quiet helmlog.service 2>/dev/null; then
-        info "helmlog not running — restarting..."
-        sudo systemctl restart helmlog.service
-    fi
-
-    # Wait for helmlog to create/migrate the DB
+    # Wait for helmlog to create/migrate the DB (service was started by setup.sh)
     DB_FILE="$HELMLOG_DIR/data/logger.db"
     info "Waiting for database..."
     for _i in {1..30}; do
@@ -185,11 +178,6 @@ bootstrap() {
     # -------------------------------------------------------------------
     # 6. Summary
     # -------------------------------------------------------------------
-
-    # Final safety net — make sure helmlog is running before we declare victory.
-    if ! sudo systemctl is-active --quiet helmlog.service 2>/dev/null; then
-        sudo systemctl restart helmlog.service
-    fi
 
     PI_HOSTNAME="$(hostname)"
 
