@@ -262,7 +262,7 @@ info "Removed helmlog wrapper and influx token file."
 
 step "Removing .env, data directory, and venv..."
 rm -f "$ENV_FILE"
-rm -rf "$PROJECT_DIR/data"
+sudo rm -rf "$PROJECT_DIR/data"
 sudo rm -rf "$PROJECT_DIR/.venv"
 info "Removed .env, data/, and .venv/"
 
