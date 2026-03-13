@@ -942,9 +942,9 @@ class Storage:
                 break
             for stmt in _split_migration_sql(_MIGRATIONS[version]):
                 upper = stmt.lstrip().upper()
-                is_create = upper.startswith(
-                    "CREATE TABLE IF NOT EXISTS"
-                ) or upper.startswith("CREATE INDEX IF NOT EXISTS")
+                is_create = upper.startswith("CREATE TABLE IF NOT EXISTS") or upper.startswith(
+                    "CREATE INDEX IF NOT EXISTS"
+                )
                 is_alter_add = upper.startswith("ALTER TABLE") and "ADD COLUMN" in upper
                 if not (is_create or is_alter_add):
                     continue
