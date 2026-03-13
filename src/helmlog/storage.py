@@ -744,6 +744,35 @@ _MIGRATIONS: dict[int, str] = {
     """,
 }
 
+
+def _split_migration_sql(sql: str) -> list[str]:
+    """Split a migration string into individual SQL statements.
+
+    Strips comments and whitespace, splits on ``;``, and returns only
+    non-empty statements.  This lets us execute each statement via
+    ``db.execute()`` instead of ``db.executescript()``, keeping everything
+    in one transaction.
+    """
+    stmts: list[str] = []
+    for raw in sql.split(";"):
+        # Strip SQL comments (-- to end of line) and whitespace
+        lines = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("--"):
+                continue
+            # Remove inline comments
+            idx = stripped.find("--")
+            if idx >= 0:
+                stripped = stripped[:idx].rstrip()
+            if stripped:
+                lines.append(stripped)
+        stmt = " ".join(lines).strip()
+        if stmt:
+            stmts.append(stmt)
+    return stmts
+
+
 # Canonical order for the 5 J105 positions + one-off guests
 _POSITIONS: tuple[str, ...] = ("helm", "main", "pit", "bow", "tactician", "guest")
 
@@ -843,7 +872,14 @@ class Storage:
     # ------------------------------------------------------------------
 
     async def migrate(self) -> None:
-        """Apply any pending schema migrations."""
+        """Apply any pending schema migrations.
+
+        Each migration's DDL and its version record are executed in the same
+        transaction so they are atomic — either both persist or neither does.
+        We avoid ``executescript()`` because it issues an implicit COMMIT
+        before running, which breaks atomicity with the version insert and can
+        leave the schema_version table out of sync with the actual schema.
+        """
         db = self._conn()
 
         # Ensure version table exists
@@ -854,11 +890,45 @@ class Storage:
         row = await cur.fetchone()
         current = row[0] if row and row[0] is not None else 0
 
+        # Repair pass: re-run idempotent DDL from already-applied migrations.
+        # The old executescript()-based migrate() could record a version in
+        # schema_version without the DDL actually persisting.  We re-run:
+        #  - CREATE TABLE/INDEX IF NOT EXISTS (always safe)
+        #  - ALTER TABLE ADD COLUMN (catch "duplicate column" and move on)
+        # DROP/RENAME/INSERT patterns are skipped — they are not idempotent.
+        repaired = 0
+        for version in sorted(_MIGRATIONS):
+            if version > current:
+                break
+            for stmt in _split_migration_sql(_MIGRATIONS[version]):
+                upper = stmt.lstrip().upper()
+                is_create = upper.startswith(
+                    "CREATE TABLE IF NOT EXISTS"
+                ) or upper.startswith("CREATE INDEX IF NOT EXISTS")
+                is_alter_add = upper.startswith("ALTER TABLE") and "ADD COLUMN" in upper
+                if not (is_create or is_alter_add):
+                    continue
+                # Skip internal temp tables from DROP/RENAME migration patterns
+                if "_new " in stmt or "_new(" in stmt:
+                    continue
+                try:
+                    await db.execute(stmt)
+                    repaired += 1
+                except Exception:  # noqa: BLE001
+                    pass  # Table/column already exists — expected
+        if repaired:
+            await db.commit()
+            logger.info("Schema repair: re-applied {} DDL statements", repaired)
+
         for version in sorted(_MIGRATIONS):
             if version <= current:
                 continue
             logger.info("Applying schema migration v{}", version)
-            await db.executescript(_MIGRATIONS[version])
+            # Split migration text into individual statements and execute each
+            # one via db.execute() so they share a transaction with the version
+            # record insert.  This keeps DDL + version tracking atomic.
+            for stmt in _split_migration_sql(_MIGRATIONS[version]):
+                await db.execute(stmt)
             await db.execute(
                 "INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (version,)
             )
@@ -3896,34 +3966,42 @@ class Storage:
         await db.commit()
         return ids
 
-    async def list_boat_settings(self, race_id: int) -> list[dict[str, Any]]:
+    async def list_boat_settings(self, race_id: int | None) -> list[dict[str, Any]]:
         """Return all boat settings for a race, ordered by timestamp."""
         db = self._conn()
+        if race_id is None:
+            where, params = "race_id IS NULL", ()
+        else:
+            where, params = "race_id = ?", (race_id,)
         cur = await db.execute(
             "SELECT id, race_id, ts, parameter, value, source, extraction_run_id, created_at"
-            " FROM boat_settings WHERE race_id = ? ORDER BY ts, id",
-            (race_id,),
+            f" FROM boat_settings WHERE {where} ORDER BY ts, id",
+            params,
         )
         rows = await cur.fetchall()
         return [dict(row) for row in rows]
 
-    async def current_boat_settings(self, race_id: int) -> list[dict[str, Any]]:
+    async def current_boat_settings(self, race_id: int | None) -> list[dict[str, Any]]:
         """Return the latest value for each parameter in a race.
 
         Uses a window function to pick the most recent entry per parameter.
         """
         db = self._conn()
+        if race_id is None:
+            where, params = "race_id IS NULL", ()
+        else:
+            where, params = "race_id = ?", (race_id,)
         cur = await db.execute(
             "SELECT id, race_id, ts, parameter, value, source, extraction_run_id, created_at"
             " FROM boat_settings"
-            " WHERE race_id = ? AND id IN ("
+            f" WHERE {where} AND id IN ("
             "   SELECT id FROM ("
             "     SELECT id, ROW_NUMBER() OVER (PARTITION BY parameter ORDER BY ts DESC, id DESC)"
             "       AS rn"
-            "     FROM boat_settings WHERE race_id = ?"
+            f"     FROM boat_settings WHERE {where}"
             "   ) WHERE rn = 1"
             " ) ORDER BY parameter",
-            (race_id, race_id),
+            params + params,
         )
         rows = await cur.fetchall()
         return [dict(row) for row in rows]

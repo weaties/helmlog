@@ -80,6 +80,62 @@ class TestMigration:
         assert row is not None
         assert row[0] == len(_MIGRATIONS)  # one row per migration version
 
+    async def test_repair_recreates_missing_table(self, storage: Storage) -> None:
+        """If a table is missing despite its migration being recorded, repair recreates it."""
+        db = storage._conn()
+        # Simulate the old executescript() bug: drop a table but keep the version
+        await db.execute("DROP TABLE IF EXISTS boat_settings")
+        await db.commit()
+        cur = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='boat_settings'"
+        )
+        assert await cur.fetchone() is None
+
+        # Re-run migrate — the repair pass should recreate the table
+        await storage.migrate()
+        cur = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='boat_settings'"
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        assert row[0] == "boat_settings"
+
+
+class TestSplitMigrationSql:
+    """Verify the helper that splits multi-statement migration strings."""
+
+    def test_splits_multiple_statements(self) -> None:
+        from helmlog.storage import _split_migration_sql
+
+        sql = """
+            CREATE TABLE foo (id INTEGER PRIMARY KEY);
+            CREATE INDEX idx_foo ON foo(id);
+        """
+        stmts = _split_migration_sql(sql)
+        assert len(stmts) == 2
+        assert stmts[0].startswith("CREATE TABLE")
+        assert stmts[1].startswith("CREATE INDEX")
+
+    def test_strips_comments(self) -> None:
+        from helmlog.storage import _split_migration_sql
+
+        sql = """
+            -- This is a comment
+            ALTER TABLE foo ADD COLUMN bar TEXT;
+            -- Another comment
+        """
+        stmts = _split_migration_sql(sql)
+        assert len(stmts) == 1
+        assert "comment" not in stmts[0].lower()
+
+    def test_handles_all_migrations(self) -> None:
+        """Every migration in _MIGRATIONS must split into at least one statement."""
+        from helmlog.storage import _MIGRATIONS, _split_migration_sql
+
+        for version, sql in _MIGRATIONS.items():
+            stmts = _split_migration_sql(sql)
+            assert len(stmts) >= 1, f"Migration {version} produced no statements"
+
 
 # ---------------------------------------------------------------------------
 # Write + query round-trips
@@ -1083,3 +1139,23 @@ class TestBoatSettings:
             source="manual",
         )
         assert len(ids) == 1
+
+    async def test_null_race_id_list_and_current(self, storage: Storage) -> None:
+        """list and current work with race_id=None."""
+        ts1 = _BS_START.isoformat()
+        ts2 = (_BS_START + timedelta(minutes=1)).isoformat()
+        await storage.create_boat_settings(
+            None,
+            [{"ts": ts1, "parameter": "shroud_tension_upper", "value": "28"}],
+            source="manual",
+        )
+        await storage.create_boat_settings(
+            None,
+            [{"ts": ts2, "parameter": "shroud_tension_upper", "value": "30"}],
+            source="manual",
+        )
+        rows = await storage.list_boat_settings(None)
+        assert len(rows) == 2
+        current = await storage.current_boat_settings(None)
+        assert len(current) == 1
+        assert current[0]["value"] == "30"

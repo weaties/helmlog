@@ -3253,7 +3253,7 @@ def create_app(
 
     @app.get("/api/boat-settings")
     async def api_list_boat_settings(
-        race_id: int = Query(...),
+        race_id: int | None = Query(None),
         _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
     ) -> JSONResponse:
         """List all boat settings for a race, ordered by timestamp."""
@@ -3262,7 +3262,7 @@ def create_app(
 
     @app.get("/api/boat-settings/current")
     async def api_current_boat_settings(
-        race_id: int = Query(...),
+        race_id: int | None = Query(None),
         _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
     ) -> JSONResponse:
         """Return the latest value for each parameter in a race."""

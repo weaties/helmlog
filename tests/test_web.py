@@ -2634,6 +2634,36 @@ async def test_boat_settings_delete_extraction_run(storage: Storage) -> None:
 
 
 @pytest.mark.asyncio
+async def test_boat_settings_null_race_id(storage: Storage) -> None:
+    """Boat settings can be saved and loaded without a race (dock setup)."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        ts = "2024-08-01T10:00:00Z"
+        resp = await client.post(
+            "/api/boat-settings",
+            json={
+                "race_id": None,
+                "source": "manual",
+                "entries": [{"ts": ts, "parameter": "shroud_tension_upper", "value": "28"}],
+            },
+        )
+        assert resp.status_code == 201
+
+        resp = await client.get("/api/boat-settings/current")
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert len(rows) == 1
+        assert rows[0]["parameter"] == "shroud_tension_upper"
+        assert rows[0]["value"] == "28"
+
+        resp = await client.get("/api/boat-settings")
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
+
+
+@pytest.mark.asyncio
 async def test_home_page_has_setup_panel(storage: Storage) -> None:
     """GET / includes the boat setup accordion card."""
     app = create_app(storage)

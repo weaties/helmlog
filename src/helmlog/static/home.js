@@ -340,13 +340,9 @@ function escAttr(s) {
 }
 
 async function loadSetupCurrentValues() {
-  const raceId = state && state.current_race ? state.current_race.id : null;
-  if (!raceId) {
-    updateSetupSummary();
-    return;
-  }
+  // Always load boat-level settings (race_id=null) for the manual UI.
   try {
-    const r = await fetch('/api/boat-settings/current?race_id=' + raceId);
+    const r = await fetch('/api/boat-settings/current');
     const rows = await r.json();
     setupCurrentValues = {};
     for (const row of rows) {
@@ -381,14 +377,15 @@ function onSetupChange(paramName) {
 }
 
 async function saveSetupValue(paramName, value) {
-  const raceId = state && state.current_race ? state.current_race.id : null;
+  // Manual UI settings are boat-level (race_id=null), not per-race.
+  // Per-race settings come from transcript extraction with a race_id.
   const ts = new Date().toISOString();
   try {
     const resp = await fetch('/api/boat-settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        race_id: raceId,
+        race_id: null,
         source: 'manual',
         entries: [{ ts: ts, parameter: paramName, value: value }]
       })
