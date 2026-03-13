@@ -230,3 +230,63 @@ Two interaction patterns for whatever comment/discussion system HelmLog builds:
   first (IDX-001 or IDX-007). Quote-reply is straightforward UI — highlight text,
   click reply, selected text appears as blockquote. Thread forking has more design
   questions around how it interacts with constraints (post limits, expiry, scope).
+
+---
+
+## IDX-009: Self-hosted video upload with automatic track sync
+
+- **Date captured:** 2026-03-13
+- **Origin:** ChartedSails product announcement — direct video upload + auto-sync to sailing data
+- **Status:** `raw`
+- **Related:** `video.py`, `youtube.py`, `pipeline.py`, `insta360.py`, `cameras.py`, `session.js`
+
+**Description:**
+HelmLog's current video workflow is YouTube-centric: users upload to YouTube, then
+link the URL with a manually-specified sync point (UTC time + video offset). This
+works but has friction — you need a YouTube account, you need to figure out the
+sync point, and the video lives on a third-party platform.
+
+ChartedSails just shipped a compelling alternative: direct video upload to the
+server with **automatic timestamp sync** from file metadata. Key features worth
+studying:
+
+1. **Multi-device upload** — coach films from RIB, sailors from boats, everyone
+   uploads from their own phone. No more WhatsApp/Drive file shuffling.
+2. **Automatic sync** — video file creation timestamp (EXIF/MP4 metadata) is used
+   to align with track data. No manual sync point needed. Critical caveat: apps
+   like WhatsApp and Messenger strip timestamp metadata, so users must upload from
+   the original device or transfer via AirDrop/Drive.
+3. **Click-to-play at any track point** — HelmLog already has this with YouTube
+   embed, but self-hosted video could use `<video>` element directly, avoiding
+   YouTube API complexity and privacy concerns.
+4. **Instrument data overlay** — speed, heel, pitch displayed alongside video.
+   HelmLog's session page already shows instrument data; the overlay is the
+   visual integration step.
+5. **Shareable via link** — coach, crew, class association can all see video +
+   data together without needing YouTube access.
+
+**Key design questions for HelmLog:**
+- **Storage:** Pi has limited disk. Options: (a) store on Pi with aggressive
+  retention/cleanup, (b) external storage (S3, Backblaze B2), (c) hybrid — Pi
+  stores recent, offloads to cloud. ChartedSails offers 1000 min / 90-day
+  retention as a baseline.
+- **Upload path:** Web upload via browser? Mobile-friendly upload page? Does this
+  need a mobile app or is a responsive web upload sufficient?
+- **Coexistence with YouTube:** Should this replace the YouTube path or complement
+  it? YouTube has unlimited free storage and reach; self-hosted has privacy and
+  simplicity. Both probably have a place.
+- **Co-op sharing:** If boat A uploads a video, can co-op members see it? Data
+  licensing implications — video is PII-adjacent (faces, voices). May need
+  explicit sharing consent separate from instrument data sharing.
+- **Metadata extraction:** Need to reliably extract creation timestamp from
+  MP4/MOV/MKV containers across different devices (iPhone, Android, GoPro,
+  Insta360). `ffprobe` or `pymediainfo` can do this. The Insta360 module
+  (`insta360.py`) already has some of this logic.
+
+**Notes:**
+- *2026-03-13:* Initial capture inspired by ChartedSails launch email. The
+  auto-sync-from-metadata approach is the key insight — it eliminates the biggest
+  friction point in HelmLog's current video workflow (manual sync point entry).
+  The existing `insta360.py` metadata extraction and `video.py` sync-point model
+  provide a foundation. Storage is the main architectural question — Pi disk is
+  precious, but a 90-day / 1000-minute model with cloud offload could work.
