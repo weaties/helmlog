@@ -175,12 +175,13 @@ bootstrap() {
 
     # Create the admin user and capture the login URL.
     # Must run as helmlog user so any DB writes have correct ownership.
-    ADD_USER_OUTPUT=$(sudo -u helmlog \
+    # cd into HELMLOG_DIR so the relative DB path (data/logger.db) resolves correctly.
+    ADD_USER_OUTPUT=$(cd "$HELMLOG_DIR" && sudo -u helmlog \
         env UV_CACHE_DIR=/var/cache/helmlog HOME=/var/cache/helmlog \
         "$UV_BIN" run --no-sync --project "$HELMLOG_DIR" helmlog add-user \
         --email "$ADMIN_EMAIL" --name "Admin" --role admin 2>&1) || true
 
-    LOGIN_URL=$(echo "$ADD_USER_OUTPUT" | grep -oE 'http[s]?://[^ ]+/login\?token=[^ ]+' | head -1)
+    LOGIN_URL=$(echo "$ADD_USER_OUTPUT" | grep -oE 'http[s]?://[^ ]+\?token=[^ ]+' | head -1) || true
 
     # -------------------------------------------------------------------
     # 6. Summary
