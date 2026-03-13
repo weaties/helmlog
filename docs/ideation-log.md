@@ -196,3 +196,37 @@ isn't a group chat.
   of IDX-001 and the developer-facing nature of IDX-006. Start with a single global
   feed gated by any co-op membership. The 7-day expiry and post limits are the key
   insight — they make moderation almost unnecessary.
+
+---
+
+## IDX-008: Rich comment interactions — quote-reply and thread forking
+
+- **Date captured:** 2026-03-13
+- **Origin:** Conversation about comment/discussion UX patterns
+- **Status:** `raw`
+- **Related:** IDX-001 (cross-co-op discussion), IDX-007 (TGP-style feed)
+
+**Description:**
+Two interaction patterns for whatever comment/discussion system HelmLog builds:
+
+1. **Quote-reply (highlight-to-quote):** Users should be able to select/highlight
+   a passage from a previous comment and have it quoted inline in their reply.
+   Common pattern in forums (Discourse, phpBB) and email clients. Provides
+   conversational clarity — especially valuable when a comment touches multiple
+   topics and the reply addresses only one. In a constrained feed (IDX-007),
+   quote-reply becomes even more important because the post limit means you
+   can't waste a post on "what do you mean by X?" — you quote the specific
+   passage and respond substantively.
+
+2. **Thread forking:** When a discussion drifts off-topic or a sub-point deserves
+   its own conversation, allow forking into a separate thread. The fork should
+   link back to the originating comment for context. Design questions: does a
+   forked thread count against post limits? Does it inherit the parent's 7-day
+   expiry clock or start fresh? In a session-specific context (race debrief),
+   forking could split tactical discussion from boat-handling discussion.
+
+**Notes:**
+- *2026-03-13:* Initial capture. Both features depend on having a comment system
+  first (IDX-001 or IDX-007). Quote-reply is straightforward UI — highlight text,
+  click reply, selected text appears as blockquote. Thread forking has more design
+  questions around how it interacts with constraints (post limits, expiry, scope).
