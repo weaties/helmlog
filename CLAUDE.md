@@ -16,7 +16,7 @@ Data can be exported as CSV, GPX, or JSON for use in Sailmon and other regatta a
 | Dependency management | `uv` |
 | Data source (primary) | Signal K WebSocket via `websockets` (`sk_reader.py`) |
 | NMEA 2000 / CAN (legacy) | `python-can`, `canboat` — `can_reader.py`, `DATA_SOURCE=can` |
-| Storage | SQLite via `aiosqlite` (schema v28) |
+| Storage | SQLite via `aiosqlite` (schema v38) |
 | Web interface | `fastapi` + `uvicorn` + `jinja2` templates |
 | Audio recording | `sounddevice`, `soundfile` |
 | Audio transcription | `faster-whisper`; optional diarisation via `pyannote-audio` |

@@ -947,9 +947,7 @@ def generate_boat_settings(
     _boat("shroud_tension_d2", round(base_upper - 4 + rng.gauss(0, 0.3), 1))
     _boat("shroud_tension_lowers", round(base_upper - 8 + rng.gauss(0, 0.3), 1))
 
-    # Crew weight and distribution
-    crew_wt = round(rng.uniform(840, 920))
-    _boat("crew_weight", crew_wt)
+    # Crew weight distribution
     _boat("weight_distribution", rng.choice(["rail", "hike", "stack to weather"]))
 
     # Car positions (set at dock, occasionally adjusted during race)

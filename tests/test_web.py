@@ -753,6 +753,19 @@ async def test_api_sessions_has_audio_flag(storage: Storage, tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def _get_pos_ids(client: httpx.AsyncClient) -> dict[str, int]:
+    """Helper: return position name → id mapping."""
+    resp = await client.get("/api/crew/positions")
+    return {p["name"]: p["id"] for p in resp.json()["positions"]}
+
+
+async def _make_crew_user(client: httpx.AsyncClient, name: str) -> int:
+    """Helper: create a placeholder user and return the id."""
+    resp = await client.post("/api/crew/placeholder", json={"name": name})
+    return resp.json()["id"]
+
+
+@pytest.mark.asyncio
 async def test_api_sessions_includes_crew(storage: Storage) -> None:
     """GET /api/sessions returns crew list per race/practice session."""
     app = create_app(storage)
@@ -762,14 +775,15 @@ async def test_api_sessions_includes_crew(storage: Storage) -> None:
         await _set_event(client)
         r = (await client.post("/api/races/start")).json()
         race_id = r["id"]
-        # Set crew for the race
-        crew_payload = [
-            {"position": "helm", "sailor": "Mark"},
-            {"position": "main", "sailor": "Dave"},
-        ]
+        pos_ids = await _get_pos_ids(client)
+        mark_id = await _make_crew_user(client, "Mark")
+        dave_id = await _make_crew_user(client, "Dave")
         await client.post(
             f"/api/races/{race_id}/crew",
-            json=crew_payload,
+            json=[
+                {"position_id": pos_ids["helm"], "user_id": mark_id},
+                {"position_id": pos_ids["main"], "user_id": dave_id},
+            ],
         )
         await client.post(f"/api/races/{race_id}/end")
 
@@ -778,9 +792,6 @@ async def test_api_sessions_includes_crew(storage: Storage) -> None:
     assert data["total"] == 1
     session = data["sessions"][0]
     assert "crew" in session
-    pos_map = {c["position"]: c["sailor"] for c in session["crew"]}
-    assert pos_map.get("helm") == "Mark"
-    assert pos_map.get("main") == "Dave"
 
 
 @pytest.mark.asyncio
@@ -832,13 +843,17 @@ async def test_post_crew_sets_crew(storage: Storage) -> None:
     ) as client:
         await _set_event(client)
         race_id = (await client.post("/api/races/start")).json()["id"]
+        pos_ids = await _get_pos_ids(client)
+        mark_id = await _make_crew_user(client, "Mark")
+        dave_id = await _make_crew_user(client, "Dave")
+        bill_id = await _make_crew_user(client, "Bill")
 
         post_resp = await client.post(
             f"/api/races/{race_id}/crew",
             json=[
-                {"position": "helm", "sailor": "Mark"},
-                {"position": "main", "sailor": "Dave"},
-                {"position": "tactician", "sailor": "Bill"},
+                {"position_id": pos_ids["helm"], "user_id": mark_id},
+                {"position_id": pos_ids["main"], "user_id": dave_id},
+                {"position_id": pos_ids["tactician"], "user_id": bill_id},
             ],
         )
         assert post_resp.status_code == 204
@@ -847,18 +862,17 @@ async def test_post_crew_sets_crew(storage: Storage) -> None:
     assert get_resp.status_code == 200
     data = get_resp.json()
     assert "crew" in data
-    assert "recent_sailors" in data
     positions = [c["position"] for c in data["crew"]]
     assert positions == ["helm", "main", "tactician"]
-    sailors = {c["position"]: c["sailor"] for c in data["crew"]}
-    assert sailors["helm"] == "Mark"
-    assert sailors["main"] == "Dave"
-    assert sailors["tactician"] == "Bill"
+    names = {c["position"]: c["user_name"] for c in data["crew"]}
+    assert names["helm"] == "Mark"
+    assert names["main"] == "Dave"
+    assert names["tactician"] == "Bill"
 
 
 @pytest.mark.asyncio
 async def test_post_crew_invalid_position(storage: Storage) -> None:
-    """POST /api/races/{id}/crew with an unknown position returns 422."""
+    """POST /api/races/{id}/crew with an unknown position_id returns 422."""
     app = create_app(storage)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -867,9 +881,31 @@ async def test_post_crew_invalid_position(storage: Storage) -> None:
         race_id = (await client.post("/api/races/start")).json()["id"]
         resp = await client.post(
             f"/api/races/{race_id}/crew",
-            json=[{"position": "captain", "sailor": "Someone"}],
+            json=[{"position_id": 99999, "user_id": 1}],
         )
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_post_crew_duplicate_user_rejected(storage: Storage) -> None:
+    """POST /api/races/{id}/crew with same user in two positions returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _set_event(client)
+        race_id = (await client.post("/api/races/start")).json()["id"]
+        pos_ids = await _get_pos_ids(client)
+        alice_id = await _make_crew_user(client, "Alice")
+        resp = await client.post(
+            f"/api/races/{race_id}/crew",
+            json=[
+                {"position_id": pos_ids["helm"], "user_id": alice_id},
+                {"position_id": pos_ids["main"], "user_id": alice_id},
+            ],
+        )
+    assert resp.status_code == 422
+    assert "Duplicate" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -892,17 +928,19 @@ async def test_api_state_includes_crew(storage: Storage) -> None:
     ) as client:
         await _set_event(client)
         race_id = (await client.post("/api/races/start")).json()["id"]
+        pos_ids = await _get_pos_ids(client)
+        helm_uid = await _make_crew_user(client, "TestHelm")
         await client.post(
             f"/api/races/{race_id}/crew",
-            json=[{"position": "helm", "sailor": "TestHelm"}],
+            json=[{"position_id": pos_ids["helm"], "user_id": helm_uid}],
         )
 
         state = (await client.get("/api/state")).json()
 
     assert state["current_race"] is not None
     assert "crew" in state["current_race"]
-    sailors = {c["position"]: c["sailor"] for c in state["current_race"]["crew"]}
-    assert sailors.get("helm") == "TestHelm"
+    names = {c["position"]: c["user_name"] for c in state["current_race"]["crew"]}
+    assert names.get("helm") == "TestHelm"
 
     # today_races also includes crew
     assert len(state["today_races"]) == 1
@@ -910,54 +948,50 @@ async def test_api_state_includes_crew(storage: Storage) -> None:
 
 
 @pytest.mark.asyncio
-async def test_recent_sailors_endpoint(storage: Storage) -> None:
-    """GET /api/sailors/recent returns names after crew is set."""
+async def test_crew_users_endpoint(storage: Storage) -> None:
+    """GET /api/crew/users returns created users."""
     app = create_app(storage)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        await _set_event(client)
-        race_id = (await client.post("/api/races/start")).json()["id"]
-        await client.post(
-            f"/api/races/{race_id}/crew",
-            json=[
-                {"position": "helm", "sailor": "Alice"},
-                {"position": "main", "sailor": "Bob"},
-            ],
-        )
+        await _make_crew_user(client, "Alice")
+        await _make_crew_user(client, "Bob")
 
-        resp = await client.get("/api/sailors/recent")
+        resp = await client.get("/api/crew/users")
     assert resp.status_code == 200
     data = resp.json()
-    assert "sailors" in data
-    assert "Alice" in data["sailors"]
-    assert "Bob" in data["sailors"]
+    assert "users" in data
+    names = [u["name"] for u in data["users"]]
+    assert "Alice" in names
+    assert "Bob" in names
+    # weight_lbs should be present in user records for crew weight defaulting
+    assert all("weight_lbs" in u for u in data["users"])
 
 
 @pytest.mark.asyncio
-async def test_post_crew_ignores_blank_sailors(storage: Storage) -> None:
-    """POST /api/races/{id}/crew skips entries with blank sailor names."""
+async def test_post_crew_non_attributed(storage: Storage) -> None:
+    """POST /api/races/{id}/crew with attributed=false stores non-attributed entries."""
     app = create_app(storage)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         await _set_event(client)
         race_id = (await client.post("/api/races/start")).json()["id"]
+        pos_ids = await _get_pos_ids(client)
+        mark_id = await _make_crew_user(client, "Mark")
         await client.post(
             f"/api/races/{race_id}/crew",
             json=[
-                {"position": "helm", "sailor": "Mark"},
-                {"position": "main", "sailor": ""},
-                {"position": "pit", "sailor": "  "},
+                {"position_id": pos_ids["helm"], "user_id": mark_id},
+                {"position_id": pos_ids["main"], "attributed": False},
             ],
         )
 
         resp = await client.get(f"/api/races/{race_id}/crew")
     crew = resp.json()["crew"]
-    positions = [c["position"] for c in crew]
-    assert "helm" in positions
-    assert "main" not in positions
-    assert "pit" not in positions
+    by_pos = {c["position"]: c for c in crew}
+    assert by_pos["helm"]["user_name"] == "Mark"
+    assert by_pos["main"]["attributed"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1058,37 +1092,38 @@ async def test_debrief_auto_ends_open_race(storage: Storage, tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_start_race_carries_forward_crew(storage: Storage) -> None:
-    """Starting a new race copies crew from the most recently ended session as defaults."""
+async def test_start_race_uses_boat_level_defaults(storage: Storage) -> None:
+    """Starting a new race auto-applies boat-level crew defaults via resolve_crew."""
     app = create_app(storage)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         await _set_event(client)
+        pos_ids = await _get_pos_ids(client)
+        alice_id = await _make_crew_user(client, "Alice")
+        bob_id = await _make_crew_user(client, "Bob")
 
-        # Race 1: set crew, then end it
-        r1 = (await client.post("/api/races/start")).json()
+        # Set boat-level defaults
         await client.post(
-            f"/api/races/{r1['id']}/crew",
+            "/api/crew/defaults",
             json=[
-                {"position": "helm", "sailor": "Alice"},
-                {"position": "main", "sailor": "Bob"},
+                {"position_id": pos_ids["helm"], "user_id": alice_id},
+                {"position_id": pos_ids["main"], "user_id": bob_id},
             ],
         )
-        await client.post(f"/api/races/{r1['id']}/end")
 
-        # Race 2: start without posting any crew
-        r2 = (await client.post("/api/races/start")).json()
+        # Start race without posting any crew
+        r = (await client.post("/api/races/start")).json()
 
-        # Crew should have been carried forward from race 1
-        crew_resp = await client.get(f"/api/races/{r2['id']}/crew")
+        # Crew should come from boat-level defaults
+        crew_resp = await client.get(f"/api/races/{r['id']}/crew")
 
     assert crew_resp.status_code == 200
     crew = crew_resp.json()["crew"]
-    pos_map = {c["position"]: c["sailor"] for c in crew}
-    assert pos_map.get("helm") == "Alice"
-    assert pos_map.get("main") == "Bob"
+    by_pos = {c["position"]: c["user_name"] for c in crew}
+    assert by_pos.get("helm") == "Alice"
+    assert by_pos.get("main") == "Bob"
 
 
 # ---------------------------------------------------------------------------
@@ -1712,18 +1747,21 @@ async def test_guest_crew_accepted_and_returned(storage: Storage) -> None:
     ) as client:
         await _set_event(client)
         race_id = (await client.post("/api/races/start")).json()["id"]
+        pos_ids = await _get_pos_ids(client)
+        alice_id = await _make_crew_user(client, "Alice")
+        charlie_id = await _make_crew_user(client, "Charlie")
         resp = await client.post(
             f"/api/races/{race_id}/crew",
             json=[
-                {"position": "helm", "sailor": "Alice"},
-                {"position": "guest", "sailor": "Charlie"},
+                {"position_id": pos_ids["helm"], "user_id": alice_id},
+                {"position_id": pos_ids["guest"], "user_id": charlie_id},
             ],
         )
         assert resp.status_code == 204
 
         crew_resp = await client.get(f"/api/races/{race_id}/crew")
     assert crew_resp.status_code == 200
-    positions = {c["position"]: c["sailor"] for c in crew_resp.json()["crew"]}
+    positions = {c["position"]: c["user_name"] for c in crew_resp.json()["crew"]}
     assert positions.get("helm") == "Alice"
     assert positions.get("guest") == "Charlie"
 
@@ -1737,13 +1775,15 @@ async def test_guest_crew_in_state(storage: Storage) -> None:
     ) as client:
         await _set_event(client)
         race_id = (await client.post("/api/races/start")).json()["id"]
+        pos_ids = await _get_pos_ids(client)
+        guest_id = await _make_crew_user(client, "GuestSailor")
         await client.post(
             f"/api/races/{race_id}/crew",
-            json=[{"position": "guest", "sailor": "GuestSailor"}],
+            json=[{"position_id": pos_ids["guest"], "user_id": guest_id}],
         )
         state = (await client.get("/api/state")).json()
 
-    crew = {c["position"]: c["sailor"] for c in state["current_race"]["crew"]}
+    crew = {c["position"]: c["user_name"] for c in state["current_race"]["crew"]}
     assert crew.get("guest") == "GuestSailor"
 
 
@@ -1810,12 +1850,14 @@ async def test_debrief_session_includes_parent_race_crew(storage: Storage, tmp_p
     ) as client:
         await _set_event(client)
         race_id = (await client.post("/api/races/start")).json()["id"]
-        # Set crew on the race
+        pos_ids = await _get_pos_ids(client)
+        helm_id = await _make_crew_user(client, "DebriefHelm")
+        main_id = await _make_crew_user(client, "DebriefMain")
         await client.post(
             f"/api/races/{race_id}/crew",
             json=[
-                {"position": "helm", "sailor": "DebriefHelm"},
-                {"position": "main", "sailor": "DebriefMain"},
+                {"position_id": pos_ids["helm"], "user_id": helm_id},
+                {"position_id": pos_ids["main"], "user_id": main_id},
             ],
         )
         await client.post("/api/races/end")
@@ -1829,7 +1871,7 @@ async def test_debrief_session_includes_parent_race_crew(storage: Storage, tmp_p
     data = resp.json()
     debriefs = [s for s in data["sessions"] if s["type"] == "debrief"]
     assert len(debriefs) == 1
-    crew = {c["position"]: c["sailor"] for c in debriefs[0]["crew"]}
+    crew = {c["position"]: c["user_name"] for c in debriefs[0]["crew"]}
     assert crew.get("helm") == "DebriefHelm"
     assert crew.get("main") == "DebriefMain"
 
@@ -3096,3 +3138,124 @@ async def test_thread_with_anchor_timestamp(storage: Storage) -> None:
 
         resp = await client.get(f"/api/threads/{thread_id}")
         assert resp.json()["anchor_timestamp"] == ts
+
+
+# ---------------------------------------------------------------------------
+# Weight endpoint tests (#305)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_patch_weight_requires_biometric_consent(storage: Storage) -> None:
+    """PATCH /api/me/weight rejects weight update without biometric consent.
+
+    Note: when AUTH_DISABLED=true, the mock admin has id=None, so the consent
+    lookup returns empty and the 403 fires.
+    """
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.patch("/api/me/weight", json={"weight_lbs": 175.0})
+    assert resp.status_code == 403
+    assert "Biometric consent" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_patch_weight_null_clears_without_consent(storage: Storage) -> None:
+    """PATCH /api/me/weight with null weight clears it without needing consent."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.patch("/api/me/weight", json={"weight_lbs": None})
+    assert resp.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_patch_weight_invalid_type(storage: Storage) -> None:
+    """PATCH /api/me/weight rejects non-numeric weight."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.patch("/api/me/weight", json={"weight_lbs": "heavy"})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_name_updates_display_name(storage: Storage) -> None:
+    """PATCH /api/me/name updates the user's display name."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.patch("/api/me/name", json={"name": "New Name"})
+    assert resp.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_patch_name_rejects_blank(storage: Storage) -> None:
+    """PATCH /api/me/name rejects blank name."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.patch("/api/me/name", json={"name": ""})
+    assert resp.status_code == 422
+    assert "blank" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Consent / anonymize endpoint tests (#305)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_and_get_consent(storage: Storage) -> None:
+    """PUT then GET consent for a crew member."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        uid = await _make_crew_user(client, "ConsentPerson")
+        put_resp = await client.put(
+            f"/api/crew/{uid}/consents",
+            json={"consent_type": "audio", "granted": True},
+        )
+        assert put_resp.status_code == 200
+        assert put_resp.json()["granted"] is True
+
+        get_resp = await client.get(f"/api/crew/{uid}/consents")
+    assert get_resp.status_code == 200
+    consents = get_resp.json()
+    assert len(consents) == 1
+    assert consents[0]["consent_type"] == "audio"
+
+
+@pytest.mark.asyncio
+async def test_set_consent_invalid_type(storage: Storage) -> None:
+    """PUT consent with invalid type returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        uid = await _make_crew_user(client, "BadConsent")
+        resp = await client.put(
+            f"/api/crew/{uid}/consents",
+            json={"consent_type": "invalid", "granted": True},
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_anonymize_sailor(storage: Storage) -> None:
+    """POST anonymize replaces user name."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        uid = await _make_crew_user(client, "NamedSailor")
+        resp = await client.post(f"/api/crew/{uid}/anonymize")
+    assert resp.status_code == 200
+    assert resp.json()["rows_updated"] == 1

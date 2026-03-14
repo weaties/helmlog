@@ -3,22 +3,65 @@
 {% block extra_css %}
 <style>
 h1{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:12px}
-.card{background:#131f35;border-radius:12px;padding:24px;text-align:center}
-.avatar{width:128px;height:128px;border-radius:50%;object-fit:cover;cursor:pointer;border:3px solid {{ role_color }};margin-bottom:16px}
-.name{font-size:1.2rem;font-weight:600;margin-bottom:4px}
-.email{color:#8892a4;font-size:.85rem;margin-bottom:8px}
-.role{background:{{ role_color }}22;color:{{ role_color }};padding:2px 10px;border-radius:4px;font-size:.8rem;display:inline-block}
-a{color:#7eb8f7;text-decoration:none}
+.p-card{background:#131f35;border-radius:12px;padding:24px;text-align:center}
+.p-avatar{width:128px;height:128px;border-radius:50%;object-fit:cover;cursor:pointer;border:3px solid {{ role_color }};margin-bottom:16px}
+.p-avatar-hint{color:#6b7a90;font-size:.75rem;margin-top:-10px;margin-bottom:12px}
+.p-email{color:#8892a4;font-size:.9rem;margin-bottom:8px}
+.p-role{background:{{ role_color }}22;color:{{ role_color }};padding:2px 10px;border-radius:4px;font-size:.8rem;display:inline-block}
+.p-field{text-align:left;margin-top:24px}
+.p-field-label{color:#8892a4;font-size:.9rem;display:block;margin-bottom:6px}
+.p-input{
+  display:block;width:100%;padding:14px 12px;border-radius:8px;
+  border:1px solid #2a3a5c;background:#0d1829;color:#e0e6ed;
+  font-size:1.1rem;box-sizing:border-box;min-height:48px;
+}
+.p-input:focus{border-color:#2563eb;outline:none}
+.p-row{display:flex;gap:10px;align-items:stretch;margin-top:6px}
+.p-row .p-input{flex:1 1 0;min-width:0;width:auto}
+.p-row .p-btn{
+  flex-shrink:0;min-height:48px;padding:12px 20px;font-size:.95rem;
+  display:flex;align-items:center;justify-content:center;
+  background:#1e3a5c;color:#e0e6ed;border:1px solid #2a3a5c;border-radius:8px;
+  cursor:pointer;font-weight:600;
+}
+.p-row .p-btn:active{background:#2563eb}
+.p-consent{
+  display:flex;align-items:center;gap:8px;margin-top:8px;
+  color:#8892a4;font-size:.9rem;cursor:pointer;padding:8px 0;
+}
+.p-consent input[type="checkbox"]{width:20px;height:20px;cursor:pointer}
+.p-note{color:#6b7a90;font-size:.8rem;margin:6px 0 0;line-height:1.4}
 </style>
 {% endblock %}
 {% block content %}
 <h1 style="margin-bottom:12px">Profile</h1>
-<div class="card">
-  <img class="avatar" id="avatar" src="{{ avatar_url }}" alt="avatar" onclick="document.getElementById('file').click()"/>
+<div class="p-card">
+  <img class="p-avatar" id="avatar" src="{{ avatar_url }}" alt="avatar" onclick="document.getElementById('file').click()"/>
+  <div class="p-avatar-hint">Tap photo to change</div>
   <input type="file" id="file" accept="image/*" style="display:none"/>
-  <div class="name">{{ name }}</div>
-  <div class="email">{{ email }}</div>
-  <div class="role">{{ role }}</div>
+  <div class="p-email">{{ email }}</div>
+  <div class="p-role">{{ role }}</div>
+
+  <div class="p-field">
+    <label class="p-field-label" for="name-input">Display Name</label>
+    <div class="p-row">
+      <input type="text" id="name-input" class="p-input" value="{{ name }}" placeholder="Your name"/>
+      <button type="button" class="p-btn" onclick="saveName()">Save</button>
+    </div>
+  </div>
+
+  <div class="p-field">
+    <label class="p-field-label" for="weight-input">Body Weight (lbs)</label>
+    <p class="p-note">Weight is biometric data stored for crew weight tracking. You may clear it at any time by saving an empty value.</p>
+    <label class="p-consent">
+      <input type="checkbox" id="bio-consent" {% if bio_consent %}checked{% endif %}/> I consent to biometric data storage
+    </label>
+    <div class="p-row">
+      <input type="number" id="weight-input" class="p-input" step="0.1" min="0" max="500"
+             value="{{ weight_lbs or '' }}" placeholder="—"/>
+      <button type="button" class="p-btn" onclick="saveWeight()">Save</button>
+    </div>
+  </div>
 </div>
 {% endblock %}
 {% block scripts %}
@@ -36,5 +79,44 @@ document.getElementById('file').addEventListener('change', async e => {
     alert(d.detail || 'Upload failed');
   }
 });
+async function saveName() {
+  const name = document.getElementById('name-input').value.trim();
+  if (!name) { alert('Name must not be blank.'); return; }
+  const r = await fetch('/api/me/name', {
+    method:'PATCH',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name: name})
+  });
+  if (r.ok) window.location.reload();
+  else {
+    const d = await r.json().catch(() => ({}));
+    alert(d.detail || 'Failed to save name');
+  }
+}
+async function saveWeight() {
+  const v = document.getElementById('weight-input').value;
+  const weight = v ? parseFloat(v) : null;
+  const consentBox = document.getElementById('bio-consent');
+  if (weight !== null && !consentBox.checked) {
+    alert('Please check the biometric consent box before saving weight.');
+    return;
+  }
+  /* Grant or revoke biometric consent to match the checkbox */
+  await fetch('/api/crew/{{ user_id }}/consents', {
+    method:'PUT',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({consent_type:'biometric', granted: consentBox.checked})
+  });
+  const r = await fetch('/api/me/weight', {
+    method:'PATCH',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({weight_lbs: weight})
+  });
+  if (r.ok) alert('Weight saved');
+  else {
+    const d = await r.json().catch(() => ({}));
+    alert(d.detail || 'Failed to save weight');
+  }
+}
 </script>
 {% endblock %}

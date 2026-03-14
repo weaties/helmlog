@@ -350,9 +350,33 @@ async function toggleHistoryCrew(sessionId) {
   const data = await r.json();
   const crew = data.crew || [];
   if (crew.length) {
-    el.innerHTML = '<div style="font-size:.82rem">' + crew.map(c =>
-      '<span style="color:#8892a4">' + c.position.charAt(0).toUpperCase() + c.position.slice(1) + ':</span> ' + c.sailor
-    ).join(' &nbsp;·&nbsp; ') + '</div>';
+    let totalBody = 0, totalGear = 0, hasWeight = false;
+    const parts = crew.map(c => {
+      const pos = c.position.charAt(0).toUpperCase() + c.position.slice(1);
+      const name = c.attributed ? (c.user_name || '\u2014') : '<em>(not attributed)</em>';
+      let wt = '';
+      if (c.body_weight != null || c.gear_weight != null) {
+        hasWeight = true;
+        const b = c.body_weight || 0;
+        const g = c.gear_weight || 0;
+        totalBody += b;
+        totalGear += g;
+        wt = ' <span style="color:#6b7a90;font-size:.72rem">(';
+        wt += b ? b.toFixed(0) + ' lbs' : '0';
+        if (g) wt += ' + ' + g.toFixed(0) + ' gear';
+        wt += ')</span>';
+      }
+      return '<span style="color:#8892a4">' + pos + ':</span> ' + name + wt;
+    });
+    let html = '<div style="font-size:.82rem">' + parts.join(' &nbsp;·&nbsp; ') + '</div>';
+    if (hasWeight) {
+      const total = totalBody + totalGear;
+      html += '<div class="crew-total-weight" style="display:block">'
+        + '<strong>Total weight: ' + total.toFixed(1) + ' lbs</strong>'
+        + ' <span style="color:#8892a4">= crew ' + totalBody.toFixed(1)
+        + ' + gear ' + totalGear.toFixed(1) + '</span></div>';
+    }
+    el.innerHTML = html;
   } else {
     el.innerHTML = '<span style="color:#8892a4;font-size:.8rem">No crew recorded</span>';
   }

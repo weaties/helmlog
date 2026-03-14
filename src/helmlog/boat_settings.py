@@ -59,7 +59,6 @@ PARAMETERS: tuple[ParameterDef, ...] = (
         "car_position_starboard", "Car position starboard", "hole", "number", "deck_hardware"
     ),
     # Crew
-    ParameterDef("crew_weight", "Crew weight", "lbs", "number", "crew"),
     ParameterDef("weight_distribution", "Weight distribution", "", "preset", "crew"),
     # Conditions — sea state
     ParameterDef("swell_height", "Swell height", "ft", "number", "conditions"),

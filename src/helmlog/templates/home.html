@@ -123,21 +123,18 @@
   </div>
 </div>
 
-<div class="card hidden" id="crew-card">
+<div class="card" id="crew-card">
   <div class="crew-header" onclick="toggleCrew()">
     <span class="label" style="margin-bottom:0">Crew</span>
-    <span id="crew-chevron" style="color:#8892a4;font-size:.85rem">&#9654;</span>
+    <span style="display:flex;align-items:center;gap:8px">
+      <span id="crew-count" style="font-size:.78rem;color:#8892a4"></span>
+      <span id="crew-chevron" style="color:#8892a4;font-size:.85rem">&#9654;</span>
+    </span>
   </div>
+  <div id="crew-summary" style="font-size:.82rem;margin-top:6px"></div>
   <div id="crew-body" style="display:none;margin-top:10px">
-    <div class="crew-row"><span class="crew-pos">Helm</span><input class="crew-input" id="crew-helm" list="recent-sailors" placeholder="Name..." maxlength="40"/></div>
-    <div class="crew-row"><span class="crew-pos">Main</span><input class="crew-input" id="crew-main" list="recent-sailors" placeholder="Name..." maxlength="40"/></div>
-    <div class="crew-row"><span class="crew-pos">Pit</span><input class="crew-input" id="crew-pit" list="recent-sailors" placeholder="Name..." maxlength="40"/></div>
-    <div class="crew-row"><span class="crew-pos">Bow</span><input class="crew-input" id="crew-bow" list="recent-sailors" placeholder="Name..." maxlength="40"/></div>
-    <div class="crew-row"><span class="crew-pos">Tac</span><input class="crew-input" id="crew-tac" list="recent-sailors" placeholder="Name..." maxlength="40"/></div>
-    <div class="crew-row"><span class="crew-pos">Guest</span><input class="crew-input" id="crew-guest" list="recent-sailors" placeholder="Name..." maxlength="40"/></div>
-    <datalist id="recent-sailors"></datalist>
-    <div id="sailor-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px"></div>
-    <button class="btn btn-secondary" style="margin-top:6px;font-size:.9rem;padding:12px" onclick="saveCrew()">Save Crew</button>
+    <div id="crew-rows"></div>
+    <div id="crew-status" style="font-size:.78rem;color:#8892a4;margin-top:6px;display:none"></div>
   </div>
 </div>
 
@@ -168,7 +165,7 @@
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
     <div class="field">
       <label for="synth-wind-dir">Wind direction (&deg;)</label>
-      <input id="synth-wind-dir" type="number" value="0" min="0" max="359" onchange="onSynthWindChange()"/>
+      <input id="synth-wind-dir" type="number" value="25" min="0" max="359" onchange="onSynthWindChange()"/>
     </div>
     <div class="field">
       <label for="synth-laps">Laps</label>
@@ -187,8 +184,8 @@
     <label>RC position</label>
     <span id="synth-rc-display" style="font-size:.82rem;color:#fbbf24">Click map to set</span>
   </div>
-  <input type="hidden" id="synth-lat" value="47.63"/>
-  <input type="hidden" id="synth-lon" value="-122.40"/>
+  <input type="hidden" id="synth-lat" value="47.6815"/>
+  <input type="hidden" id="synth-lon" value="-122.4085"/>
   <div class="field" id="synth-peer-field">
     <label for="synth-peer">Attribute to co-op peer (optional)</label>
     <select id="synth-peer">

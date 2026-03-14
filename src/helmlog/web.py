@@ -220,8 +220,20 @@ class EventRequest(BaseModel):
 
 
 class CrewEntry(BaseModel):
-    position: str
-    sailor: str
+    position_id: int
+    user_id: int | None = None
+    attributed: bool = True
+    body_weight: float | None = None
+    gear_weight: float | None = None
+
+
+class WeightUpdate(BaseModel):
+    weight_lbs: float | None = None
+
+
+class PositionEntry(BaseModel):
+    name: str
+    display_order: int
 
 
 class BoatCreate(BaseModel):
@@ -281,9 +293,6 @@ class RaceSailsSet(BaseModel):
     main_id: int | None = None
     jib_id: int | None = None
     spinnaker_id: int | None = None
-
-
-POSITIONS: tuple[str, ...] = ("helm", "main", "pit", "bow", "tactician", "guest")
 
 
 # ---------------------------------------------------------------------------
@@ -462,8 +471,45 @@ def create_app(
                 "role": user.get("role"),
                 "avatar_path": user.get("avatar_path"),
                 "is_developer": bool(user.get("is_developer")),
+                "weight_lbs": user.get("weight_lbs"),
             }
         )
+
+    @app.patch("/api/me/weight", status_code=204)
+    async def api_update_my_weight(
+        request: Request,
+        body: WeightUpdate,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> None:
+        """Update the current user's body weight.
+
+        Weight is biometric data — requires biometric consent per data licensing policy.
+        """
+        weight = body.weight_lbs
+        if weight is not None:
+            consents = await storage.get_crew_consents(_user["id"])
+            bio_consent = next(
+                (c for c in consents if c["consent_type"] == "biometric" and c["granted"]),
+                None,
+            )
+            if not bio_consent:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Biometric consent required before storing weight data",
+                )
+        await storage.update_user_weight(_user["id"], weight)
+
+    @app.patch("/api/me/name", status_code=204)
+    async def api_update_my_name(
+        request: Request,
+        body: dict[str, Any],
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> None:
+        """Update the current user's display name."""
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="Name must not be blank")
+        await storage.update_user_profile(_user["id"], name, None)
 
     def _login_ctx(next_url: str, error_html: str = "") -> dict[str, Any]:
         from helmlog.oauth import enabled_providers
@@ -948,6 +994,8 @@ def create_app(
         cur = await storage._conn().execute("SELECT name FROM races WHERE id = ?", (session_id,))
         row = await cur.fetchone()
         session_name = row["name"] if row else f"Session {session_id}"
+        user: dict[str, Any] | None = getattr(request.state, "user", None)
+        user_role = user.get("role", "viewer") if user else "viewer"
         return _templates.TemplateResponse(
             request,
             "session.html",
@@ -958,6 +1006,7 @@ def create_app(
                 session_name=session_name,
                 grafana_port=cfg.grafana_port,
                 grafana_uid=cfg.grafana_uid,
+                user_role=user_role,
             ),
         )
 
@@ -997,31 +1046,47 @@ def create_app(
             color = role_colors.get(role, "#8892a4")
             return f'<span style="background:{color}22;color:{color};padding:1px 7px;border-radius:4px;font-size:.75rem">{role}</span>'
 
+        def _esc(s: str) -> str:
+            return (
+                s.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace('"', "&quot;")
+                .replace("'", "&#39;")
+            )
+
+        def _fmt_weight(w: float | None) -> str:
+            return f"{w:.1f} lbs" if w else "\u2014"
+
         user_rows = "".join(
-            f"<tr><td>{u['email']}</td><td>{u['name'] or '\u2014'}</td>"
-            f"<td>{_badge(u['role'])}</td>"
-            f"<td>{'&#9989;' if u.get('is_developer') else '\u2014'}</td>"
-            f"<td>{_local_ts(u['last_seen'])}</td>"
-            f'<td><button onclick="changeRole({u["id"]})" style="cursor:pointer;background:none;border:1px solid #2563eb;color:#7eb8f7;border-radius:4px;padding:2px 8px;font-size:.8rem">Change role</button>'  # noqa: E501
-            f' <button onclick="toggleDev({u["id"]},{1 if not u.get("is_developer") else 0})" style="cursor:pointer;background:none;border:1px solid #d97706;color:#fbbf24;border-radius:4px;padding:2px 8px;font-size:.8rem">{"Remove dev" if u.get("is_developer") else "Make dev"}</button></td>'  # noqa: E501
+            f'<tr data-uid="{u["id"]}">'
+            f'<td class="u-email" data-label="Email">{_esc(u["email"])}</td>'
+            f'<td class="u-name" data-label="Name">{_esc(u["name"] or "")}</td>'
+            f'<td class="u-role" data-label="Role" data-role="{u["role"]}">{_badge(u["role"])}</td>'
+            f'<td class="u-dev" data-label="Dev"><input type="checkbox" {"checked" if u.get("is_developer") else ""} disabled style="width:18px;height:18px"/></td>'  # noqa: E501
+            f'<td class="u-weight" data-label="Weight">{_fmt_weight(u.get("weight_lbs"))}</td>'
+            f'<td data-label="Last seen">{_local_ts(u["last_seen"])}</td>'
+            f'<td class="u-actions"><button onclick="editUser({u["id"]})" class="ubtn ubtn-edit" style="border-color:#22c55e;color:#4ade80">Edit</button></td>'  # noqa: E501
             f"</tr>"
             for u in users
         )
         sess_rows = "".join(
-            f"<tr><td>{s.get('email', '')}</td><td>{s.get('role', '')}</td>"
-            f"<td>{s.get('ip', '\u2014')}</td>"
-            f"<td>{_local_ts(s['created_at'])}</td>"
-            f"<td>{_local_ts(s['expires_at'])}</td>"
-            f'<td><button onclick="revokeSession(\'{s["session_id"]}\')" style="cursor:pointer;background:#7f1d1d;border:none;color:#fca5a5;border-radius:4px;padding:2px 8px;font-size:.8rem">Revoke</button></td>'  # noqa: E501
+            f'<tr><td data-label="User">{_esc(s.get("email") or "")}</td>'
+            f'<td data-label="Role">{_esc(s.get("role") or "")}</td>'
+            f'<td data-label="IP">{_esc(s.get("ip") or "\u2014")}</td>'
+            f'<td data-label="Created">{_local_ts(s["created_at"])}</td>'
+            f'<td data-label="Expires">{_local_ts(s["expires_at"])}</td>'
+            f'<td><button onclick="revokeSession(\'{_esc(s["session_id"])}\')" style="cursor:pointer;background:#7f1d1d;border:none;color:#fca5a5;border-radius:4px;padding:6px 12px;font-size:.85rem">Revoke</button></td>'  # noqa: E501
             f"</tr>"
             for s in sessions
         )
         invite_rows = "".join(
-            f"<tr><td>{inv['email']}</td><td>{inv.get('name') or '\u2014'}</td>"
-            f"<td>{_badge(inv['role'])}</td>"
-            f"<td>{'&#9989;' if inv.get('is_developer') else '\u2014'}</td>"
-            f"<td>{_local_ts(inv['expires_at'])}</td>"
-            f'<td><button onclick="revokeInvite({inv["id"]})" style="cursor:pointer;background:#7f1d1d;border:none;color:#fca5a5;border-radius:4px;padding:2px 8px;font-size:.8rem">Revoke</button></td>'  # noqa: E501
+            f'<tr><td data-label="Email">{_esc(inv["email"])}</td>'
+            f'<td data-label="Name">{_esc(inv.get("name") or "\u2014")}</td>'
+            f'<td data-label="Role">{_badge(inv["role"])}</td>'
+            f'<td data-label="Dev">{"&#9989;" if inv.get("is_developer") else "\u2014"}</td>'
+            f'<td data-label="Expires">{_local_ts(inv["expires_at"])}</td>'
+            f'<td><button onclick="revokeInvite({int(inv["id"])})" style="cursor:pointer;background:#7f1d1d;border:none;color:#fca5a5;border-radius:4px;padding:6px 12px;font-size:.85rem">Revoke</button></td>'  # noqa: E501
             f"</tr>"
             for inv in pending_invitations
         )
@@ -1113,6 +1178,57 @@ def create_app(
         await storage.update_user_developer(user_id, is_dev)
         await _audit(
             request, "user.developer", detail=f"user={user_id} is_developer={is_dev}", user=_user
+        )
+
+    @app.put("/admin/users/{user_id}", status_code=204, include_in_schema=False)
+    async def admin_update_user(
+        request: Request,
+        user_id: int,
+        body: dict[str, Any],
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> None:
+        """Update a user's name and/or email."""
+        user = await storage.get_user_by_id(user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        name = body.get("name")
+        email = body.get("email")
+        if email is not None:
+            email = email.strip()
+            if not email:
+                raise HTTPException(status_code=422, detail="email must not be blank")
+            # Check for email conflict
+            existing = await storage.get_user_by_email(email)
+            if existing and existing["id"] != user_id:
+                raise HTTPException(status_code=409, detail="Email already in use")
+        await storage.update_user_profile(user_id, name, email)
+        # Role update
+        role = body.get("role")
+        if role is not None:
+            if role not in ("viewer", "crew", "admin"):
+                raise HTTPException(status_code=422, detail="Invalid role")
+            await storage.update_user_role(user_id, role)
+        # Developer flag update
+        if "is_developer" in body:
+            await storage.update_user_developer(user_id, bool(body["is_developer"]))
+        # Weight update (admin bypass — no biometric consent required from admin)
+        if "weight_lbs" in body:
+            w = body["weight_lbs"]
+            weight_val = float(w) if w is not None and w != "" else None
+            await storage.update_user_weight(user_id, weight_val)
+        changes = []
+        if name is not None:
+            changes.append(f"name={name!r}")
+        if email is not None:
+            changes.append(f"email={email!r}")
+        if role is not None:
+            changes.append(f"role={role!r}")
+        if "is_developer" in body:
+            changes.append(f"is_developer={body['is_developer']!r}")
+        if "weight_lbs" in body:
+            changes.append(f"weight_lbs={body['weight_lbs']!r}")
+        await _audit(
+            request, "user.update", detail=f"user={user_id} {' '.join(changes)}", user=_user
         )
 
     @app.delete("/admin/sessions/{session_id}", status_code=204, include_in_schema=False)
@@ -1674,7 +1790,7 @@ def create_app(
             else:
                 elapsed = (now - r.start_utc).total_seconds()
                 duration_s = elapsed
-            crew = await storage.get_race_crew(r.id)
+            crew = await storage.resolve_crew(r.id)
             results = await storage.list_race_results(r.id)
             sails = await storage.get_race_sails(r.id)
             cur = await storage._conn().execute(
@@ -1893,11 +2009,8 @@ def create_app(
 
         race = await storage.start_race(event, now, date_str, race_num, name, session_type)
 
-        # Copy crew from most recently closed session as defaults
-        last_crew = await storage.get_last_session_crew()
-        if last_crew:
-            await storage.set_race_crew(race.id, last_crew)
-            logger.info("Crew carried forward to {}: {} positions", race.name, len(last_crew))
+        # Boat-level crew defaults auto-apply via resolve_crew() —
+        # no explicit copy-forward needed (#305)
 
         if recorder is not None and audio_config is not None:
             from helmlog.audio import AudioDeviceNotFoundError
@@ -2942,15 +3055,30 @@ def create_app(
         if await cur.fetchone() is None:
             raise HTTPException(status_code=404, detail="Race not found")
 
-        invalid = [e.position for e in body if e.position not in POSITIONS]
+        # Validate position_ids exist
+        positions = await storage.get_crew_positions()
+        valid_ids = {p["id"] for p in positions}
+        invalid = [e.position_id for e in body if e.position_id not in valid_ids]
         if invalid:
             raise HTTPException(
                 status_code=422,
-                detail=f"Unknown position(s): {invalid}. Must be one of {list(POSITIONS)}",
+                detail=f"Unknown position_id(s): {invalid}",
             )
 
-        crew = [{"position": e.position, "sailor": e.sailor} for e in body if e.sailor.strip()]
-        await storage.set_race_crew(race_id, crew)
+        crew = [
+            {
+                "position_id": e.position_id,
+                "user_id": e.user_id,
+                "attributed": e.attributed,
+                "body_weight": e.body_weight,
+                "gear_weight": e.gear_weight,
+            }
+            for e in body
+        ]
+        try:
+            await storage.set_crew_defaults(race_id, crew)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         await _audit(request, "crew.set", detail=str(race_id), user=_user)
 
     @app.get("/api/races/{race_id}/crew")
@@ -2962,20 +3090,96 @@ def create_app(
         if await cur.fetchone() is None:
             raise HTTPException(status_code=404, detail="Race not found")
 
-        crew = await storage.get_race_crew(race_id)
-        recent = await storage.get_recent_sailors()
-        return JSONResponse({"crew": crew, "recent_sailors": recent})
+        crew = await storage.resolve_crew(race_id)
+        return JSONResponse({"crew": crew})
 
     # ------------------------------------------------------------------
-    # /api/sailors/recent
+    # /api/crew/defaults  (boat-level crew)
     # ------------------------------------------------------------------
 
-    @app.get("/api/sailors/recent")
-    async def api_recent_sailors(
+    @app.post("/api/crew/defaults", status_code=204)
+    async def api_set_crew_defaults(
+        request: Request,
+        body: list[CrewEntry],
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> None:
+        """Set boat-level default crew roster."""
+        crew = [
+            {
+                "position_id": e.position_id,
+                "user_id": e.user_id,
+                "attributed": e.attributed,
+                "body_weight": e.body_weight,
+                "gear_weight": e.gear_weight,
+            }
+            for e in body
+        ]
+        try:
+            await storage.set_crew_defaults(None, crew)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        await _audit(request, "crew.defaults.set", user=_user)
+
+    @app.get("/api/crew/defaults")
+    async def api_get_crew_defaults(
         _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
     ) -> JSONResponse:
-        sailors = await storage.get_recent_sailors()
-        return JSONResponse({"sailors": sailors})
+        """Get boat-level default crew roster."""
+        defaults = await storage.get_crew_defaults(None)
+        return JSONResponse({"crew": defaults})
+
+    # ------------------------------------------------------------------
+    # /api/crew/positions
+    # ------------------------------------------------------------------
+
+    @app.get("/api/crew/positions")
+    async def api_get_crew_positions(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        positions = await storage.get_crew_positions()
+        return JSONResponse({"positions": positions})
+
+    @app.post("/api/crew/positions", status_code=204)
+    async def api_set_crew_positions(
+        request: Request,
+        body: list[PositionEntry],
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> None:
+        """Admin: set configured crew positions."""
+        await storage.set_crew_positions([p.model_dump() for p in body])
+        await _audit(request, "crew.positions.set", user=_user)
+
+    # ------------------------------------------------------------------
+    # /api/crew/users
+    # ------------------------------------------------------------------
+
+    @app.get("/api/crew/users")
+    async def api_crew_users(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """List users for crew selector (crew→admin→viewer order)."""
+        users = await storage.list_users()
+        role_order = {"crew": 0, "admin": 1, "viewer": 2}
+        users.sort(key=lambda u: (role_order.get(u["role"], 99), u.get("name") or ""))
+        return JSONResponse({"users": users})
+
+    # ------------------------------------------------------------------
+    # /api/crew/placeholder
+    # ------------------------------------------------------------------
+
+    @app.post("/api/crew/placeholder", status_code=201)
+    async def api_create_placeholder(
+        request: Request,
+        body: dict[str, Any],
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Create a placeholder user for non-system crew."""
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="name is required")
+        uid = await storage.create_placeholder_user(name)
+        await _audit(request, "crew.placeholder", detail=name, user=_user)
+        return JSONResponse({"id": uid, "name": name}, status_code=201)
 
     # ------------------------------------------------------------------
     # /api/boats
@@ -4256,6 +4460,8 @@ def create_app(
         user_id = _user.get("id") or 0
         role = _user.get("role", "viewer")
         role_colors = {"admin": "#f59e0b", "crew": "#34d399", "viewer": "#60a5fa"}
+        consents = await storage.get_crew_consents(user_id) if user_id else []
+        bio_consent = any(c["consent_type"] == "biometric" and c["granted"] for c in consents)
         return _templates.TemplateResponse(
             request,
             "profile.html",
@@ -4267,6 +4473,9 @@ def create_app(
                 role=role,
                 role_color=role_colors.get(role, "#8892a4"),
                 avatar_url=f"/avatars/{user_id}.jpg?v={int(time.time())}" if user_id else "",
+                weight_lbs=_user.get("weight_lbs"),
+                bio_consent=bio_consent,
+                user_id=user_id,
             ),
         )
 
@@ -4477,51 +4686,51 @@ def create_app(
         consents = await storage.list_crew_consents()
         return JSONResponse(consents)
 
-    @app.get("/api/crew/{sailor_name}/consents")
-    async def api_get_sailor_consents(
-        sailor_name: str,
+    @app.get("/api/crew/{user_id:int}/consents")
+    async def api_get_user_consents(
+        user_id: int,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> JSONResponse:
-        """Get consent records for a specific sailor."""
-        consents = await storage.get_crew_consents(sailor_name)
+        """Get consent records for a specific user."""
+        consents = await storage.get_crew_consents(user_id)
         return JSONResponse(consents)
 
-    @app.put("/api/crew/{sailor_name}/consents", status_code=200)
+    @app.put("/api/crew/{user_id:int}/consents", status_code=200)
     async def api_set_consent(
         request: Request,
-        sailor_name: str,
+        user_id: int,
         body: dict[str, Any],
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> JSONResponse:
-        """Set or revoke consent for a sailor."""
+        """Set or revoke consent for a user."""
         consent_type = (body.get("consent_type") or "").strip()
-        if consent_type not in ("audio", "video", "name", "photo"):
+        if consent_type not in ("audio", "video", "name", "photo", "biometric"):
             raise HTTPException(
-                status_code=422, detail="consent_type must be audio/video/name/photo"
+                status_code=422, detail="consent_type must be audio/video/name/photo/biometric"
             )
         granted = bool(body.get("granted", True))
-        row_id = await storage.set_crew_consent(sailor_name, consent_type, granted)
+        row_id = await storage.set_crew_consent(user_id, consent_type, granted)
         action = "consent.grant" if granted else "consent.revoke"
-        await _audit(request, action, detail=f"{sailor_name}/{consent_type}", user=_user)
+        await _audit(request, action, detail=f"user={user_id}/{consent_type}", user=_user)
         return JSONResponse(
             {
                 "id": row_id,
-                "sailor_name": sailor_name,
+                "user_id": user_id,
                 "consent_type": consent_type,
                 "granted": granted,
             }
         )
 
-    @app.post("/api/crew/{sailor_name}/anonymize", status_code=200)
+    @app.post("/api/crew/{user_id:int}/anonymize", status_code=200)
     async def api_anonymize_sailor(
         request: Request,
-        sailor_name: str,
+        user_id: int,
         _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
     ) -> JSONResponse:
-        """Anonymize a sailor's name across all sessions."""
-        count = await storage.anonymize_sailor(sailor_name)
-        await _audit(request, "sailor.anonymize", detail=sailor_name, user=_user)
-        return JSONResponse({"anonymized": sailor_name, "rows_updated": count})
+        """Anonymize a crew member's name across all sessions."""
+        count = await storage.anonymize_sailor(user_id)
+        await _audit(request, "sailor.anonymize", detail=f"user={user_id}", user=_user)
+        return JSONResponse({"user_id": user_id, "rows_updated": count})
 
     # ------------------------------------------------------------------
     # Camera status for crew (#207)

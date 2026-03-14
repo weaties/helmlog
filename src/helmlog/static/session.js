@@ -514,20 +514,224 @@ async function deleteResult(resultId) {
 // Crew
 // ---------------------------------------------------------------------------
 
+let _sessionCrew = [];
+let _sessionCrewUsers = [];
+let _sessionCrewPositions = [];
+const _sessionUserRole = cfg.dataset.userRole || 'viewer';
+
 async function loadCrew() {
   const card = document.getElementById('crew-card');
   card.style.display = '';
   const body = document.getElementById('crew-body');
   const r = await fetch('/api/races/' + SESSION_ID + '/crew');
   const data = await r.json();
-  const crew = data.crew || [];
-  if (crew.length) {
-    body.innerHTML = crew.map(c =>
-      '<span style="color:#8892a4">' + esc(c.position.charAt(0).toUpperCase() + c.position.slice(1)) + ':</span> ' + esc(c.sailor)
-    ).join(' &middot; ');
+  _sessionCrew = data.crew || [];
+  renderCrewCollapsed();
+  // Start collapsed — show summary
+  _collapsed['crew'] = true;
+  body.style.display = 'none';
+  document.getElementById('crew-toggle').innerHTML = '&#9654;';
+}
+
+function renderCrewCollapsed() {
+  const summary = document.getElementById('crew-summary');
+  if (!summary) return;
+  if (_sessionCrew.length) {
+    let totalBody = 0, totalGear = 0, hasWeight = false;
+    const lines = _sessionCrew.map(c => {
+      const pos = esc(c.position.charAt(0).toUpperCase() + c.position.slice(1));
+      const name = c.attributed ? esc(c.user_name || '\u2014') : '<em>(not attributed)</em>';
+      let wt = '';
+      if (c.body_weight != null || c.gear_weight != null) {
+        hasWeight = true;
+        const b = c.body_weight || 0;
+        const g = c.gear_weight || 0;
+        totalBody += b;
+        totalGear += g;
+        wt = ' <span style="color:#6b7a90;font-size:.75rem">('
+          + (b ? b.toFixed(0) : '0');
+        if (g) wt += '+' + g.toFixed(0) + 'g';
+        wt += ' lbs)</span>';
+      }
+      return '<span style="color:#8892a4">' + pos + ':</span> ' + name + wt;
+    });
+    let html = lines.join(' &nbsp;\u00b7&nbsp; ');
+    if (hasWeight) {
+      const total = totalBody + totalGear;
+      html += '<div style="color:#8892a4;font-size:.78rem;margin-top:4px">'
+        + 'Total crew weight: ' + total.toFixed(0) + ' lbs'
+        + ' (body ' + totalBody.toFixed(0) + ' + gear ' + totalGear.toFixed(0) + ')</div>';
+    }
+    summary.innerHTML = html;
   } else {
-    body.innerHTML = '<span style="color:#8892a4">No crew recorded</span>';
+    summary.innerHTML = '<span style="color:#8892a4">No crew recorded</span>';
   }
+}
+
+async function loadCrewEditForm() {
+  const body = document.getElementById('crew-body');
+  if (!body) return;
+  // Lazy-load positions and users
+  if (!_sessionCrewPositions.length) {
+    const [posR, usrR] = await Promise.all([
+      fetch('/api/crew/positions'),
+      fetch('/api/crew/users'),
+    ]);
+    _sessionCrewPositions = (await posR.json()).positions || [];
+    _sessionCrewUsers = (await usrR.json()).users || [];
+  }
+  const canEdit = _sessionUserRole === 'admin' || _sessionUserRole === 'crew';
+  let html = '';
+  for (const p of _sessionCrewPositions) {
+    const label = esc(p.name.charAt(0).toUpperCase() + p.name.slice(1));
+    const entry = _sessionCrew.find(c => c.position_id === p.id);
+    const curVal = entry && entry.user_id ? String(entry.user_id) : '';
+    const bodyWt = entry && entry.body_weight != null ? entry.body_weight : '';
+    const gearWt = entry && entry.gear_weight != null ? entry.gear_weight : '';
+    html += '<div class="crew-row" data-pos-id="' + p.id + '">';
+    html += '<span class="crew-pos">' + label + '</span>';
+    html += '<select class="crew-select' + (curVal ? ' has-value' : '') + '" '
+      + (canEdit ? 'onchange="onSessionCrewChange(this)"' : 'disabled') + '>';
+    html += '<option value="">\u2014</option>';
+    // Build filtered options
+    const taken = new Set();
+    for (const c of _sessionCrew) {
+      if (c.user_id && c.position_id !== p.id) taken.add(String(c.user_id));
+    }
+    for (const u of _sessionCrewUsers) {
+      const uid = String(u.id);
+      if (uid === curVal || !taken.has(uid)) {
+        const n = esc(u.name || u.email);
+        html += '<option value="' + uid + '"' + (uid === curVal ? ' selected' : '') + '>' + n + '</option>';
+      }
+    }
+    if (canEdit) html += '<option value="__new__">+ Add new...</option>';
+    html += '</select>';
+    html += '<input type="number" class="crew-weight" data-field="body" step="0.1" min="0" max="500"'
+      + ' placeholder="Body lbs" title="Body weight (lbs)" value="' + bodyWt + '"'
+      + (canEdit ? ' onchange="onSessionCrewWeightChange()"' : ' disabled') + '/>';
+    html += '<input type="number" class="crew-weight" data-field="gear" step="0.1" min="0" max="100"'
+      + ' placeholder="Gear lbs" title="Gear weight (lbs)" value="' + gearWt + '"'
+      + (canEdit ? ' onchange="onSessionCrewWeightChange()"' : ' disabled') + '/>';
+    html += '</div>';
+  }
+  html += '<div id="session-crew-total" class="crew-total-weight"></div>';
+  body.innerHTML = html;
+  _updateSessionCrewTotal();
+}
+
+function toggleCrewSection() {
+  _collapsed['crew'] = !_collapsed['crew'];
+  const body = document.getElementById('crew-body');
+  const toggle = document.getElementById('crew-toggle');
+  const summary = document.getElementById('crew-summary');
+  if (_collapsed['crew']) {
+    body.style.display = 'none';
+    summary.style.display = '';
+    toggle.innerHTML = '&#9654;';
+  } else {
+    body.style.display = '';
+    summary.style.display = 'none';
+    toggle.innerHTML = '&#9660;';
+    loadCrewEditForm();
+  }
+}
+
+async function onSessionCrewChange(selectEl) {
+  // Handle "Add new..."
+  if (selectEl && selectEl.value === '__new__') {
+    selectEl.value = '';
+    const name = prompt('New crew member name:');
+    if (name && name.trim()) {
+      try {
+        const r = await fetch('/api/crew/placeholder', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({name: name.trim()})
+        });
+        if (r.ok) {
+          const data = await r.json();
+          _sessionCrewUsers.push({id: data.id, name: data.name, email: '', role: 'viewer'});
+          const opt = document.createElement('option');
+          opt.value = String(data.id);
+          selectEl.appendChild(opt);
+          selectEl.value = String(data.id);
+        }
+      } catch (e) { console.error('create placeholder error', e); }
+    }
+  }
+  // Auto-default body weight from user profile when user is selected
+  if (selectEl) {
+    const row = selectEl.closest('.crew-row');
+    const bodyInput = row.querySelector('.crew-weight[data-field="body"]');
+    const uid = selectEl.value ? parseInt(selectEl.value) : null;
+    if (uid) {
+      const user = _sessionCrewUsers.find(u => u.id === uid);
+      if (user && user.weight_lbs != null && !bodyInput.value) {
+        bodyInput.value = user.weight_lbs;
+      }
+    } else {
+      bodyInput.value = '';
+      row.querySelector('.crew-weight[data-field="gear"]').value = '';
+    }
+  }
+  await _saveSessionCrew();
+}
+
+function onSessionCrewWeightChange() {
+  _updateSessionCrewTotal();
+  _saveSessionCrew();
+}
+
+function _updateSessionCrewTotal() {
+  const el = document.getElementById('session-crew-total');
+  if (!el) return;
+  let totalBody = 0, totalGear = 0, count = 0;
+  document.querySelectorAll('#crew-body .crew-row').forEach(row => {
+    const bv = parseFloat(row.querySelector('.crew-weight[data-field="body"]').value);
+    const gv = parseFloat(row.querySelector('.crew-weight[data-field="gear"]').value);
+    if (!isNaN(bv)) { totalBody += bv; count++; }
+    if (!isNaN(gv)) totalGear += gv;
+  });
+  const total = totalBody + totalGear;
+  if (count > 0) {
+    el.innerHTML = '<strong>Total weight: ' + total.toFixed(1) + ' lbs</strong>'
+      + ' <span style="color:#8892a4">=&nbsp;crew ' + totalBody.toFixed(1)
+      + '&nbsp;+&nbsp;gear ' + totalGear.toFixed(1) + '</span>';
+    el.style.display = 'block';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+async function _saveSessionCrew() {
+  // Collect crew with weights
+  const crew = [];
+  document.querySelectorAll('#crew-body .crew-row').forEach(row => {
+    const posId = parseInt(row.dataset.posId);
+    const sel = row.querySelector('.crew-select');
+    const userId = sel.value && sel.value !== '__new__' ? parseInt(sel.value) : null;
+    const bodyVal = row.querySelector('.crew-weight[data-field="body"]').value;
+    const gearVal = row.querySelector('.crew-weight[data-field="gear"]').value;
+    const bodyWeight = bodyVal ? parseFloat(bodyVal) : null;
+    const gearWeight = gearVal ? parseFloat(gearVal) : null;
+    if (userId || bodyWeight != null || gearWeight != null) {
+      crew.push({position_id: posId, user_id: userId, body_weight: bodyWeight, gear_weight: gearWeight});
+    }
+    sel.classList.toggle('has-value', !!sel.value && sel.value !== '__new__');
+  });
+  await fetch('/api/races/' + SESSION_ID + '/crew', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(crew)
+  });
+  // Reload resolved crew and update summary
+  const r = await fetch('/api/races/' + SESSION_ID + '/crew');
+  const data = await r.json();
+  _sessionCrew = data.crew || [];
+  renderCrewCollapsed();
+  // Refresh dropdowns to filter assigned users
+  loadCrewEditForm();
 }
 
 // ---------------------------------------------------------------------------
@@ -1530,15 +1734,37 @@ function _renderBoatSettingsPanel() {
   let anyValue = false;
 
   for (const cat of _bsParams.categories) {
+    // For the crew category, check if we have crew weight data OR parameter values
+    let crewWeightHtml = '';
+    if (cat.category === 'crew' && _sessionCrew && _sessionCrew.length) {
+      let totalBody = 0, totalGear = 0, hasW = false;
+      for (const c of _sessionCrew) {
+        if (c.body_weight != null) { totalBody += c.body_weight; hasW = true; }
+        if (c.gear_weight != null) { totalGear += c.gear_weight; hasW = true; }
+      }
+      if (hasW) {
+        const total = totalBody + totalGear;
+        crewWeightHtml = '<div class="bs-row">'
+          + '<span class="bs-label">Crew weight</span>'
+          + '<span class="bs-value">' + total.toFixed(1) + '</span>'
+          + '<span class="bs-unit">lbs</span>'
+          + '<span style="color:#6b7a90;font-size:.75rem;margin-left:6px">'
+          + '(body ' + totalBody.toFixed(1) + ' + gear ' + totalGear.toFixed(1) + ')</span>'
+          + '</div>';
+      }
+    }
+
     // Check if any param in this category has a value
     const catHasValues = cat.parameters.some(p => byParam[p.name]);
-    if (!catHasValues) continue;
+    if (!catHasValues && !crewWeightHtml) continue;
+    if (crewWeightHtml) anyValue = true;
 
     html += '<div class="setup-cat-header" onclick="toggleSetupCatSession(\'' + cat.category + '\')">';
     html += '<span class="setup-cat-label">' + esc(cat.label) + '</span>';
     html += '<span class="setup-cat-chevron" id="bs-cat-chev-' + cat.category + '">\u25BC</span>';
     html += '</div>';
     html += '<div class="setup-cat-body" id="bs-cat-' + cat.category + '">';
+    html += crewWeightHtml;
 
     for (const p of cat.parameters) {
       const entry = byParam[p.name];

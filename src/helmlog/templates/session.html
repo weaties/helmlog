@@ -52,6 +52,7 @@
   data-session-id="{{ session_id }}"
   data-grafana-port="{{ grafana_port }}"
   data-grafana-uid="{{ grafana_uid }}"
+  data-user-role="{{ user_role }}"
   style="display:none"></div>
 
 <a href="/history" class="back-link">&larr; History</a>
@@ -117,8 +118,9 @@
 </div>
 
 <div class="card" id="crew-card" style="display:none">
-  <div class="section-title" onclick="toggleSection('crew')">Crew <span id="crew-toggle">&#9660;</span></div>
-  <div class="section-body" id="crew-body"></div>
+  <div class="section-title" onclick="toggleCrewSection()">Crew <span id="crew-toggle">&#9654;</span></div>
+  <div id="crew-summary" style="font-size:.82rem;margin-top:6px"></div>
+  <div class="section-body" id="crew-body" style="display:none"></div>
 </div>
 
 <div class="card" id="sails-card" style="display:none">

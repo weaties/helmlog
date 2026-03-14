@@ -768,8 +768,9 @@ nav.site-nav {
 .crew-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-bottom: 8px;
+  flex-wrap: wrap;
 }
 
 .crew-pos {
@@ -788,6 +789,67 @@ nav.site-nav {
   padding: 8px 10px;
   color: #e8eaf0;
   font-size: 0.9rem;
+}
+
+.crew-select {
+  flex: 1;
+  background: #0a1628;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  padding: 10px 10px;
+  color: #e8eaf0;
+  font-size: 0.95rem;
+  min-width: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%238892a4'%3e%3cpath d='M2 4l4 4 4-4'/%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+
+.crew-select:focus {
+  border-color: #2563eb;
+  outline: none;
+}
+
+.crew-select.has-value {
+  border-color: #22c55e;
+}
+
+.crew-weight {
+  width: 68px;
+  flex-shrink: 0;
+  background: #0a1628;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  padding: 8px 6px;
+  color: #e8eaf0;
+  font-size: 0.8rem;
+  text-align: right;
+  -moz-appearance: textfield;
+}
+
+.crew-weight::-webkit-outer-spin-button,
+.crew-weight::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.crew-weight:focus {
+  border-color: #2563eb;
+  outline: none;
+}
+
+.crew-total-weight {
+  font-size: 0.85rem;
+  color: #e0e6ed;
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: #0d1829;
+  border: 1px solid #1e3a5f;
+  border-radius: 6px;
+  display: none;
 }
 
 .sailor-chip {
