@@ -105,7 +105,7 @@ function initNav() {
     if (u.id) {
       const p = document.getElementById('nav-profile');
       if (p) {
-        p.style.display = '';
+        p.style.setProperty('display', 'inline', 'important');
         document.getElementById('nav-avatar').src = '/avatars/' + u.id + '.jpg';
         document.getElementById('nav-profile-name').textContent = u.name || 'Profile';
       }

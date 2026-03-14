@@ -1055,12 +1055,16 @@ def create_app(
                 .replace("'", "&#39;")
             )
 
+        def _fmt_weight(w: float | None) -> str:
+            return f"{w:.1f} lbs" if w else "\u2014"
+
         user_rows = "".join(
             f'<tr data-uid="{u["id"]}">'
             f'<td class="u-email">{_esc(u["email"])}</td>'
             f'<td class="u-name">{_esc(u["name"] or "")}</td>'
             f"<td>{_badge(u['role'])}</td>"
             f"<td>{'&#9989;' if u.get('is_developer') else '\u2014'}</td>"
+            f"<td>{_fmt_weight(u.get('weight_lbs'))}</td>"
             f"<td>{_local_ts(u['last_seen'])}</td>"
             f'<td><button onclick="editUser({u["id"]})" class="ubtn" style="border-color:#22c55e;color:#4ade80">Edit</button>'  # noqa: E501
             f' <button onclick="changeRole({u["id"]})" class="ubtn">Role</button>'
