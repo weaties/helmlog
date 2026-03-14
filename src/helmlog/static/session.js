@@ -45,6 +45,7 @@ async function init() {
     loadTranscript();
     loadAudio();
   }
+  loadDiscussion();
   loadSharing();
   renderExports();
 }
@@ -114,7 +115,20 @@ async function loadTrack() {
     _updateBoatSettingsForUtc(_utcForIndex(idx));
   });
 
+  // Right-click track → start discussion at that point
+  line.on('contextmenu', function(e) {
+    L.DomEvent.preventDefault(e);
+    const idx = _nearestIndex(e.latlng);
+    const utc = _utcForIndex(idx);
+    if (utc) {
+      _moveCursorToIndex(idx);
+      showNewThreadForm(utc.toISOString());
+      document.getElementById('discussion-card').scrollIntoView({behavior: 'smooth', block: 'start'});
+    }
+  });
+
   _map.fitBounds(line.getBounds(), {padding: [20, 20]});
+  document.getElementById('track-hint').textContent = 'Click track to seek \u00b7 Right-click to start a discussion at that point';
 }
 
 function _nearestIndex(latlng) {
@@ -1578,6 +1592,299 @@ function _updateBoatSettingsForUtc(utcDate) {
   // Debounce: skip if same second
   if (_bsLastAsOf && _bsLastAsOf.slice(0, 19) === asOf.slice(0, 19)) return;
   _fetchAndRenderBoatSettings(asOf);
+}
+
+// ---------------------------------------------------------------------------
+// Discussion threads (#282)
+// ---------------------------------------------------------------------------
+
+let _threads = [];
+let _discussionMarkers = [];
+
+function _threadTitle(t) {
+  if (t.title) return esc(t.title);
+  const body = t.first_comment_body || (t.comments && t.comments.length ? t.comments[0].body : null);
+  if (body) return esc(body.length > 60 ? body.slice(0, 60) + '\u2026' : body);
+  return 'Thread #' + t.id;
+}
+
+async function loadDiscussion() {
+  const card = document.getElementById('discussion-card');
+  card.style.display = '';
+  const body = document.getElementById('discussion-body');
+  const r = await fetch('/api/sessions/' + SESSION_ID + '/threads');
+  if (!r.ok) { body.innerHTML = '<span style="color:#8892a4">Failed to load</span>'; return; }
+  _threads = await r.json();
+  const totalUnread = _threads.reduce((s, t) => s + (t.unread_count || 0), 0);
+  const badge = document.getElementById('discussion-badge');
+  badge.textContent = totalUnread > 0 ? '(' + totalUnread + ' unread)' : '';
+  _addDiscussionMarkers();
+  if (!_threads.length) {
+    body.innerHTML = '<span style="color:#8892a4">No discussions yet. Start one with + New Thread above.</span>';
+    return;
+  }
+  body.innerHTML = _threads.map(t => {
+    const anchor = t.mark_reference
+      ? '<span class="thread-anchor">' + esc(t.mark_reference.replace(/_/g, ' ')) + '</span>'
+      : t.anchor_timestamp
+        ? '<span class="thread-anchor">' + fmtTime(t.anchor_timestamp) + '</span>'
+        : '';
+    const unread = t.unread_count > 0
+      ? '<span class="thread-unread">' + t.unread_count + '</span>'
+      : '';
+    const resolved = t.resolved ? ' resolved' : '';
+    const resolvedTag = t.resolved ? '<span style="color:#4ade80;font-size:.7rem;margin-left:6px">&#10003; Resolved</span>' : '';
+    const title = _threadTitle(t);
+    const author = t.author_name || t.author_email || 'Crew Member';
+    const count = t.comment_count === 1 ? '1 comment' : t.comment_count + ' comments';
+    const resolutionHtml = t.resolved && t.resolution_summary
+      ? '<div style="background:#0d2a1a;border:1px solid #22543d;border-radius:4px;padding:4px 8px;margin-top:4px;font-size:.72rem;color:#86efac">'
+        + '<strong>Resolution:</strong> ' + esc(t.resolution_summary) + '</div>'
+      : '';
+    return '<div class="thread-item' + resolved + '" onclick="openThread(' + t.id + ')">'
+      + '<div><strong style="color:#e8eaf0">' + title + '</strong>' + anchor + unread + resolvedTag + '</div>'
+      + '<div style="font-size:.72rem;color:#8892a4;margin-top:2px">' + esc(author) + ' &middot; ' + count + ' &middot; ' + fmtTime(t.created_at) + '</div>'
+      + resolutionHtml
+      + '</div>';
+  }).join('');
+}
+
+function _addDiscussionMarkers() {
+  _discussionMarkers.forEach(m => m.remove());
+  _discussionMarkers = [];
+  if (!_map || !_trackData) return;
+
+  _threads.forEach(t => {
+    if (!t.anchor_timestamp) return;
+    const ts = new Date(t.anchor_timestamp.endsWith('Z') || t.anchor_timestamp.includes('+') ? t.anchor_timestamp : t.anchor_timestamp + 'Z');
+    const idx = _indexForUtc(ts);
+    const latLng = _trackData.latLngs[idx];
+    if (!latLng) return;
+
+    const title = _threadTitle(t);
+    const unread = t.unread_count > 0 ? ' <span class="thread-unread">' + t.unread_count + '</span>' : '';
+    const resolvedHtml = t.resolved
+      ? '<div style="color:#4ade80;font-size:.7rem;margin-top:2px">&#10003; Resolved</div>'
+        + (t.resolution_summary
+          ? '<div style="background:#0d2a1a;border:1px solid #22543d;border-radius:4px;padding:4px 6px;margin-top:3px;font-size:.7rem;color:#86efac">'
+            + esc(t.resolution_summary.length > 120 ? t.resolution_summary.slice(0, 120) + '\u2026' : t.resolution_summary) + '</div>'
+          : '')
+      : '';
+    const author = t.author_name || t.author_email || 'Crew Member';
+    const count = t.comment_count === 1 ? '1 comment' : t.comment_count + ' comments';
+
+    const popup = '<div style="max-width:260px">'
+      + '<div style="font-weight:600;color:#e8eaf0;font-size:.82rem">' + title + unread + '</div>'
+      + '<div style="font-size:.7rem;color:#8892a4">' + esc(author) + ' &middot; ' + count + ' &middot; ' + fmtTime(t.anchor_timestamp) + '</div>'
+      + resolvedHtml
+      + '<div id="discussion-marker-preview-' + t.id + '">'
+      + '<div style="font-size:.7rem;color:#8892a4;margin-top:4px">Loading\u2026</div></div>'
+      + '<div style="margin-top:6px"><a href="#" data-open-thread="' + t.id + '" '
+      + 'style="color:#7eb8f7;font-size:.78rem;text-decoration:none">Open thread &rarr;</a></div>'
+      + '</div>';
+
+    const hasUnread = t.unread_count > 0;
+    const markerColor = t.resolved ? '#4ade80' : hasUnread ? '#60a5fa' : '#a78bfa';
+    const markerStyle = t.resolved
+      ? 'width:14px;height:14px;background:transparent;border:2px solid #4ade80;border-radius:50%'
+      : 'width:14px;height:14px;background:' + markerColor + ';border:2px solid #0a1628;border-radius:50%;box-shadow:0 0 4px ' + markerColor;
+    const icon = L.divIcon({
+      className: 'discussion-marker',
+      html: '<div style="' + markerStyle + '"></div>',
+      iconSize: [14, 14],
+      iconAnchor: [7, 7],
+    });
+    const threadId = t.id;
+    const marker = L.marker(latLng, {icon: icon})
+      .addTo(_map)
+      .bindPopup(popup, {maxWidth: 280, minWidth: 200});
+    marker.on('popupopen', function() {
+      _loadMarkerPreview(threadId);
+      // Wire up the "Open thread" link after Leaflet renders the popup DOM
+      const popupEl = marker.getPopup().getElement();
+      if (popupEl) {
+        const link = popupEl.querySelector('[data-open-thread]');
+        if (link) {
+          link.addEventListener('click', function(ev) {
+            ev.preventDefault();
+            marker.closePopup();
+            openThread(threadId);
+            document.getElementById('discussion-card').scrollIntoView({behavior: 'smooth', block: 'start'});
+          });
+        }
+      }
+    });
+    _discussionMarkers.push(marker);
+  });
+}
+
+async function _loadMarkerPreview(threadId) {
+  const el = document.getElementById('discussion-marker-preview-' + threadId);
+  if (!el) return;
+  const r = await fetch('/api/threads/' + threadId);
+  if (!r.ok) { el.innerHTML = ''; return; }
+  const t = await r.json();
+  const comments = (t.comments || []).slice(-3);
+  if (!comments.length) {
+    el.innerHTML = '<div style="font-size:.72rem;color:#8892a4;margin-top:4px">No comments yet</div>';
+    return;
+  }
+  el.innerHTML = comments.map(c => {
+    const a = c.author_name || c.author_email || 'Crew Member';
+    const body = c.body.length > 100 ? c.body.slice(0, 100) + '\u2026' : c.body;
+    return '<div style="margin-top:4px;font-size:.72rem;border-left:2px solid #1e3050;padding-left:6px">'
+      + '<span style="color:#7dd3fc;font-weight:600">' + esc(a) + '</span> '
+      + '<span style="color:#c4cdd8">' + esc(body) + '</span></div>';
+  }).join('');
+}
+
+function showNewThreadForm(anchorTimestamp) {
+  const body = document.getElementById('discussion-body');
+  const form = document.createElement('div');
+  form.className = 'thread-form';
+  form.style.marginBottom = '10px';
+  const anchorLabel = anchorTimestamp ? fmtTime(anchorTimestamp) : '';
+  const anchorHidden = anchorTimestamp
+    ? '<input type="hidden" id="new-thread-anchor-ts" value="' + esc(anchorTimestamp) + '"/>'
+      + '<div style="font-size:.72rem;color:#f97316;margin-bottom:6px">Anchored to track at ' + anchorLabel + '</div>'
+    : '<input type="hidden" id="new-thread-anchor-ts" value=""/>';
+  form.innerHTML = anchorHidden
+    + '<div style="display:flex;gap:6px;margin-bottom:6px">'
+    + '<input id="new-thread-title" placeholder="Thread title (optional)" style="flex:1"/>'
+    + '<select id="new-thread-mark" style="width:auto"><option value="">No mark anchor</option>'
+    + '<option value="start">Start</option>'
+    + '<option value="weather_mark_1">Weather Mark 1</option><option value="weather_mark_2">Weather Mark 2</option>'
+    + '<option value="leeward_mark_1">Leeward Mark 1</option><option value="leeward_mark_2">Leeward Mark 2</option>'
+    + '<option value="gate_1">Gate 1</option><option value="gate_2">Gate 2</option>'
+    + '<option value="offset_mark_1">Offset Mark 1</option>'
+    + '<option value="finish">Finish</option>'
+    + '</select></div>'
+    + '<textarea id="new-thread-body" placeholder="First comment\u2026"></textarea>'
+    + '<div style="margin-top:6px;display:flex;gap:6px">'
+    + '<button class="btn-thread" onclick="submitNewThread()">Create Thread</button>'
+    + '<button class="btn-thread" style="background:none;color:#8892a4" onclick="loadDiscussion()">Cancel</button>'
+    + '</div>';
+  body.prepend(form);
+}
+
+async function submitNewThread() {
+  const title = document.getElementById('new-thread-title').value.trim();
+  const mark = document.getElementById('new-thread-mark').value || null;
+  const anchorTs = document.getElementById('new-thread-anchor-ts').value || null;
+  const firstComment = document.getElementById('new-thread-body').value.trim();
+  const payload = {};
+  if (title) payload.title = title;
+  if (mark) payload.mark_reference = mark;
+  if (anchorTs) payload.anchor_timestamp = anchorTs;
+  const r = await fetch('/api/sessions/' + SESSION_ID + '/threads', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+  });
+  if (!r.ok) { alert('Failed to create thread'); return; }
+  const {id} = await r.json();
+  if (firstComment) {
+    await fetch('/api/threads/' + id + '/comments', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({body: firstComment})
+    });
+  }
+  openThread(id);
+}
+
+async function openThread(threadId) {
+  const body = document.getElementById('discussion-body');
+  body.innerHTML = '<span style="color:#8892a4">Loading\u2026</span>';
+  // Mark as read
+  fetch('/api/threads/' + threadId + '/read', {method: 'POST'});
+  const r = await fetch('/api/threads/' + threadId);
+  if (!r.ok) { loadDiscussion(); return; }
+  const t = await r.json();
+  const title = _threadTitle(t);
+  const anchor = t.mark_reference
+    ? '<span class="thread-anchor">' + esc(t.mark_reference.replace(/_/g, ' ')) + '</span>'
+    : t.anchor_timestamp
+      ? '<span class="thread-anchor">' + fmtTime(t.anchor_timestamp) + '</span>'
+      : '';
+  let resolveBtn = '';
+  if (t.resolved) {
+    resolveBtn = '<button class="btn-unresolve" onclick="unresolveThread(' + t.id + ')">Unresolve</button>';
+  } else {
+    resolveBtn = '<button class="btn-resolve" onclick="resolveThread(' + t.id + ')">Resolve</button>';
+  }
+  const resolutionHtml = t.resolved && t.resolution_summary
+    ? '<div style="background:#0d2a1a;border:1px solid #4ade80;border-radius:4px;padding:6px 8px;margin-top:6px;font-size:.78rem;color:#86efac">'
+      + '<strong>Resolution:</strong> ' + esc(t.resolution_summary) + '</div>'
+    : '';
+  const commentsHtml = (t.comments || []).map(c => {
+    const author = c.author_name || c.author_email || 'Crew Member';
+    const edited = c.edited_at ? ' <span class="comment-edited">(edited)</span>' : '';
+    return '<div class="comment-item">'
+      + '<span class="comment-author">' + esc(author) + '</span>'
+      + '<span class="comment-time">' + fmtTime(c.created_at) + '</span>' + edited
+      + '<div class="comment-body">' + esc(c.body) + '</div>'
+      + '</div>';
+  }).join('');
+  body.innerHTML = '<div style="margin-bottom:8px">'
+    + '<button style="background:none;border:none;color:#7eb8f7;cursor:pointer;font-size:.78rem;padding:0" onclick="loadDiscussion()">&larr; All threads</button>'
+    + '</div>'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px">'
+    + '<div style="flex:1;min-width:0"><strong style="color:#e8eaf0;font-size:.9rem">' + title + '</strong>' + anchor + '</div>'
+    + '<div style="flex-shrink:0">' + resolveBtn + '</div>'
+    + '</div>'
+    + resolutionHtml
+    + '<div id="thread-comments">' + (commentsHtml || '<span style="color:#8892a4">No comments yet</span>') + '</div>'
+    + '<div class="thread-form" style="margin-top:8px">'
+    + '<textarea id="reply-body" placeholder="Reply\u2026"></textarea>'
+    + '<div style="margin-top:4px"><button class="btn-thread" onclick="submitReply(' + t.id + ')">Reply</button></div>'
+    + '</div>';
+  document.getElementById('discussion-card').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+async function submitReply(threadId) {
+  const el = document.getElementById('reply-body');
+  const text = el.value.trim();
+  if (!text) return;
+  const r = await fetch('/api/threads/' + threadId + '/comments', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({body: text})
+  });
+  if (!r.ok) { alert('Failed to post reply'); return; }
+  openThread(threadId);
+}
+
+function resolveThread(threadId) {
+  const container = document.getElementById('thread-comments');
+  if (!container) return;
+  // Show inline form instead of prompt() — mobile browsers handle prompt() inconsistently
+  const existing = document.getElementById('resolve-form');
+  if (existing) { existing.remove(); return; }
+  const form = document.createElement('div');
+  form.id = 'resolve-form';
+  form.className = 'thread-form';
+  form.style.marginTop = '8px';
+  form.innerHTML = '<textarea id="resolve-summary" placeholder="Resolution summary (optional)"></textarea>'
+    + '<div style="margin-top:4px;display:flex;gap:6px">'
+    + '<button class="btn-resolve" onclick="_submitResolve(' + threadId + ')">Confirm Resolve</button>'
+    + '<button class="btn-thread" style="background:none;color:#8892a4" onclick="document.getElementById(\'resolve-form\').remove()">Cancel</button>'
+    + '</div>';
+  container.after(form);
+  document.getElementById('resolve-summary').focus();
+}
+
+async function _submitResolve(threadId) {
+  const el = document.getElementById('resolve-summary');
+  const summary = el ? el.value.trim() || null : null;
+  await fetch('/api/threads/' + threadId + '/resolve', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({resolution_summary: summary})
+  });
+  openThread(threadId);
+}
+
+async function unresolveThread(threadId) {
+  await fetch('/api/threads/' + threadId + '/unresolve', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
+  });
+  openThread(threadId);
 }
 
 // ---------------------------------------------------------------------------

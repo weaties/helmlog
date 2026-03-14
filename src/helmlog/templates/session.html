@@ -26,6 +26,24 @@
 .badge-rounding{color:#4ade80}
 .wf-mark-label{background:#0a1628!important;border:1px solid #f97316!important;color:#e8eaf0!important;font-size:.7rem!important;padding:1px 4px!important;border-radius:3px!important;box-shadow:none!important}
 .wf-mark-label::before{border-right-color:#f97316!important}
+.thread-item{padding:8px;border:1px solid #1e3050;border-radius:6px;margin-bottom:6px;cursor:pointer;transition:border-color .15s}
+.thread-item:hover{border-color:#2563eb}
+.thread-item.resolved{opacity:.7}
+.thread-anchor{font-size:.7rem;color:#f97316;margin-left:6px}
+.thread-unread{background:#2563eb;color:#fff;font-size:.65rem;padding:1px 5px;border-radius:8px;margin-left:6px}
+.comment-item{padding:6px 0;border-bottom:1px solid #0d1a2e;font-size:.8rem}
+.comment-author{color:#7dd3fc;font-weight:600;font-size:.75rem}
+.comment-time{color:#8892a4;font-size:.7rem;margin-left:4px}
+.comment-edited{color:#8892a4;font-size:.65rem;font-style:italic}
+.comment-body{color:#c4cdd8;margin-top:2px;white-space:pre-wrap}
+.thread-form input,.thread-form select,.thread-form textarea{background:#0d1929;border:1px solid #1e3050;border-radius:4px;color:#e8eaf0;padding:4px 8px;font-size:.8rem;width:100%;box-sizing:border-box}
+.thread-form textarea{resize:vertical;min-height:60px}
+.btn-thread{background:#1e3a5f;color:#7eb8f7;border:none;border-radius:4px;padding:4px 12px;font-size:.78rem;cursor:pointer}
+.btn-thread:hover{background:#2563eb;color:#fff}
+.btn-resolve{background:none;border:1px solid #4ade80;color:#4ade80;border-radius:4px;padding:6px 12px;font-size:.78rem;cursor:pointer;white-space:nowrap;min-height:32px}
+.btn-resolve:hover{background:#4ade80;color:#0a1628}
+.btn-unresolve{background:none;border:1px solid #8892a4;color:#8892a4;border-radius:4px;padding:6px 12px;font-size:.78rem;cursor:pointer;white-space:nowrap;min-height:32px}
+.discussion-marker{background:none!important;border:none!important}
 </style>
 {% endblock %}
 
@@ -116,6 +134,14 @@
 <div class="card" id="notes-card" style="display:none">
   <div class="section-title" onclick="toggleSection('notes')">Notes <span id="notes-toggle">&#9660;</span></div>
   <div class="section-body" id="notes-body"></div>
+</div>
+
+<div class="card" id="discussion-card" style="display:none">
+  <div style="display:flex;align-items:center;justify-content:space-between">
+    <div class="section-title" style="margin-bottom:0" onclick="toggleSection('discussion')">Discussion <span id="discussion-badge" style="font-size:.7rem;color:#60a5fa"></span> <span id="discussion-toggle">&#9660;</span></div>
+    <button onclick="showNewThreadForm()" style="background:none;border:none;color:#7eb8f7;cursor:pointer;font-size:.82rem;padding:2px 0">+ New Thread</button>
+  </div>
+  <div class="section-body" id="discussion-body" style="margin-top:6px"></div>
 </div>
 
 <div class="card" id="transcript-card" style="display:none">

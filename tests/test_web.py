@@ -2722,3 +2722,377 @@ async def test_home_page_has_setup_panel(storage: Storage) -> None:
     assert resp.status_code == 200
     assert 'id="setup-card"' in resp.text
     assert "Boat Setup" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Threaded comments (#282)
+# ---------------------------------------------------------------------------
+
+
+async def _make_race_for_comments(client: httpx.AsyncClient) -> int:
+    """Set an event and start a race, return race_id."""
+    await client.post("/api/event", json={"event_name": "CommentTest"})
+    resp = await client.post("/api/races/start")
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_create_thread_and_list(storage: Storage) -> None:
+    """POST creates a thread; GET lists it with unread count."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id = await _make_race_for_comments(client)
+        resp = await client.post(
+            f"/api/sessions/{race_id}/threads",
+            json={"title": "Bad tack at weather mark", "mark_reference": "weather_mark_1"},
+        )
+        assert resp.status_code == 201
+        thread_id = resp.json()["id"]
+
+        resp = await client.get(f"/api/sessions/{race_id}/threads")
+        assert resp.status_code == 200
+        threads = resp.json()
+        assert len(threads) == 1
+        assert threads[0]["id"] == thread_id
+        assert threads[0]["title"] == "Bad tack at weather mark"
+        assert threads[0]["mark_reference"] == "weather_mark_1"
+        assert threads[0]["comment_count"] == 0
+        assert threads[0]["unread_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_create_thread_invalid_mark_reference(storage: Storage) -> None:
+    """POST with unknown mark reference returns 400."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id = await _make_race_for_comments(client)
+        resp = await client.post(
+            f"/api/sessions/{race_id}/threads",
+            json={"mark_reference": "bogus_mark"},
+        )
+        assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_thread_general_discussion(storage: Storage) -> None:
+    """A thread with no anchor covers the whole race."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id = await _make_race_for_comments(client)
+        resp = await client.post(
+            f"/api/sessions/{race_id}/threads",
+            json={"title": "General discussion"},
+        )
+        assert resp.status_code == 201
+        thread_id = resp.json()["id"]
+
+        resp = await client.get(f"/api/threads/{thread_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["anchor_timestamp"] is None
+        assert data["mark_reference"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_thread_not_found(storage: Storage) -> None:
+    """GET /api/threads/999 returns 404."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/threads/999")
+        assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_and_list_comments(storage: Storage) -> None:
+    """POST adds comments; GET thread includes them."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id = await _make_race_for_comments(client)
+        resp = await client.post(
+            f"/api/sessions/{race_id}/threads",
+            json={"title": "Lane choice"},
+        )
+        thread_id = resp.json()["id"]
+
+        resp = await client.post(
+            f"/api/threads/{thread_id}/comments",
+            json={"body": "We should have gone left"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["id"]
+
+        resp = await client.post(
+            f"/api/threads/{thread_id}/comments",
+            json={"body": "Agreed, the pressure was better"},
+        )
+        assert resp.status_code == 201
+
+        resp = await client.get(f"/api/threads/{thread_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["comments"]) == 2
+        assert data["comments"][0]["body"] == "We should have gone left"
+
+
+@pytest.mark.asyncio
+async def test_create_comment_empty_body(storage: Storage) -> None:
+    """POST with blank body returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id = await _make_race_for_comments(client)
+        resp = await client.post(
+            f"/api/sessions/{race_id}/threads",
+            json={"title": "test"},
+        )
+        thread_id = resp.json()["id"]
+        resp = await client.post(
+            f"/api/threads/{thread_id}/comments",
+            json={"body": "  "},
+        )
+        assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_comment(storage: Storage) -> None:
+    """PUT edits a comment body and sets edited_at."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id = await _make_race_for_comments(client)
+        resp = await client.post(
+            f"/api/sessions/{race_id}/threads",
+            json={"title": "test"},
+        )
+        thread_id = resp.json()["id"]
+        resp = await client.post(
+            f"/api/threads/{thread_id}/comments",
+            json={"body": "original"},
+        )
+        comment_id = resp.json()["id"]
+
+        resp = await client.put(
+            f"/api/comments/{comment_id}",
+            json={"body": "edited"},
+        )
+        assert resp.status_code == 200
+
+        resp = await client.get(f"/api/threads/{thread_id}")
+        comments = resp.json()["comments"]
+        assert comments[0]["body"] == "edited"
+        assert comments[0]["edited_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_comment(storage: Storage) -> None:
+    """DELETE removes a comment."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id = await _make_race_for_comments(client)
+        resp = await client.post(
+            f"/api/sessions/{race_id}/threads",
+            json={"title": "test"},
+        )
+        thread_id = resp.json()["id"]
+        resp = await client.post(
+            f"/api/threads/{thread_id}/comments",
+            json={"body": "delete me"},
+        )
+        comment_id = resp.json()["id"]
+
+        resp = await client.delete(f"/api/comments/{comment_id}")
+        assert resp.status_code == 204
+
+        resp = await client.get(f"/api/threads/{thread_id}")
+        assert len(resp.json()["comments"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_resolve_and_unresolve_thread(storage: Storage) -> None:
+    """Resolve and unresolve a thread."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id = await _make_race_for_comments(client)
+        resp = await client.post(
+            f"/api/sessions/{race_id}/threads",
+            json={"title": "resolve me"},
+        )
+        thread_id = resp.json()["id"]
+
+        resp = await client.post(
+            f"/api/threads/{thread_id}/resolve",
+            json={"resolution_summary": "We agreed to go left next time"},
+        )
+        assert resp.status_code == 200
+
+        resp = await client.get(f"/api/threads/{thread_id}")
+        data = resp.json()
+        assert data["resolved"] == 1
+        assert data["resolution_summary"] == "We agreed to go left next time"
+        assert data["resolved_at"] is not None
+
+        resp = await client.post(
+            f"/api/threads/{thread_id}/unresolve",
+            json={},
+        )
+        assert resp.status_code == 200
+
+        resp = await client.get(f"/api/threads/{thread_id}")
+        data = resp.json()
+        assert data["resolved"] == 0
+        assert data["resolution_summary"] is None
+
+
+@pytest.mark.asyncio
+async def test_mark_thread_read(storage: Storage) -> None:
+    """POST /api/threads/{id}/read succeeds."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id = await _make_race_for_comments(client)
+        resp = await client.post(
+            f"/api/sessions/{race_id}/threads",
+            json={"title": "read test"},
+        )
+        thread_id = resp.json()["id"]
+
+        resp = await client.post(f"/api/threads/{thread_id}/read")
+        assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_unread_count_with_real_user(storage: Storage) -> None:
+    """Unread tracking works when there is a real user_id (not mock admin)."""
+    # Directly test the storage layer with a real user_id
+    db = storage._conn()
+    await db.execute(
+        "INSERT INTO users (id, email, name, role, is_developer, is_active, created_at)"
+        " VALUES (1, 'helm@boat.test', 'Helm', 'crew', 0, 1, '2026-01-01T00:00:00Z')",
+    )
+    await db.commit()
+
+    # Create a race
+    await db.execute(
+        "INSERT INTO races (id, name, event, race_num, date, start_utc, session_type)"
+        " VALUES (1, 'Test-1', 'Test', 1, '2026-03-12', '2026-03-12T14:00:00Z', 'race')",
+    )
+    await db.commit()
+
+    thread_id = await storage.create_comment_thread(1, 1, title="test")
+    await storage.create_comment(thread_id, 1, "first message")
+
+    # Before marking read — should have 1 unread
+    threads = await storage.list_comment_threads(1, 1)
+    assert threads[0]["unread_count"] == 1
+
+    # Mark as read
+    await storage.mark_thread_read(thread_id, 1)
+
+    # Should have 0 unread now
+    threads = await storage.list_comment_threads(1, 1)
+    assert threads[0]["unread_count"] == 0
+
+    # Add another comment — should be unread again
+    await storage.create_comment(thread_id, 1, "second message")
+    threads = await storage.list_comment_threads(1, 1)
+    assert threads[0]["unread_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_thread_cascades(storage: Storage) -> None:
+    """DELETE thread removes thread and all comments."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id = await _make_race_for_comments(client)
+        resp = await client.post(
+            f"/api/sessions/{race_id}/threads",
+            json={"title": "delete me"},
+        )
+        thread_id = resp.json()["id"]
+        await client.post(
+            f"/api/threads/{thread_id}/comments",
+            json={"body": "child"},
+        )
+
+        resp = await client.delete(f"/api/threads/{thread_id}")
+        assert resp.status_code == 204
+
+        resp = await client.get(f"/api/threads/{thread_id}")
+        assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_redact_comment_author(storage: Storage) -> None:
+    """Redacting replaces author with NULL (storage-layer test with real user)."""
+    db = storage._conn()
+    await db.execute(
+        "INSERT INTO users (id, email, name, role, is_developer, is_active, created_at)"
+        " VALUES (1, 'crew@boat.test', 'Crew', 'crew', 0, 1, '2026-01-01T00:00:00Z')",
+    )
+    await db.execute(
+        "INSERT INTO races (id, name, event, race_num, date, start_utc, session_type)"
+        " VALUES (1, 'Test-1', 'Test', 1, '2026-03-12', '2026-03-12T14:00:00Z', 'race')",
+    )
+    await db.commit()
+
+    thread_id = await storage.create_comment_thread(1, 1, title="redact test")
+    await storage.create_comment(thread_id, 1, "my comment")
+
+    count = await storage.redact_comment_author(1)
+    assert count == 1
+
+    thread = await storage.get_comment_thread(thread_id)
+    assert thread is not None
+    assert thread["comments"][0]["author"] is None
+
+
+@pytest.mark.asyncio
+async def test_redact_comment_author_api(storage: Storage) -> None:
+    """POST /api/comments/redact-author returns 200."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/comments/redact-author", json={})
+        assert resp.status_code == 200
+        assert "redacted" in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_thread_with_anchor_timestamp(storage: Storage) -> None:
+    """Thread can be anchored to a specific timestamp."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id = await _make_race_for_comments(client)
+        ts = "2026-03-12T14:05:30Z"
+        resp = await client.post(
+            f"/api/sessions/{race_id}/threads",
+            json={"title": "At this moment", "anchor_timestamp": ts},
+        )
+        assert resp.status_code == 201
+        thread_id = resp.json()["id"]
+
+        resp = await client.get(f"/api/threads/{thread_id}")
+        assert resp.json()["anchor_timestamp"] == ts
