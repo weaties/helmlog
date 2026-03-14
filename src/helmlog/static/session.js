@@ -1826,9 +1826,9 @@ async function openThread(threadId) {
   body.innerHTML = '<div style="margin-bottom:8px">'
     + '<button style="background:none;border:none;color:#7eb8f7;cursor:pointer;font-size:.78rem;padding:0" onclick="loadDiscussion()">&larr; All threads</button>'
     + '</div>'
-    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'
-    + '<div><strong style="color:#e8eaf0;font-size:.9rem">' + title + '</strong>' + anchor + '</div>'
-    + resolveBtn
+    + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px">'
+    + '<div style="flex:1;min-width:0"><strong style="color:#e8eaf0;font-size:.9rem">' + title + '</strong>' + anchor + '</div>'
+    + '<div style="flex-shrink:0">' + resolveBtn + '</div>'
     + '</div>'
     + resolutionHtml
     + '<div id="thread-comments">' + (commentsHtml || '<span style="color:#8892a4">No comments yet</span>') + '</div>'
