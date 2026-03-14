@@ -69,6 +69,11 @@ input,select{background:#0a1628;border:1px solid #2563eb;border-radius:6px;paddi
 </form>
 <div id="add-result" style="margin-top:8px;font-size:.85rem"></div>
 </div>
+<div class="card">
+<h2>Performance</h2>
+<p style="font-size:.82rem;color:#8892a4;margin-bottom:12px">Aggregated VMG by sail and wind band across all sessions.</p>
+<div id="perf-container"><span style="color:#6b7280;font-size:.85rem">Loading…</span></div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -216,5 +221,48 @@ document.getElementById('add-sail-form').addEventListener('submit', async e => {
 });
 
 loadSails();
+
+async function loadPerformance() {
+  const resp = await fetch('/api/sails/performance');
+  if (!resp.ok) { document.getElementById('perf-container').innerHTML = '<span style="color:#f87171">Failed to load</span>'; return; }
+  const data = await resp.json();
+  const sails = data.sails || [];
+  if (!sails.length) {
+    document.getElementById('perf-container').innerHTML = '<span style="color:#6b7280">No performance data yet</span>';
+    return;
+  }
+
+  // Collect all wind bands across all sails
+  const allBands = new Set();
+  for (const s of sails) {
+    for (const b of Object.keys(s.wind_bands || {})) allBands.add(b);
+  }
+  const bands = [...allBands].sort((a,b) => parseInt(a) - parseInt(b));
+
+  let html = '<table><thead><tr><th>Sail</th><th>Type</th>';
+  for (const b of bands) {
+    html += '<th colspan="2">' + esc(b) + ' kts</th>';
+  }
+  html += '</tr><tr><th></th><th></th>';
+  for (const b of bands) {
+    html += '<th style="font-size:.72rem;color:#6b7280">Up VMG</th><th style="font-size:.72rem;color:#6b7280">Down VMG</th>';
+  }
+  html += '</tr></thead><tbody>';
+
+  for (const s of sails) {
+    html += '<tr><td>' + esc(s.sail_name) + '</td><td>' + esc(s.sail_type) + '</td>';
+    for (const b of bands) {
+      const wb = (s.wind_bands || {})[b] || {};
+      const up = wb.upwind_vmg || {mean:0, n:0};
+      const dn = wb.downwind_vmg || {mean:0, n:0};
+      html += '<td class="stat' + (up.n ? '' : ' stat-zero') + '">' + (up.n ? up.mean.toFixed(2) : '\u2014') + '</td>';
+      html += '<td class="stat' + (dn.n ? '' : ' stat-zero') + '">' + (dn.n ? dn.mean.toFixed(2) : '\u2014') + '</td>';
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('perf-container').innerHTML = html;
+}
+loadPerformance();
 </script>
 {% endblock %}

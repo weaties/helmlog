@@ -17,6 +17,7 @@
     <a href="/"{% if active_page == "/" %} class="active"{% endif %}>Home</a>
     <a href="/history"{% if active_page == "/history" %} class="active"{% endif %}>History</a>
     <a href="/sails"{% if active_page == "/sails" %} class="active"{% endif %}>Sails</a>
+    <a href="/attention"{% if active_page == "/attention" %} class="active"{% endif %} id="nav-attention">Attention<span id="notif-badge" style="display:none;background:#ef4444;color:#fff;font-size:.65rem;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:700"></span></a>
     <a href="/admin/boats"{% if active_page == "/admin/boats" %} class="active"{% endif %}>Boats</a>
     <a href="/admin/users" class="admin-link{% if active_page == "/admin/users" %} active{% endif %}">Users</a>
     <a href="/admin/audit" class="admin-link{% if active_page == "/admin/audit" %} active{% endif %}">Audit</a>
@@ -33,7 +34,7 @@
 </div>
 {% endblock %}
 <script src="/static/shared.js"></script>
-<script>initNav();</script>
+<script>initNav();(async()=>{try{const r=await fetch('/api/notifications/count');if(r.ok){const d=await r.json();const b=document.getElementById('notif-badge');if(d.unread>0){b.textContent=d.unread;b.style.display='inline';}}}catch(e){}})();</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>
