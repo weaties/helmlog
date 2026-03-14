@@ -695,8 +695,9 @@ function _updateSessionCrewTotal() {
   });
   const total = totalBody + totalGear;
   if (count > 0) {
-    el.textContent = 'Total crew weight: ' + total.toFixed(1) + ' lbs'
-      + ' (body ' + totalBody.toFixed(1) + ' + gear ' + totalGear.toFixed(1) + ')';
+    el.innerHTML = '<strong>Total weight: ' + total.toFixed(1) + ' lbs</strong>'
+      + ' <span style="color:#8892a4">=&nbsp;crew ' + totalBody.toFixed(1)
+      + '&nbsp;+&nbsp;gear ' + totalGear.toFixed(1) + '</span>';
     el.style.display = '';
   } else {
     el.style.display = 'none';
