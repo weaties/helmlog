@@ -654,7 +654,8 @@ Coaches need special consideration:
 
 - **Date captured:** 2026-03-14
 - **Origin:** "Future of Software Engineering" retreat article — spec-driven development section; EARS, state machines, decision tables rediscovered as precision tools for AI agents
-- **Status:** `raw`
+- **Status:** `promoted`
+- **Promoted to:** `/spec` skill in `.claude/skills/spec/SKILL.md`, "Structured Specs" section in `CLAUDE.md`
 - **Related:** CLAUDE.md (coding conventions), `/tdd` skill, GitHub issues
 
 **Description:**
@@ -765,7 +766,8 @@ bloating CLAUDE.md, and makes it referenceable from issues, specs, and discussio
 
 - **Date captured:** 2026-03-14
 - **Origin:** "Future of Software Engineering" retreat article — risk mapping as the new core engineering discipline; verification proportional to blast radius
-- **Status:** `raw`
+- **Status:** `promoted`
+- **Promoted to:** "Risk Tiers" section in `CLAUDE.md`, tier-aware `/pr-checklist` skill
 - **Related:** CLAUDE.md (testing strategy), `/tdd` skill, `/pr-checklist` skill, `/data-license` skill
 
 **Description:**
