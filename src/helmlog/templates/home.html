@@ -123,14 +123,17 @@
   </div>
 </div>
 
-<div class="card hidden" id="crew-card">
+<div class="card" id="crew-card">
   <div class="crew-header" onclick="toggleCrew()">
     <span class="label" style="margin-bottom:0">Crew</span>
-    <span id="crew-chevron" style="color:#8892a4;font-size:.85rem">&#9654;</span>
+    <span style="display:flex;align-items:center;gap:8px">
+      <span id="crew-summary" style="font-size:.78rem;color:#8892a4"></span>
+      <span id="crew-chevron" style="color:#8892a4;font-size:.85rem">&#9654;</span>
+    </span>
   </div>
   <div id="crew-body" style="display:none;margin-top:10px">
     <div id="crew-rows"></div>
-    <button class="btn btn-secondary" style="margin-top:6px;font-size:.9rem;padding:12px" onclick="saveCrew()">Save Crew</button>
+    <div id="crew-status" style="font-size:.78rem;color:#8892a4;margin-top:6px;display:none"></div>
   </div>
 </div>
 

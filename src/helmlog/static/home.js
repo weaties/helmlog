@@ -41,7 +41,6 @@ function render(s) {
   const btnStartPractice = document.getElementById('btn-start-practice');
 
   const instCard = document.getElementById('instruments-card');
-  const crewCard = document.getElementById('crew-card');
   const btnDebriefLast = document.getElementById('btn-debrief-last');
   const todaySummary = document.getElementById('today-summary');
   const controlsDiv = document.getElementById('controls');
@@ -51,9 +50,8 @@ function render(s) {
   const isRacing = !!cur;
   const isDebrief = !!s.current_debrief;
 
-  // --- Instruments & crew: visible only during a race ---
+  // --- Instruments: visible only during a race ---
   instCard.classList.toggle('hidden', !isRacing);
-  crewCard.classList.toggle('hidden', !isRacing);
   // --- Controls: hidden during debrief ---
   controlsDiv.classList.toggle('hidden', isDebrief);
 
@@ -72,8 +70,8 @@ function render(s) {
     curRaceStartMs = new Date(cur.start_utc).getTime();
     btnEnd.textContent = '■ END ' + cur.name;
     if(cur.id !== _crewLoadedForRaceId) {
-      setCrewInputs(cur.crew || []);
       _crewLoadedForRaceId = cur.id;
+      if (_crewMetaLoaded) loadCrewCurrentValues();
     }
     document.getElementById('btn-note').style.display = '';
   } else {
@@ -82,6 +80,7 @@ function render(s) {
     btnStartRace.classList.remove('hidden');
     btnStartPractice.classList.remove('hidden');
     curRaceStartMs = null;
+    if (_crewLoadedForRaceId !== null && _crewMetaLoaded) loadCrewCurrentValues();
     _crewLoadedForRaceId = null;
     clearInterval(tickInterval);
     document.getElementById('btn-note').style.display = 'none';
@@ -173,11 +172,12 @@ async function loadInstruments() {
   } catch(e) { console.error('instruments error', e); }
 }
 
-let pendingCrew = null;
 let crewExpanded = false;
+let _crewMetaLoaded = false;
 let _crewLoadedForRaceId = null;
 let _crewPositions = [];   // [{id, name, display_order}]
 let _crewUsers = [];       // [{id, name, email, role}]
+let _crewSaveTimer = null;
 
 let instExpanded = false;
 
@@ -190,7 +190,8 @@ function toggleInstruments() {
 function toggleCrew() {
   crewExpanded = !crewExpanded;
   document.getElementById('crew-body').style.display = crewExpanded ? '' : 'none';
-  document.getElementById('crew-chevron').textContent = crewExpanded ? '▼' : '▶';
+  document.getElementById('crew-chevron').textContent = crewExpanded ? '\u25BC' : '\u25B6';
+  if (crewExpanded && !_crewMetaLoaded) loadCrewMeta();
 }
 
 async function loadCrewMeta() {
@@ -201,24 +202,65 @@ async function loadCrewMeta() {
     ]);
     _crewPositions = (await posResp.json()).positions || [];
     _crewUsers = (await userResp.json()).users || [];
+    _crewMetaLoaded = true;
     renderCrewRows();
+    await loadCrewCurrentValues();
   } catch(e) { console.error('crew meta error', e); }
 }
 
 function renderCrewRows() {
   const container = document.getElementById('crew-rows');
-  if(!container) return;
-  container.innerHTML = _crewPositions.map(p => {
+  if (!container) return;
+  const role = typeof _userRole !== 'undefined' ? _userRole : 'viewer';
+  const canEdit = role === 'admin' || role === 'crew';
+  let html = '';
+  for (const p of _crewPositions) {
     const label = p.name.charAt(0).toUpperCase() + p.name.slice(1);
-    const options = _crewUsers.map(u => {
-      const n = (u.name || u.email).replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-      return '<option value="' + u.id + '">' + n + '</option>';
-    }).join('');
-    return '<div class="crew-row" data-pos-id="' + p.id + '">'
-      + '<span class="crew-pos">' + label + '</span>'
-      + '<select class="crew-select"><option value="">—</option>' + options + '</select>'
-      + '</div>';
-  }).join('');
+    html += '<div class="crew-row" data-pos-id="' + p.id + '">';
+    html += '<span class="crew-pos">' + escHtml(label) + '</span>';
+    html += '<select class="crew-select" '
+      + (canEdit ? 'onchange="onCrewChange()"' : 'disabled') + '>';
+    html += '<option value="">\u2014</option>';
+    for (const u of _crewUsers) {
+      const n = escAttr(u.name || u.email);
+      html += '<option value="' + u.id + '">' + n + '</option>';
+    }
+    html += '</select>';
+    html += '</div>';
+  }
+  container.innerHTML = html;
+}
+
+async function loadCrewCurrentValues() {
+  try {
+    // Load race-level crew if a race is active, otherwise boat-level defaults
+    let url = '/api/crew/defaults';
+    if (state && state.current_race) {
+      url = '/api/races/' + state.current_race.id + '/crew';
+    }
+    const r = await fetch(url);
+    const data = await r.json();
+    const crew = data.crew || [];
+    setCrewInputs(crew);
+    updateCrewSummary(crew);
+  } catch (e) { console.error('crew current error', e); }
+}
+
+function setCrewInputs(crew) {
+  const rows = document.querySelectorAll('#crew-rows .crew-row');
+  rows.forEach(row => {
+    const posId = parseInt(row.dataset.posId);
+    const sel = row.querySelector('.crew-select');
+    sel.value = '';
+    sel.classList.remove('has-value');
+    if (crew) {
+      const entry = crew.find(c => c.position_id === posId);
+      if (entry && entry.user_id) {
+        sel.value = String(entry.user_id);
+        sel.classList.add('has-value');
+      }
+    }
+  });
 }
 
 function getCrewFromInputs() {
@@ -228,34 +270,51 @@ function getCrewFromInputs() {
     const posId = parseInt(row.dataset.posId);
     const sel = row.querySelector('.crew-select');
     const userId = sel.value ? parseInt(sel.value) : null;
-    if(userId) crew.push({position_id: posId, user_id: userId});
+    if (userId) crew.push({position_id: posId, user_id: userId});
   });
   return crew;
 }
 
-function setCrewInputs(crew) {
-  const rows = document.querySelectorAll('#crew-rows .crew-row');
-  rows.forEach(row => {
-    const posId = parseInt(row.dataset.posId);
-    const sel = row.querySelector('.crew-select');
-    sel.value = '';
-    if(crew) {
-      const entry = crew.find(c => c.position_id === posId);
-      if(entry && entry.user_id) sel.value = String(entry.user_id);
-    }
+function updateCrewSummary(crew) {
+  const filled = crew ? crew.filter(c => c.user_id || c.user_name).length : 0;
+  const el = document.getElementById('crew-summary');
+  if (el) el.textContent = filled > 0 ? filled + ' assigned' : '';
+}
+
+function onCrewChange() {
+  // Debounced auto-save (like boat setup)
+  if (_crewSaveTimer) clearTimeout(_crewSaveTimer);
+  const statusEl = document.getElementById('crew-status');
+  if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Saving...'; }
+  _crewSaveTimer = setTimeout(() => saveCrew(), 600);
+  // Update select border color
+  document.querySelectorAll('#crew-rows .crew-select').forEach(sel => {
+    sel.classList.toggle('has-value', !!sel.value);
   });
 }
 
 async function saveCrew() {
   const crew = getCrewFromInputs();
-  if(state && state.current_race) {
-    await fetch('/api/races/' + state.current_race.id + '/crew', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
+  const statusEl = document.getElementById('crew-status');
+  try {
+    let url, method;
+    if (state && state.current_race) {
+      url = '/api/races/' + state.current_race.id + '/crew';
+      method = 'POST';
+    } else {
+      url = '/api/crew/defaults';
+      method = 'POST';
+    }
+    await fetch(url, {
+      method: method,
+      headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(crew)
     });
-  } else {
-    pendingCrew = crew;
+    updateCrewSummary(crew);
+    if (statusEl) { statusEl.textContent = 'Saved'; setTimeout(() => { statusEl.style.display = 'none'; }, 1500); }
+  } catch (e) {
+    if (statusEl) { statusEl.textContent = 'Save failed'; }
+    console.error('crew save error', e);
   }
 }
 
@@ -427,17 +486,7 @@ async function startSession(type) {
   try {
     const resp = await fetch(`/api/races/start?session_type=${type}`, {method:'POST'});
     if(resp.ok) {
-      const data = await resp.json();
-      const crew = pendingCrew && pendingCrew.length ? pendingCrew : getCrewFromInputs();
-      if(crew.length && data.id) {
-        await fetch('/api/races/' + data.id + '/crew', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify(crew)
-        });
-        await loadCrewMeta();
-      }
-      pendingCrew = null;
+      // Boat-level crew defaults auto-apply via resolve_crew (#305)
     } else {
       const err = await resp.json().catch(()=>null);
       const msg = err && err.detail ? err.detail : 'Failed to start session';
@@ -1643,6 +1692,5 @@ setInterval(loadState, 10000);
 setInterval(tick, 1000);
 loadInstruments();
 setInterval(loadInstruments, 2000);
-loadCrewMeta();
 checkSystemHealth();
 setInterval(checkSystemHealth, 30000);
