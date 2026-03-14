@@ -3280,6 +3280,116 @@ class Storage:
         logger.debug("Sail defaults updated")
 
     # ------------------------------------------------------------------
+    # Sail stats (for sail management page #307)
+    # ------------------------------------------------------------------
+
+    async def get_sail_stats(self) -> list[dict[str, Any]]:
+        """Return all sails (including inactive) with accumulated maneuver counts.
+
+        Each dict contains the sail fields plus ``total_tacks``,
+        ``total_gybes``, and ``total_sessions``.  Tack/gybe counts are
+        filtered by the sail's ``point_of_sail``:
+        - upwind → tacks only
+        - downwind → gybes only
+        - both → tacks + gybes
+        """
+        db = self._conn()
+        sails = await self.list_sails(include_inactive=True)
+        for sail in sails:
+            sid = sail["id"]
+            pos = sail["point_of_sail"]
+            # Count sessions this sail was used in
+            cur = await db.execute(
+                "SELECT COUNT(DISTINCT race_id) AS cnt FROM race_sails WHERE sail_id = ?",
+                (sid,),
+            )
+            sail["total_sessions"] = (await cur.fetchone())["cnt"]
+
+            # Maneuver counts filtered by point_of_sail
+            if pos == "upwind":
+                type_filter = "('tack')"
+            elif pos == "downwind":
+                type_filter = "('gybe')"
+            else:
+                type_filter = "('tack', 'gybe')"
+
+            cur = await db.execute(
+                "SELECT m.type, COUNT(*) AS cnt"
+                " FROM maneuvers m"
+                " JOIN race_sails rs ON rs.race_id = m.session_id"
+                f" WHERE rs.sail_id = ? AND m.type IN {type_filter}"
+                " GROUP BY m.type",
+                (sid,),
+            )
+            counts = {row["type"]: row["cnt"] for row in await cur.fetchall()}
+            sail["total_tacks"] = counts.get("tack", 0)
+            sail["total_gybes"] = counts.get("gybe", 0)
+        return sails
+
+    async def get_sail_session_history(self, sail_id: int) -> list[dict[str, Any]]:
+        """Return sessions that used *sail_id*, newest first.
+
+        Each entry includes the session info, per-session tack/gybe
+        counts, and wind summary (avg TWS, min/max TWS).
+        """
+        db = self._conn()
+        # Get the sail's point_of_sail for filtering
+        cur = await db.execute(
+            "SELECT point_of_sail FROM sails WHERE id = ?", (sail_id,)
+        )
+        sail_row = await cur.fetchone()
+        if sail_row is None:
+            return []
+        pos = sail_row["point_of_sail"]
+
+        # Sessions this sail was used in
+        cur = await db.execute(
+            "SELECT r.id, r.name, r.event, r.date, r.start_utc, r.end_utc"
+            " FROM race_sails rs"
+            " JOIN races r ON r.id = rs.race_id"
+            " WHERE rs.sail_id = ?"
+            " ORDER BY r.start_utc DESC",
+            (sail_id,),
+        )
+        sessions = [dict(row) for row in await cur.fetchall()]
+
+        for sess in sessions:
+            sid = sess["id"]
+            # Maneuver counts for this session
+            cur = await db.execute(
+                "SELECT type, COUNT(*) AS cnt FROM maneuvers"
+                " WHERE session_id = ? AND type IN ('tack', 'gybe')"
+                " GROUP BY type",
+                (sid,),
+            )
+            counts = {row["type"]: row["cnt"] for row in await cur.fetchall()}
+            sess["tacks"] = counts.get("tack", 0) if pos in ("upwind", "both") else None
+            sess["gybes"] = counts.get("gybe", 0) if pos in ("downwind", "both") else None
+
+            # Wind summary (true wind only: reference IN (0, 4))
+            start = sess.get("start_utc")
+            end = sess.get("end_utc")
+            if start and end:
+                cur = await db.execute(
+                    "SELECT AVG(wind_speed_kts) AS avg_tws,"
+                    " MIN(wind_speed_kts) AS min_tws,"
+                    " MAX(wind_speed_kts) AS max_tws"
+                    " FROM winds"
+                    " WHERE reference IN (0, 4) AND ts >= ? AND ts <= ?",
+                    (start, end),
+                )
+                wind = await cur.fetchone()
+                if wind and wind["avg_tws"] is not None:
+                    sess["avg_tws"] = round(wind["avg_tws"], 1)
+                    sess["min_tws"] = round(wind["min_tws"], 1)
+                    sess["max_tws"] = round(wind["max_tws"], 1)
+                else:
+                    sess["avg_tws"] = sess["min_tws"] = sess["max_tws"] = None
+            else:
+                sess["avg_tws"] = sess["min_tws"] = sess["max_tws"] = None
+        return sessions
+
+    # ------------------------------------------------------------------
     # Transcripts
     # ------------------------------------------------------------------
 

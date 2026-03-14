@@ -1012,6 +1012,15 @@ def create_app(
             ),
         )
 
+    @app.get("/sails", response_class=HTMLResponse, include_in_schema=False)
+    async def sails_page(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> Response:
+        return _templates.TemplateResponse(
+            request, "sails.html", _tpl_ctx(request, "/sails")
+        )
+
     @app.get("/admin/boats", response_class=HTMLResponse, include_in_schema=False)
     async def admin_boats_page(request: Request) -> Response:
         return _templates.TemplateResponse(
@@ -4162,6 +4171,23 @@ def create_app(
         defaults = await storage.get_sail_defaults()
         await _audit(request, "sails.defaults.set", user=_user)
         return JSONResponse(defaults)
+
+    @app.get("/api/sails/stats")
+    async def api_sail_stats(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return all sails with accumulated tack/gybe counts and session totals."""
+        stats = await storage.get_sail_stats()
+        return JSONResponse(stats)
+
+    @app.get("/api/sails/{sail_id}/sessions")
+    async def api_sail_sessions(
+        sail_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return session history for a specific sail."""
+        history = await storage.get_sail_session_history(sail_id)
+        return JSONResponse(history)
 
     @app.patch("/api/sails/{sail_id}", status_code=200)
     async def api_update_sail(

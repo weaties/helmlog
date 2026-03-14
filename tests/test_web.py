@@ -2269,6 +2269,108 @@ async def test_sail_defaults_do_not_affect_session_sails(storage: Storage) -> No
 
 
 # ---------------------------------------------------------------------------
+# Sail stats & session history (#307)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sail_stats_empty(storage: Storage) -> None:
+    """GET /api/sails/stats returns empty list when no sails exist."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/sails/stats")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_sail_stats_with_sails(storage: Storage) -> None:
+    """GET /api/sails/stats returns sails with zero counts when no sessions."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _add_sail(client, "main", "Full Main")
+        await _add_sail(client, "jib", "J1")
+        resp = await client.get("/api/sails/stats")
+    data = resp.json()
+    assert len(data) == 2
+    for s in data:
+        assert s["total_tacks"] == 0
+        assert s["total_gybes"] == 0
+        assert s["total_sessions"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sail_session_history_empty(storage: Storage) -> None:
+    """GET /api/sails/{id}/sessions returns empty list for unused sail."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        sail_id = await _add_sail(client, "main", "Full Main")
+        resp = await client.get(f"/api/sails/{sail_id}/sessions")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_sail_session_history_with_session(storage: Storage) -> None:
+    """GET /api/sails/{id}/sessions returns session info when sail is used."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        main_id = await _add_sail(client, "main", "Full Main")
+        await _set_event(client)
+        race = (await client.post("/api/races/start")).json()
+        await client.put(
+            f"/api/sessions/{race['id']}/sails",
+            json={"main_id": main_id},
+        )
+        resp = await client.get(f"/api/sails/{main_id}/sessions")
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["id"] == race["id"]
+    assert data[0]["tacks"] == 0
+    assert data[0]["gybes"] == 0  # main is 'both', so both tacks and gybes are shown
+
+
+@pytest.mark.asyncio
+async def test_sail_stats_counts_sessions(storage: Storage) -> None:
+    """GET /api/sails/stats counts sessions a sail was used in."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        main_id = await _add_sail(client, "main", "Full Main")
+        await _set_event(client)
+        race = (await client.post("/api/races/start")).json()
+        await client.put(
+            f"/api/sessions/{race['id']}/sails",
+            json={"main_id": main_id},
+        )
+        resp = await client.get("/api/sails/stats")
+    data = resp.json()
+    main_stat = next(s for s in data if s["id"] == main_id)
+    assert main_stat["total_sessions"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sails_page_renders(storage: Storage) -> None:
+    """GET /sails returns 200."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/sails")
+    assert resp.status_code == 200
+    assert "Sails" in resp.text
+
+
+# ---------------------------------------------------------------------------
 # Audio download / stream endpoints (#21)
 # ---------------------------------------------------------------------------
 
