@@ -45,6 +45,7 @@ async function init() {
     loadTranscript();
     loadAudio();
   }
+  loadDiscussion();
   loadSharing();
   renderExports();
 }
@@ -1578,6 +1579,167 @@ function _updateBoatSettingsForUtc(utcDate) {
   // Debounce: skip if same second
   if (_bsLastAsOf && _bsLastAsOf.slice(0, 19) === asOf.slice(0, 19)) return;
   _fetchAndRenderBoatSettings(asOf);
+}
+
+// ---------------------------------------------------------------------------
+// Discussion threads (#282)
+// ---------------------------------------------------------------------------
+
+let _threads = [];
+
+async function loadDiscussion() {
+  const card = document.getElementById('discussion-card');
+  card.style.display = '';
+  const body = document.getElementById('discussion-body');
+  const r = await fetch('/api/sessions/' + SESSION_ID + '/threads');
+  if (!r.ok) { body.innerHTML = '<span style="color:#8892a4">Failed to load</span>'; return; }
+  _threads = await r.json();
+  const totalUnread = _threads.reduce((s, t) => s + (t.unread_count || 0), 0);
+  const badge = document.getElementById('discussion-badge');
+  badge.textContent = totalUnread > 0 ? '(' + totalUnread + ' unread)' : '';
+  if (!_threads.length) {
+    body.innerHTML = '<span style="color:#8892a4">No discussions yet. Start one with + New Thread above.</span>';
+    return;
+  }
+  body.innerHTML = _threads.map(t => {
+    const anchor = t.mark_reference
+      ? '<span class="thread-anchor">' + esc(t.mark_reference.replace(/_/g, ' ')) + '</span>'
+      : t.anchor_timestamp
+        ? '<span class="thread-anchor">' + fmtTime(t.anchor_timestamp) + '</span>'
+        : '';
+    const unread = t.unread_count > 0
+      ? '<span class="thread-unread">' + t.unread_count + '</span>'
+      : '';
+    const resolved = t.resolved ? ' resolved' : '';
+    const resolvedTag = t.resolved ? '<span style="color:#4ade80;font-size:.7rem;margin-left:6px">&#10003; Resolved</span>' : '';
+    const title = t.title ? esc(t.title) : 'Thread #' + t.id;
+    const author = t.author_name || t.author_email || 'Crew Member';
+    const count = t.comment_count === 1 ? '1 comment' : t.comment_count + ' comments';
+    return '<div class="thread-item' + resolved + '" onclick="openThread(' + t.id + ')">'
+      + '<div><strong style="color:#e8eaf0">' + title + '</strong>' + anchor + unread + resolvedTag + '</div>'
+      + '<div style="font-size:.72rem;color:#8892a4;margin-top:2px">' + esc(author) + ' &middot; ' + count + ' &middot; ' + fmtTime(t.created_at) + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+function showNewThreadForm() {
+  const body = document.getElementById('discussion-body');
+  const form = document.createElement('div');
+  form.className = 'thread-form';
+  form.style.marginBottom = '10px';
+  form.innerHTML = '<div style="display:flex;gap:6px;margin-bottom:6px">'
+    + '<input id="new-thread-title" placeholder="Thread title (optional)" style="flex:1"/>'
+    + '<select id="new-thread-mark" style="width:auto"><option value="">No mark anchor</option>'
+    + '<option value="start">Start</option>'
+    + '<option value="weather_mark_1">Weather Mark 1</option><option value="weather_mark_2">Weather Mark 2</option>'
+    + '<option value="leeward_mark_1">Leeward Mark 1</option><option value="leeward_mark_2">Leeward Mark 2</option>'
+    + '<option value="gate_1">Gate 1</option><option value="gate_2">Gate 2</option>'
+    + '<option value="offset_mark_1">Offset Mark 1</option>'
+    + '<option value="finish">Finish</option>'
+    + '</select></div>'
+    + '<textarea id="new-thread-body" placeholder="First comment\u2026"></textarea>'
+    + '<div style="margin-top:6px;display:flex;gap:6px">'
+    + '<button class="btn-thread" onclick="submitNewThread()">Create Thread</button>'
+    + '<button class="btn-thread" style="background:none;color:#8892a4" onclick="loadDiscussion()">Cancel</button>'
+    + '</div>';
+  body.prepend(form);
+}
+
+async function submitNewThread() {
+  const title = document.getElementById('new-thread-title').value.trim();
+  const mark = document.getElementById('new-thread-mark').value || null;
+  const firstComment = document.getElementById('new-thread-body').value.trim();
+  const payload = {};
+  if (title) payload.title = title;
+  if (mark) payload.mark_reference = mark;
+  const r = await fetch('/api/sessions/' + SESSION_ID + '/threads', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+  });
+  if (!r.ok) { alert('Failed to create thread'); return; }
+  const {id} = await r.json();
+  if (firstComment) {
+    await fetch('/api/threads/' + id + '/comments', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({body: firstComment})
+    });
+  }
+  openThread(id);
+}
+
+async function openThread(threadId) {
+  const body = document.getElementById('discussion-body');
+  body.innerHTML = '<span style="color:#8892a4">Loading\u2026</span>';
+  // Mark as read
+  fetch('/api/threads/' + threadId + '/read', {method: 'POST'});
+  const r = await fetch('/api/threads/' + threadId);
+  if (!r.ok) { loadDiscussion(); return; }
+  const t = await r.json();
+  const title = t.title ? esc(t.title) : 'Thread #' + t.id;
+  const anchor = t.mark_reference
+    ? '<span class="thread-anchor">' + esc(t.mark_reference.replace(/_/g, ' ')) + '</span>'
+    : t.anchor_timestamp
+      ? '<span class="thread-anchor">' + fmtTime(t.anchor_timestamp) + '</span>'
+      : '';
+  let resolveBtn = '';
+  if (t.resolved) {
+    resolveBtn = '<button class="btn-unresolve" onclick="unresolveThread(' + t.id + ')">Unresolve</button>';
+  } else {
+    resolveBtn = '<button class="btn-resolve" onclick="resolveThread(' + t.id + ')">Resolve</button>';
+  }
+  const resolutionHtml = t.resolved && t.resolution_summary
+    ? '<div style="background:#0d2a1a;border:1px solid #4ade80;border-radius:4px;padding:6px 8px;margin-top:6px;font-size:.78rem;color:#86efac">'
+      + '<strong>Resolution:</strong> ' + esc(t.resolution_summary) + '</div>'
+    : '';
+  const commentsHtml = (t.comments || []).map(c => {
+    const author = c.author_name || c.author_email || 'Crew Member';
+    const edited = c.edited_at ? ' <span class="comment-edited">(edited)</span>' : '';
+    return '<div class="comment-item">'
+      + '<span class="comment-author">' + esc(author) + '</span>'
+      + '<span class="comment-time">' + fmtTime(c.created_at) + '</span>' + edited
+      + '<div class="comment-body">' + esc(c.body) + '</div>'
+      + '</div>';
+  }).join('');
+  body.innerHTML = '<div style="margin-bottom:8px">'
+    + '<button style="background:none;border:none;color:#7eb8f7;cursor:pointer;font-size:.78rem;padding:0" onclick="loadDiscussion()">&larr; All threads</button>'
+    + '</div>'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'
+    + '<div><strong style="color:#e8eaf0;font-size:.9rem">' + title + '</strong>' + anchor + '</div>'
+    + resolveBtn
+    + '</div>'
+    + resolutionHtml
+    + '<div id="thread-comments">' + (commentsHtml || '<span style="color:#8892a4">No comments yet</span>') + '</div>'
+    + '<div class="thread-form" style="margin-top:8px">'
+    + '<textarea id="reply-body" placeholder="Reply\u2026"></textarea>'
+    + '<div style="margin-top:4px"><button class="btn-thread" onclick="submitReply(' + t.id + ')">Reply</button></div>'
+    + '</div>';
+}
+
+async function submitReply(threadId) {
+  const el = document.getElementById('reply-body');
+  const text = el.value.trim();
+  if (!text) return;
+  const r = await fetch('/api/threads/' + threadId + '/comments', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({body: text})
+  });
+  if (!r.ok) { alert('Failed to post reply'); return; }
+  openThread(threadId);
+}
+
+async function resolveThread(threadId) {
+  const summary = prompt('Resolution summary (optional):') || null;
+  await fetch('/api/threads/' + threadId + '/resolve', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({resolution_summary: summary})
+  });
+  openThread(threadId);
+}
+
+async function unresolveThread(threadId) {
+  await fetch('/api/threads/' + threadId + '/unresolve', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
+  });
+  openThread(threadId);
 }
 
 // ---------------------------------------------------------------------------
