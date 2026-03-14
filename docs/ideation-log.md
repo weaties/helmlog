@@ -636,3 +636,221 @@ Coaches need special consideration:
   considerations. Coaches are a key use case for the intra-boat tier — they
   work across boats and need thread access patterns that don't map cleanly to
   "crew on one boat." Open questions added around coach identity model.
+
+---
+
+## IDX-014: Structured feature specs with decision tables and state diagrams
+
+- **Date captured:** 2026-03-14
+- **Origin:** "Future of Software Engineering" retreat article — spec-driven development section; EARS, state machines, decision tables rediscovered as precision tools for AI agents
+- **Status:** `raw`
+- **Related:** CLAUDE.md (coding conventions), `/tdd` skill, GitHub issues
+
+**Description:**
+The retreat found that traditional user stories are too vague for AI-driven development —
+"bad specs produce bad code at scale." Teams are adopting structured specification
+formats (EARS syntax, state machines, decision tables) because they give agents enough
+precision to produce correct implementations.
+
+HelmLog already has strong conventions in CLAUDE.md and the `/tdd` skill drives
+test-first implementation. But feature specifications — the descriptions in GitHub issues
+and conversations that kick off work — are still free-form prose. For complex features
+(federation lifecycle, embargo enforcement, co-op thread visibility tiers), this means the
+human and agent spend significant conversation turns disambiguating requirements that
+could have been precise from the start.
+
+**Proposed improvements:**
+
+1. **Decision tables for policy-heavy features:** Features like data licensing, embargo
+   rules, and thread visibility have combinatorial logic (role × visibility tier × co-op
+   policy → allowed/denied). A decision table in the issue body makes every combination
+   explicit. The agent can generate tests directly from the table rows.
+
+2. **State diagrams for lifecycle features:** Co-op membership, session lifecycle, and
+   embargo transitions are state machines. Drawing the states and transitions up front
+   (even as ASCII art or Mermaid in the issue) prevents the "what happens if X then Y?"
+   back-and-forth during implementation.
+
+3. **EARS-style requirements for hardware interfaces:** For features like IDX-011
+   (write-back to B&G), structured requirements like "WHEN polar confidence < 0.5
+   THE SYSTEM SHALL stop publishing to Signal K" are unambiguous and directly testable.
+
+4. **Spec review before code:** The retreat's insight — "pre-review the plans,
+   post-review the engineering." For complex features, the human reviews and approves
+   the spec (decision table, state diagram, EARS requirements) before the agent writes
+   any code. This catches misunderstandings at the cheapest point.
+
+**What this is NOT:**
+- Not heavyweight documentation or BDUF (big design up front)
+- Not required for simple bug fixes or small features
+- A lightweight structured format for the ~20% of features where ambiguity costs the most
+
+**Notes:**
+- *2026-03-14:* Initial capture. The `/tdd` skill already produces test-first implementations,
+  but the specs that inform the tests are still conversational. Adding a structured spec step
+  before TDD would be: spec → review spec → write tests from spec → implement. The spec
+  format should be as lightweight as possible — a decision table can be a Markdown table in
+  the issue body, a state diagram can be Mermaid or ASCII. The goal is precision, not ceremony.
+
+---
+
+## IDX-015: Sailing domain ontology as agent grounding layer
+
+- **Date captured:** 2026-03-14
+- **Origin:** "Future of Software Engineering" retreat article — knowledge graphs and semantic layers as grounding for domain-aware agents
+- **Status:** `raw`
+- **Related:** `nmea2000.py` (PGN dataclasses), `polar.py`, `sk_reader.py`, `races.py`, CLAUDE.md
+
+**Description:**
+The retreat found that domain ontologies — formal models of concepts and relationships
+within a business domain — are suddenly relevant as grounding layers for AI agents. A
+large telecom captured its entire domain in ~286 concepts. The practical value: agents
+with a domain ontology make fewer mistakes because they understand how concepts
+relate, not just what code does.
+
+HelmLog operates in a rich domain (sailing, racing, instrument systems, weather,
+federation) that has specific terminology, physical relationships, and conventions that
+general-purpose LLMs only partially understand. Examples of domain knowledge that
+trips up or slows down agent work:
+
+- **Instrument relationships:** TWA (true wind angle) is derived from AWA (apparent
+  wind angle) + BSP (boat speed). Changing one affects the others. The agent needs
+  to understand these physical relationships to reason about data correctness.
+- **Racing concepts:** A "mark rounding" is not just a GPS waypoint — it has rules
+  (port/starboard, proper course, room). "VMG" means different things upwind vs.
+  downwind. Polars are functions of TWS × TWA → BSP.
+- **Signal K paths:** `navigation.speedThroughWater` vs. `navigation.speedOverGround`
+  — the difference matters for polar calculations and the agent needs to know which
+  to use when.
+- **NMEA 2000 conventions:** PGN numbers, update rates, source addresses, device
+  priorities — the CAN bus has its own conceptual model.
+- **Racing customs:** Protest rules, co-op etiquette, coach-sailor relationships —
+  these inform feature design (protest firewall, crew visibility policies).
+
+**Proposed approach:**
+A `docs/domain-model.md` file that captures the sailing/instrument domain as a
+structured reference. Not a formal OWL ontology — a readable document organized by
+concept cluster (instruments, racing, performance, weather, federation) with
+relationships made explicit. The agent reads this when working on domain-sensitive
+features. CLAUDE.md would point to it.
+
+**Why a doc and not just CLAUDE.md?**
+CLAUDE.md is about *how to work in this codebase*. The domain model is about *what
+this codebase models*. Keeping them separate lets the domain model grow without
+bloating CLAUDE.md, and makes it referenceable from issues, specs, and discussions.
+
+**Notes:**
+- *2026-03-14:* Initial capture. Start small — the instrument relationship cluster (TWS,
+  TWA, AWA, BSP, SOG, COG, VMG, heel, leeway and how they relate) would pay for
+  itself immediately in any work touching `polar.py`, `sk_reader.py`, or `nmea2000.py`.
+  The retreat's observation that a large telecom's domain fit in ~286 concepts is
+  encouraging — sailing instrumentation is a much smaller domain. Could potentially
+  auto-generate the initial draft from the existing dataclasses in `nmea2000.py` and
+  Signal K path mappings in `sk_reader.py`.
+
+---
+
+## IDX-016: Risk-tiered verification for HelmLog modules
+
+- **Date captured:** 2026-03-14
+- **Origin:** "Future of Software Engineering" retreat article — risk mapping as the new core engineering discipline; verification proportional to blast radius
+- **Status:** `raw`
+- **Related:** CLAUDE.md (testing strategy), `/tdd` skill, `/pr-checklist` skill, `/data-license` skill
+
+**Description:**
+The retreat reframed code review from "did someone review this?" to "what is the blast
+radius if this is wrong, and is our verification proportional to that risk?" Not all code
+carries the same risk. HelmLog has modules that range from safety-critical (writing to
+a live NMEA 2000 bus during racing) to low-risk (CSS tweaks on the history page).
+
+Currently, all HelmLog code goes through the same verification: TDD, ruff, mypy,
+`/pr-checklist`. This is already good, but as the codebase grows — especially with
+features like IDX-011 (write-back to B&G) and federation — we should be explicit about
+which modules demand extra rigor and which can move fast with standard checks.
+
+**Proposed risk tiers for HelmLog:**
+
+| Tier | Modules | Blast radius | Verification |
+|---|---|---|---|
+| **Critical** | `can_reader.py` (CAN write-back), `peer_auth.py`, `federation.py`, `auth.py`, `storage.py` (migrations) | Data loss, safety (bad data on displays during racing), security (auth bypass), data corruption | TDD + integration tests + manual review of spec + data-license review |
+| **High** | `sk_reader.py`, `peer_api.py`, `peer_client.py`, `export.py`, `transcribe.py` | Incorrect data capture, broken federation, PII exposure | TDD + integration tests where applicable |
+| **Standard** | `web.py`, `polar.py`, `external.py`, `races.py`, `triggers.py` | Wrong numbers on screen, broken features | TDD + standard PR checklist |
+| **Low** | Templates, CSS, JS, docs, config | Visual issues, non-functional | Smoke test / visual check |
+
+**How this would work in practice:**
+- CLAUDE.md or a separate `docs/risk-tiers.md` documents the tier assignments
+- The `/pr-checklist` skill checks which files were touched and flags the appropriate
+  tier's verification requirements
+- The agent (and human) can skip heavyweight review for low-tier changes and focus
+  review energy where it matters most
+- Tier assignments are reviewed when modules change scope (e.g., if `can_reader.py`
+  gains write capability per IDX-011, it moves to Critical)
+
+**Notes:**
+- *2026-03-14:* Initial capture. The immediate value is in the `/pr-checklist` skill —
+  it currently runs the same checks for all PRs. Making it tier-aware would mean a
+  CSS-only PR gets a quick pass while a federation change triggers integration tests
+  and data-license review automatically. The tier assignments themselves are a form of
+  institutional knowledge that helps both human and agent calibrate effort.
+
+---
+
+## IDX-017: Architecture comprehension sessions — fighting cognitive debt
+
+- **Date captured:** 2026-03-14
+- **Origin:** "Future of Software Engineering" retreat article — cognitive debt (gap between system complexity and human understanding), continuous comprehension, "agent subconscious"
+- **Status:** `raw`
+- **Related:** CLAUDE.md, memory system (`.claude/projects/`), IDX-015 (domain ontology)
+
+**Description:**
+The retreat's concept of "cognitive debt" — the gap between how complex the system
+actually is and how well the human understands it — is directly relevant to HelmLog.
+The codebase is growing (federation, co-op, peer API, data licensing, threading, cameras,
+pipelines) and the primary developer's mental model can fall behind, especially when
+significant implementation is done by the agent.
+
+The retreat identified this risk specifically: "code review has historically served as a
+learning mechanism as much as a quality gate. Mentorship, shared understanding and
+codebase familiarity all happened through review. Losing that channel without replacing
+it creates a comprehension gap that compounds over time."
+
+**Proposed approach — periodic comprehension sessions:**
+
+1. **Architecture snapshot skill (`/architecture`):** A new skill where the agent reads
+   the current codebase and produces a concise system overview: module dependency
+   graph, data flow paths, recent structural changes, areas of growing complexity.
+   Not documentation for its own sake — a comprehension tool for the human to
+   quickly re-orient after time away or after the agent has made significant changes.
+
+2. **"What changed while I was away" briefing:** When starting a new conversation
+   after a gap, the agent reviews recent git history and memory to produce a
+   briefing: what was implemented, what architectural decisions were made, what's
+   different from last time. This already happens informally through memory — making
+   it an explicit workflow would be more reliable.
+
+3. **Complexity hotspot detection:** The agent periodically scans for modules that
+   have grown beyond the ~200 line convention, functions with high cyclomatic
+   complexity, or areas where multiple recent PRs have clustered (suggesting the
+   module is becoming a kitchen sink). Flags these proactively.
+
+4. **Decision archaeology in memory:** The retreat's "latent knowledge" concept maps
+   to our memory system. Currently memories capture facts and preferences. We could
+   be more intentional about capturing *why* decisions were made — the reasoning
+   behind architectural choices, rejected alternatives, and trade-offs. This is the
+   "agent subconscious" that helps future conversations avoid re-litigating settled
+   questions.
+
+**Connection to the "middle loop":**
+The retreat identified a new category of supervisory engineering work — "directing,
+evaluating, and fixing the output of AI agents" that requires "strong mental models of
+system architecture" and the ability to "rapidly assess output quality without reading
+every line." Architecture comprehension sessions are how the human maintains the
+mental model needed to be an effective middle-loop supervisor.
+
+**Notes:**
+- *2026-03-14:* Initial capture. The lowest-effort, highest-value starting point is #4 —
+  being more intentional about capturing decision reasoning in memory. This costs
+  nothing extra (just a habit change in how we write memories) and pays dividends
+  immediately. The `/architecture` skill is higher effort but would be valuable before
+  major features or after returning from a break. Complexity hotspot detection could
+  be a simple addition to `/pr-checklist` — flag if any touched file exceeds 200 lines.
