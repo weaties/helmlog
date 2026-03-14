@@ -12,12 +12,25 @@ label{font-size:.85rem;color:#8892a4;display:block;margin-bottom:4px}
 input,select{background:#0a1628;border:1px solid #2563eb;border-radius:6px;padding:8px 10px;color:#e8eaf0;font-size:.9rem;margin-bottom:10px}
 .btn{padding:10px 18px;border:none;border-radius:8px;font-size:.9rem;font-weight:700;cursor:pointer;background:#2563eb;color:#fff}
 #invite-result{margin-top:12px;font-size:.85rem;color:#4ade80;word-break:break-all}
-.ubtn{cursor:pointer;background:none;border:1px solid #2563eb;color:#7eb8f7;border-radius:4px;padding:2px 8px;font-size:.8rem}
-.edit-input{background:#0a1628;border:1px solid #2563eb;border-radius:4px;padding:4px 6px;color:#e8eaf0;font-size:.85rem;width:100%}
-.edit-actions{margin-top:4px;display:flex;gap:4px}
-.edit-actions button{font-size:.75rem;padding:2px 8px;border-radius:4px;cursor:pointer;border:none}
+.ubtn{cursor:pointer;background:none;border:1px solid #2563eb;color:#7eb8f7;border-radius:4px;padding:4px 10px;font-size:.8rem;white-space:nowrap}
+.edit-input{background:#0a1628;border:1px solid #2563eb;border-radius:4px;padding:6px 8px;color:#e8eaf0;font-size:.85rem;width:100%;min-height:36px;box-sizing:border-box}
+.edit-actions{margin-top:6px;display:flex;gap:6px}
+.edit-actions button{font-size:.8rem;padding:6px 12px;border-radius:4px;cursor:pointer;border:none;min-height:36px}
 .edit-save{background:#22c55e;color:#fff}
 .edit-cancel{background:#374151;color:#8892a4}
+/* --- Mobile: table → stacked cards --- */
+@media (max-width: 640px) {
+  table thead{display:none}
+  tbody tr{display:block;border:1px solid #1e3a5f;border-radius:8px;padding:12px;margin-bottom:10px}
+  tbody td{display:flex;justify-content:space-between;align-items:center;border:none;padding:4px 0;gap:8px}
+  tbody td::before{content:attr(data-label);color:#8892a4;font-size:.78rem;flex-shrink:0;min-width:70px}
+  tbody td:last-child{flex-wrap:wrap;gap:6px;margin-top:6px;padding-top:8px;border-top:1px solid #1e3a5f}
+  tbody td:last-child::before{display:none}
+  .card{padding:12px}
+  .ubtn{padding:6px 12px;font-size:.85rem}
+  .edit-input{min-height:40px;font-size:.9rem;padding:8px}
+  .edit-actions button{min-height:40px;padding:8px 16px;font-size:.85rem}
+}
 </style>
 {% endblock %}
 {% block content %}

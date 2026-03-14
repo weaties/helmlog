@@ -1060,12 +1060,12 @@ def create_app(
 
         user_rows = "".join(
             f'<tr data-uid="{u["id"]}">'
-            f'<td class="u-email">{_esc(u["email"])}</td>'
-            f'<td class="u-name">{_esc(u["name"] or "")}</td>'
-            f"<td>{_badge(u['role'])}</td>"
-            f"<td>{'&#9989;' if u.get('is_developer') else '\u2014'}</td>"
-            f'<td class="u-weight">{_fmt_weight(u.get("weight_lbs"))}</td>'
-            f"<td>{_local_ts(u['last_seen'])}</td>"
+            f'<td class="u-email" data-label="Email">{_esc(u["email"])}</td>'
+            f'<td class="u-name" data-label="Name">{_esc(u["name"] or "")}</td>'
+            f'<td data-label="Role">{_badge(u["role"])}</td>'
+            f'<td data-label="Dev">{"&#9989;" if u.get("is_developer") else "\u2014"}</td>'
+            f'<td class="u-weight" data-label="Weight">{_fmt_weight(u.get("weight_lbs"))}</td>'
+            f'<td data-label="Last seen">{_local_ts(u["last_seen"])}</td>'
             f'<td><button onclick="editUser({u["id"]})" class="ubtn" style="border-color:#22c55e;color:#4ade80">Edit</button>'  # noqa: E501
             f' <button onclick="changeRole({u["id"]})" class="ubtn">Role</button>'
             f' <button onclick="toggleDev({u["id"]},{1 if not u.get("is_developer") else 0})" class="ubtn" style="border-color:#d97706;color:#fbbf24">{"Remove dev" if u.get("is_developer") else "Make dev"}</button></td>'  # noqa: E501
@@ -1073,20 +1073,22 @@ def create_app(
             for u in users
         )
         sess_rows = "".join(
-            f"<tr><td>{_esc(s.get('email') or '')}</td><td>{_esc(s.get('role') or '')}</td>"
-            f"<td>{_esc(s.get('ip') or '\u2014')}</td>"
-            f"<td>{_local_ts(s['created_at'])}</td>"
-            f"<td>{_local_ts(s['expires_at'])}</td>"
-            f'<td><button onclick="revokeSession(\'{_esc(s["session_id"])}\')" style="cursor:pointer;background:#7f1d1d;border:none;color:#fca5a5;border-radius:4px;padding:2px 8px;font-size:.8rem">Revoke</button></td>'  # noqa: E501
+            f'<tr><td data-label="User">{_esc(s.get("email") or "")}</td>'
+            f'<td data-label="Role">{_esc(s.get("role") or "")}</td>'
+            f'<td data-label="IP">{_esc(s.get("ip") or "\u2014")}</td>'
+            f'<td data-label="Created">{_local_ts(s["created_at"])}</td>'
+            f'<td data-label="Expires">{_local_ts(s["expires_at"])}</td>'
+            f'<td><button onclick="revokeSession(\'{_esc(s["session_id"])}\')" style="cursor:pointer;background:#7f1d1d;border:none;color:#fca5a5;border-radius:4px;padding:6px 12px;font-size:.85rem">Revoke</button></td>'  # noqa: E501
             f"</tr>"
             for s in sessions
         )
         invite_rows = "".join(
-            f"<tr><td>{_esc(inv['email'])}</td><td>{_esc(inv.get('name') or '\u2014')}</td>"
-            f"<td>{_badge(inv['role'])}</td>"
-            f"<td>{'&#9989;' if inv.get('is_developer') else '\u2014'}</td>"
-            f"<td>{_local_ts(inv['expires_at'])}</td>"
-            f'<td><button onclick="revokeInvite({int(inv["id"])})" style="cursor:pointer;background:#7f1d1d;border:none;color:#fca5a5;border-radius:4px;padding:2px 8px;font-size:.8rem">Revoke</button></td>'  # noqa: E501
+            f'<tr><td data-label="Email">{_esc(inv["email"])}</td>'
+            f'<td data-label="Name">{_esc(inv.get("name") or "\u2014")}</td>'
+            f'<td data-label="Role">{_badge(inv["role"])}</td>'
+            f'<td data-label="Dev">{"&#9989;" if inv.get("is_developer") else "\u2014"}</td>'
+            f'<td data-label="Expires">{_local_ts(inv["expires_at"])}</td>'
+            f'<td><button onclick="revokeInvite({int(inv["id"])})" style="cursor:pointer;background:#7f1d1d;border:none;color:#fca5a5;border-radius:4px;padding:6px 12px;font-size:.85rem">Revoke</button></td>'  # noqa: E501
             f"</tr>"
             for inv in pending_invitations
         )
