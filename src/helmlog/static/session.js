@@ -1851,8 +1851,28 @@ async function submitReply(threadId) {
   openThread(threadId);
 }
 
-async function resolveThread(threadId) {
-  const summary = prompt('Resolution summary (optional):') || null;
+function resolveThread(threadId) {
+  const container = document.getElementById('thread-comments');
+  if (!container) return;
+  // Show inline form instead of prompt() — mobile browsers handle prompt() inconsistently
+  const existing = document.getElementById('resolve-form');
+  if (existing) { existing.remove(); return; }
+  const form = document.createElement('div');
+  form.id = 'resolve-form';
+  form.className = 'thread-form';
+  form.style.marginTop = '8px';
+  form.innerHTML = '<textarea id="resolve-summary" placeholder="Resolution summary (optional)"></textarea>'
+    + '<div style="margin-top:4px;display:flex;gap:6px">'
+    + '<button class="btn-resolve" onclick="_submitResolve(' + threadId + ')">Confirm Resolve</button>'
+    + '<button class="btn-thread" style="background:none;color:#8892a4" onclick="document.getElementById(\'resolve-form\').remove()">Cancel</button>'
+    + '</div>';
+  container.after(form);
+  document.getElementById('resolve-summary').focus();
+}
+
+async function _submitResolve(threadId) {
+  const el = document.getElementById('resolve-summary');
+  const summary = el ? el.value.trim() || null : null;
   await fetch('/api/threads/' + threadId + '/resolve', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({resolution_summary: summary})
