@@ -281,12 +281,14 @@ class SailCreate(BaseModel):
     type: str  # 'main' | 'jib' | 'spinnaker'
     name: str
     notes: str | None = None
+    point_of_sail: str | None = None  # 'upwind' | 'downwind' | 'both'
 
 
 class SailUpdate(BaseModel):
     name: str | None = None
     notes: str | None = None
     active: bool | None = None
+    point_of_sail: str | None = None  # 'upwind' | 'downwind' | 'both'
 
 
 class RaceSailsSet(BaseModel):
@@ -4074,6 +4076,8 @@ def create_app(
 
     from helmlog.storage import _SAIL_TYPES  # noqa: PLC0415
 
+    _POINT_OF_SAIL_VALUES = ("upwind", "downwind", "both")
+
     @app.get("/api/sails")
     async def api_list_sails(
         _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
@@ -4100,8 +4104,13 @@ def create_app(
             )
         if not body.name.strip():
             raise HTTPException(status_code=422, detail="name must not be blank")
+        if body.point_of_sail is not None and body.point_of_sail not in _POINT_OF_SAIL_VALUES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid point_of_sail {body.point_of_sail!r}. Must be one of {list(_POINT_OF_SAIL_VALUES)}",
+            )
         try:
-            sail_id = await storage.add_sail(body.type, body.name, body.notes)
+            sail_id = await storage.add_sail(body.type, body.name, body.notes, point_of_sail=body.point_of_sail)
         except ValueError as exc:
             raise HTTPException(
                 status_code=409,
@@ -4119,9 +4128,15 @@ def create_app(
         body: SailUpdate,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> JSONResponse:
-        """Update sail name/notes or retire it."""
+        """Update sail name/notes, point-of-sail, or retire it."""
+        if body.point_of_sail is not None and body.point_of_sail not in _POINT_OF_SAIL_VALUES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid point_of_sail {body.point_of_sail!r}. Must be one of {list(_POINT_OF_SAIL_VALUES)}",
+            )
         found = await storage.update_sail(
-            sail_id, name=body.name, notes=body.notes, active=body.active
+            sail_id, name=body.name, notes=body.notes, active=body.active,
+            point_of_sail=body.point_of_sail,
         )
         if not found:
             raise HTTPException(status_code=404, detail="Sail not found")

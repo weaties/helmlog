@@ -2048,6 +2048,102 @@ async def test_state_includes_sails(storage: Storage) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Issue #308 — Point-of-sail field for sails
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_add_sail_with_explicit_point_of_sail(storage: Storage) -> None:
+    """POST /api/sails with explicit point_of_sail stores and returns it."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post(
+            "/api/sails", json={"type": "main", "name": "Reef 1", "point_of_sail": "upwind"}
+        )
+        resp = await client.get("/api/sails")
+    data = resp.json()
+    main_sails = data["main"]
+    assert len(main_sails) == 1
+    assert main_sails[0]["point_of_sail"] == "upwind"
+
+
+@pytest.mark.asyncio
+async def test_add_sail_default_point_of_sail(storage: Storage) -> None:
+    """POST /api/sails without point_of_sail defaults by type: jib→upwind, spinnaker→downwind, main→both."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _add_sail(client, "main", "Full Main")
+        await _add_sail(client, "jib", "J1")
+        await _add_sail(client, "spinnaker", "A2")
+        resp = await client.get("/api/sails")
+    data = resp.json()
+    assert data["main"][0]["point_of_sail"] == "both"
+    assert data["jib"][0]["point_of_sail"] == "upwind"
+    assert data["spinnaker"][0]["point_of_sail"] == "downwind"
+
+
+@pytest.mark.asyncio
+async def test_update_sail_point_of_sail(storage: Storage) -> None:
+    """PATCH /api/sails/{id} can update point_of_sail."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        sail_id = await _add_sail(client, "main", "Full Main")
+        patch_resp = await client.patch(
+            f"/api/sails/{sail_id}", json={"point_of_sail": "upwind"}
+        )
+        assert patch_resp.status_code == 200
+        resp = await client.get("/api/sails")
+    data = resp.json()
+    assert data["main"][0]["point_of_sail"] == "upwind"
+
+
+@pytest.mark.asyncio
+async def test_add_sail_invalid_point_of_sail_422(storage: Storage) -> None:
+    """POST /api/sails with invalid point_of_sail returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/sails", json={"type": "main", "name": "Test", "point_of_sail": "sideways"}
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_sail_invalid_point_of_sail_422(storage: Storage) -> None:
+    """PATCH /api/sails/{id} with invalid point_of_sail returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        sail_id = await _add_sail(client, "main", "Full Main")
+        resp = await client.patch(
+            f"/api/sails/{sail_id}", json={"point_of_sail": "sideways"}
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_list_sails_includes_point_of_sail(storage: Storage) -> None:
+    """GET /api/sails includes point_of_sail in each sail entry."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _add_sail(client, "jib", "J1")
+        resp = await client.get("/api/sails")
+    data = resp.json()
+    assert "point_of_sail" in data["jib"][0]
+
+
+# ---------------------------------------------------------------------------
 # Audio download / stream endpoints (#21)
 # ---------------------------------------------------------------------------
 

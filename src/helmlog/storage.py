@@ -125,7 +125,7 @@ _MARK_REFERENCES: frozenset[str] = frozenset(
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 38
+_CURRENT_VERSION: int = 39
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -902,6 +902,12 @@ _MIGRATIONS: dict[int, str] = {
 
         -- 4. Add user_id column to crew_consents
         ALTER TABLE crew_consents ADD COLUMN user_id INTEGER REFERENCES users(id);
+    """,
+    39: """
+        -- Point-of-sail field for sail inventory (#308)
+        ALTER TABLE sails ADD COLUMN point_of_sail TEXT NOT NULL DEFAULT 'both';
+        UPDATE sails SET point_of_sail = 'upwind' WHERE type = 'jib';
+        UPDATE sails SET point_of_sail = 'downwind' WHERE type = 'spinnaker';
     """,
 }
 
@@ -3047,16 +3053,23 @@ class Storage:
         sail_type: str,
         name: str,
         notes: str | None = None,
+        point_of_sail: str | None = None,
     ) -> int:
         """Insert a sail into the inventory and return its id.
 
+        If *point_of_sail* is ``None`` a sensible default is chosen based on
+        *sail_type*: ``jib`` → ``'upwind'``, ``spinnaker`` → ``'downwind'``,
+        everything else → ``'both'``.
+
         Raises ``ValueError`` on duplicate (type, name).
         """
+        if point_of_sail is None:
+            point_of_sail = {"jib": "upwind", "spinnaker": "downwind"}.get(sail_type, "both")
         db = self._conn()
         try:
             cur = await db.execute(
-                "INSERT INTO sails (type, name, notes) VALUES (?, ?, ?)",
-                (sail_type, name.strip(), notes),
+                "INSERT INTO sails (type, name, notes, point_of_sail) VALUES (?, ?, ?, ?)",
+                (sail_type, name.strip(), notes, point_of_sail),
             )
             await db.commit()
         except Exception as exc:
@@ -3076,7 +3089,7 @@ class Storage:
         db = self._conn()
         where = "" if include_inactive else "WHERE active = 1"
         cur = await db.execute(
-            f"SELECT id, type, name, notes, active FROM sails {where} ORDER BY type, name"
+            f"SELECT id, type, name, notes, active, point_of_sail FROM sails {where} ORDER BY type, name"
         )
         rows = await cur.fetchall()
         return [
@@ -3086,6 +3099,7 @@ class Storage:
                 "name": row["name"],
                 "notes": row["notes"],
                 "active": bool(row["active"]),
+                "point_of_sail": row["point_of_sail"],
             }
             for row in rows
         ]
@@ -3097,9 +3111,10 @@ class Storage:
         name: str | None = None,
         notes: str | None = None,
         active: bool | None = None,
+        point_of_sail: str | None = None,
     ) -> bool:
         """Update sail fields.  Returns True if the sail was found and updated."""
-        if name is None and notes is None and active is None:
+        if name is None and notes is None and active is None and point_of_sail is None:
             return True  # nothing to do — treat as no-op success
         db = self._conn()
         parts: list[str] = []
@@ -3113,6 +3128,9 @@ class Storage:
         if active is not None:
             parts.append("active = ?")
             params.append(1 if active else 0)
+        if point_of_sail is not None:
+            parts.append("point_of_sail = ?")
+            params.append(point_of_sail)
         params.append(sail_id)
         cur = await db.execute(f"UPDATE sails SET {', '.join(parts)} WHERE id = ?", params)
         await db.commit()
@@ -3150,7 +3168,7 @@ class Storage:
         """
         db = self._conn()
         cur = await db.execute(
-            "SELECT s.id, s.type, s.name, s.notes, s.active"
+            "SELECT s.id, s.type, s.name, s.notes, s.active, s.point_of_sail"
             " FROM race_sails rs"
             " JOIN sails s ON s.id = rs.sail_id"
             " WHERE rs.race_id = ?",
@@ -3167,6 +3185,7 @@ class Storage:
                     "name": row["name"],
                     "notes": row["notes"],
                     "active": bool(row["active"]),
+                    "point_of_sail": row["point_of_sail"],
                 }
         return result
 
