@@ -19,8 +19,8 @@ to one or more GitHub issues and its status changes to `promoted`.
 
 - **Date captured:** 2026-03-13
 - **Origin:** Discussion about threaded comments feature
-- **Status:** `evolving`
-- **Related:** `docs/data-licensing.md`, `docs/federation-design.md`, threaded comments feature, IDX-007
+- **Status:** `superseded`
+- **Related:** `docs/data-licensing.md`, `docs/federation-design.md`, threaded comments feature, IDX-007, **IDX-013**
 
 **Description:**
 Discussion threads that span across co-ops (not just within a single co-op).
@@ -36,6 +36,9 @@ data-licensing.md and federation-design.md.
   a constrained social feed rather than full threaded discussion in the federation
   protocol. May sidestep the data-licensing complexity by keeping the feed separate
   from co-op instrument data.
+- *2026-03-14:* Superseded by IDX-013, which captures a much more detailed and
+  concrete vision for co-op discussion threads with race/time anchoring, @mentions,
+  and identity requirements.
 
 ---
 
@@ -512,3 +515,85 @@ boat will be racing. This is the data competitive sailors study before race day
   a later optimization for offline use or higher-resolution coastal models
   like HRRR. Connects well with IDX-005 (tuning from wind range) and IDX-011
   (write-back to displays).
+
+---
+
+## IDX-013: Co-op discussion threads with race/time anchoring and @mentions
+
+- **Date captured:** 2026-03-14
+- **Origin:** Conversation about reworking inter-co-op communication — building on and superseding IDX-001
+- **Status:** `raw`
+- **Related:** IDX-001 (superseded), IDX-007 (TGP feed — complementary), IDX-008 (quote-reply/forking UX), IDX-003 (notification channels), `docs/data-licensing.md`
+
+**Description:**
+Discussion threads that can be scoped to a single boat (private) or shared with
+the entire co-op. Threads can optionally be anchored to a specific session, a
+specific timestamp within a session, or a specific mark (start, leeward, windward,
+finish). When anchored to a time or mark, a pin appears on the track replay for
+every co-op boat that participated — at their own position for that moment or mark.
+
+**Key design decisions (resolved):**
+
+- **Visibility is binary:** boat-private or co-op-visible. No sub-co-op cliques,
+  no per-boat sharing. The co-op is the trust boundary.
+- **No anonymity:** All comments identify the commenter by boat name, crew member
+  name, and position. This encourages accountability and constructive discussion.
+- **Taggability opt-out:** Users can make themselves untaggable in co-op
+  discussions (hidden from @mention autocomplete), but if they do, they cannot
+  participate in co-op-visible threads. You're either in the conversation or not.
+- **Protest firewall extends to threads:** Co-op discussion content is protected
+  — cannot be exported or used in protest proceedings. Sailors must feel safe
+  discussing tactics openly.
+
+**@mention system:**
+
+Supported mention formats with autocomplete:
+- `@name` — mention a person by name (across all co-op boats)
+- `@email` — mention by email
+- `@boat` — mention an entire boat's crew
+- `@boat/position` — mention whoever held that position in the anchored session
+  (e.g., `@SailFast/tactician` resolves to the person who sailed tactician on
+  SailFast in that race)
+- `@boat/@name` — mention a specific person on a specific boat
+
+Autocomplete populates from all co-op members who have not opted out of
+taggability. When a thread is anchored to a session, position-based mentions
+resolve against that session's crew list.
+
+**Race/time anchoring:**
+
+- **Session-level:** Thread is about a whole race or practice session
+- **Timestamp-level:** Thread is pinned to a specific UTC timestamp. On the
+  track replay, each co-op boat sees the pin at their own GPS position at that
+  time. Use case: "at 14:32, the wind shifted — what did everyone do?"
+- **Mark-level:** Thread is pinned to a mark (start, windward, leeward, finish).
+  Each boat sees the pin at their own time of rounding that mark, regardless of
+  when they arrived. Use case: "what happened at the leeward mark in race 3?"
+
+**Notifications:**
+
+Delivered based on user notification preferences (ties into IDX-003). @mentions
+trigger notifications; thread updates may optionally notify participants.
+
+**Open design questions:**
+
+- How are marks identified? Need a mark model (start/finish line, windward mark,
+  leeward mark, gate) tied to sessions. This may depend on race course modeling
+  which doesn't exist yet.
+- Thread editing/deletion — can you edit or delete your own comments? Time limit?
+- Moderation — who can delete threads or ban users from co-op discussions? Co-op
+  admin? Any boat owner?
+- Media in threads — text only? Or allow images (e.g., screenshot of track)?
+  Images have storage/PII implications.
+- How does this interact with IDX-007 (TGP-style feed)? Is TGP the casual social
+  layer and this is the race-analysis layer? Or does this subsume TGP?
+- Federation: are threads stored centrally (co-op server) or replicated across
+  boats? Central is simpler but requires connectivity.
+
+**Notes:**
+- *2026-03-14:* Initial capture. Supersedes IDX-001 which was a vague sketch.
+  The key new insights are: binary visibility (no sub-groups), mandatory identity
+  (no anonymity), taggability as participation gate, mark-level anchoring (not
+  just timestamps), and extending the protest firewall to discussion content.
+  The @mention system with position-based resolution against session crew lists
+  is particularly powerful for post-race debrief across a fleet.
