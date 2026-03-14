@@ -89,6 +89,53 @@ jobs:
           echo "| **Source tag** | \`${PREVIOUS_TAG}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Triggered by** | @${{ github.actor }} |" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Check RELEASES.md updated
+        if: "!inputs.rollback && inputs.target == 'stage'"
+        run: |
+          SOURCE="main"
+          TARGET="stage"
+
+          git fetch origin "$SOURCE" "$TARGET"
+
+          SOURCE_SHA=$(git rev-parse "origin/${SOURCE}")
+          TARGET_SHA=$(git rev-parse "origin/${TARGET}")
+
+          if [ "$SOURCE_SHA" = "$TARGET_SHA" ]; then
+            echo "::notice::No commits to check — already up to date"
+            exit 0
+          fi
+
+          # Check if ALL commits only touch docs/ideation-log.md
+          IDEATION_ONLY=true
+          for SHA in $(git rev-list "${TARGET_SHA}..${SOURCE_SHA}"); do
+            FILES=$(git diff-tree --no-commit-id --name-only -r "$SHA")
+            NON_IDEATION=$(echo "$FILES" | grep -v '^docs/ideation-log.md$' || true)
+            if [ -n "$NON_IDEATION" ]; then
+              IDEATION_ONLY=false
+              break
+            fi
+          done
+
+          if [ "$IDEATION_ONLY" = "true" ]; then
+            echo "::notice::All commits only touch ideation log — skipping RELEASES.md check"
+            exit 0
+          fi
+
+          # Verify RELEASES.md has a diff that adds a new ## heading
+          RELEASES_DIFF=$(git diff "${TARGET_SHA}..${SOURCE_SHA}" -- RELEASES.md)
+          if [ -z "$RELEASES_DIFF" ]; then
+            echo "::error::RELEASES.md has not been updated. Run /release-notes to draft an entry before promoting to stage."
+            exit 1
+          fi
+
+          NEW_HEADING=$(echo "$RELEASES_DIFF" | grep '^\+## ' || true)
+          if [ -z "$NEW_HEADING" ]; then
+            echo "::error::RELEASES.md was modified but no new ## heading was added. A new release entry is required — run /release-notes."
+            exit 1
+          fi
+
+          echo "::notice::RELEASES.md check passed — new entry found"
+
       - name: Promote
         if: "!inputs.rollback"
         run: |

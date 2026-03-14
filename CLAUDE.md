@@ -169,6 +169,16 @@ When starting work on a GitHub issue:
 
 **All changes to `main` must come through merged PRs.** Never push directly to `main`.
 
+### Promote gate
+
+The `promote.yml` workflow gates `main → stage` promotion on RELEASES.md:
+- RELEASES.md must have a new `##` heading in the promoted commits (editing an
+  old entry doesn't count)
+- **Exemption:** if all commits only touch `docs/ideation-log.md`, the check is
+  skipped
+- `stage → live` has no RELEASES.md gate (it's a fast-forward of the same commit)
+- Run `/release-notes` before promoting to draft the entry
+
 ### Environment & Configuration
 
 All config is via environment variables or `.env`. The canonical reference
@@ -316,3 +326,4 @@ docker compose -f tests/integration/docker-compose.yml up --build --abort-on-con
 | `/data-license` | Review changes against the data licensing policy |
 | `/integration-test` | Run federation integration tests (Layer 1/2/3) |
 | `/ideate` | Capture half-baked ideas into the ideation log |
+| `/release-notes` | Draft a RELEASES.md entry from commits since last stage tag |
