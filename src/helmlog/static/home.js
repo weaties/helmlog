@@ -72,6 +72,7 @@ function render(s) {
     if(cur.id !== _crewLoadedForRaceId) {
       _crewLoadedForRaceId = cur.id;
       if (_crewMetaLoaded) loadCrewCurrentValues();
+      else loadCrewMeta();
     }
     document.getElementById('btn-note').style.display = '';
   } else {
@@ -244,7 +245,20 @@ async function loadCrewCurrentValues() {
     const crew = data.crew || [];
     setCrewInputs(crew);
     updateCrewSummary(crew);
+    // Auto-expand/collapse when a race is active
+    if (state && state.current_race) {
+      const allNonGuestFilled = _crewPositions
+        .filter(p => p.name !== 'guest')
+        .every(p => crew.some(c => c.position_id === p.id && c.user_id));
+      setCrewExpanded(!allNonGuestFilled);
+    }
   } catch (e) { console.error('crew current error', e); }
+}
+
+function setCrewExpanded(expanded) {
+  crewExpanded = expanded;
+  document.getElementById('crew-body').style.display = crewExpanded ? '' : 'none';
+  document.getElementById('crew-chevron').textContent = crewExpanded ? '\u25BC' : '\u25B6';
 }
 
 function setCrewInputs(crew) {
