@@ -285,6 +285,7 @@ function updateCrewSummary(crew) {
 
 async function onCrewChange(selectEl) {
   // Handle "Add new..." option
+  let newUserId = null;
   if (selectEl && selectEl.value === '__new__') {
     selectEl.value = '';  // Reset while prompting
     const name = prompt('New crew member name:');
@@ -298,10 +299,18 @@ async function onCrewChange(selectEl) {
         if (r.ok) {
           const data = await r.json();
           _crewUsers.push({id: data.id, name: data.name, email: '', role: 'viewer'});
-          selectEl.value = String(data.id);
+          newUserId = String(data.id);
         }
       } catch (e) { console.error('create placeholder error', e); }
     }
+  }
+  // Set value before refresh so refreshCrewDropdowns sees it
+  if (newUserId && selectEl) {
+    // Temporarily add the option so the value sticks before refresh
+    const opt = document.createElement('option');
+    opt.value = newUserId;
+    selectEl.appendChild(opt);
+    selectEl.value = newUserId;
   }
   refreshCrewDropdowns();
   // Debounced auto-save
