@@ -482,7 +482,7 @@ class TestLiveCache:
 
 
 # ---------------------------------------------------------------------------
-# Crew storage tests
+# Crew storage tests (#305)
 # ---------------------------------------------------------------------------
 
 _CREW_DATE = "2025-09-01"
@@ -495,70 +495,244 @@ class TestCrewStorage:
         assert race.id is not None
         return race.id
 
-    async def test_set_and_get_race_crew(self, storage: Storage) -> None:
-        """set_race_crew then get_race_crew returns all positions in canonical order."""
-        race_id = await self._make_race(storage)
-        crew_in = [
-            {"position": "tactician", "sailor": "Bill"},
-            {"position": "helm", "sailor": "Mark"},
-            {"position": "pit", "sailor": "Sarah"},
-            {"position": "main", "sailor": "Dave"},
-            {"position": "bow", "sailor": "Tom"},
-        ]
-        await storage.set_race_crew(race_id, crew_in)
-        crew_out = await storage.get_race_crew(race_id)
-        positions = [c["position"] for c in crew_out]
-        assert positions == ["helm", "main", "pit", "bow", "tactician"]
-        sailors = {c["position"]: c["sailor"] for c in crew_out}
-        assert sailors["helm"] == "Mark"
-        assert sailors["tactician"] == "Bill"
+    async def _pos_id(self, storage: Storage, name: str) -> int:
+        positions = await storage.get_crew_positions()
+        for p in positions:
+            if p["name"] == name:
+                return p["id"]
+        raise ValueError(f"Position {name!r} not found")
 
-    async def test_set_crew_updates_recent_sailors(self, storage: Storage) -> None:
-        """After set_race_crew, get_recent_sailors returns all crew names."""
-        race_id = await self._make_race(storage)
-        await storage.set_race_crew(
-            race_id,
-            [{"position": "helm", "sailor": "Alice"}, {"position": "main", "sailor": "Bob"}],
-        )
-        recent = await storage.get_recent_sailors()
-        assert "Alice" in recent
-        assert "Bob" in recent
+    async def test_crew_positions_seeded(self, storage: Storage) -> None:
+        """Migration seeds 6 default crew positions."""
+        positions = await storage.get_crew_positions()
+        names = [p["name"] for p in positions]
+        assert names == ["helm", "main", "pit", "bow", "tactician", "guest"]
 
-    async def test_set_crew_upsert(self, storage: Storage) -> None:
-        """Second set_race_crew call wins; old positions removed if absent."""
-        race_id = await self._make_race(storage)
-        await storage.set_race_crew(
-            race_id,
-            [{"position": "helm", "sailor": "Mark"}, {"position": "main", "sailor": "Dave"}],
+    async def test_crew_positions_crud(self, storage: Storage) -> None:
+        """set_crew_positions can add, reorder, and remove positions."""
+        await storage.set_crew_positions(
+            [
+                {"name": "helm", "display_order": 0},
+                {"name": "main", "display_order": 1},
+                {"name": "trimmer", "display_order": 2},
+            ]
         )
-        # Second write: replace helm, drop main, add pit
-        await storage.set_race_crew(
+        positions = await storage.get_crew_positions()
+        names = [p["name"] for p in positions]
+        assert names == ["helm", "main", "trimmer"]
+        assert "pit" not in names
+
+    async def test_set_and_get_crew_defaults_boat_level(self, storage: Storage) -> None:
+        """set_crew_defaults with race_id=None stores boat-level defaults."""
+        helm_id = await self._pos_id(storage, "helm")
+        main_id = await self._pos_id(storage, "main")
+        alice_id = await storage.create_placeholder_user("Alice")
+        bob_id = await storage.create_placeholder_user("Bob")
+
+        await storage.set_crew_defaults(
+            None,
+            [
+                {"position_id": helm_id, "user_id": alice_id},
+                {"position_id": main_id, "user_id": bob_id},
+            ],
+        )
+        defaults = await storage.get_crew_defaults(None)
+        assert len(defaults) == 2
+        pos_map = {d["position"]: d["user_name"] for d in defaults}
+        assert pos_map["helm"] == "Alice"
+        assert pos_map["main"] == "Bob"
+
+    async def test_set_and_get_crew_defaults_race_level(self, storage: Storage) -> None:
+        """set_crew_defaults with race_id stores race-level overrides."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        mark_id = await storage.create_placeholder_user("Mark")
+
+        await storage.set_crew_defaults(
             race_id,
-            [{"position": "helm", "sailor": "New"}, {"position": "pit", "sailor": "Pat"}],
+            [
+                {"position_id": helm_id, "user_id": mark_id},
+            ],
+        )
+        entries = await storage.get_crew_defaults(race_id)
+        assert len(entries) == 1
+        assert entries[0]["user_name"] == "Mark"
+
+    async def test_resolve_crew_boat_defaults_only(self, storage: Storage) -> None:
+        """resolve_crew falls through to boat-level when no race-level set."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        alice_id = await storage.create_placeholder_user("Alice")
+
+        await storage.set_crew_defaults(
+            None,
+            [
+                {"position_id": helm_id, "user_id": alice_id},
+            ],
+        )
+        resolved = await storage.resolve_crew(race_id)
+        helm_entry = next(e for e in resolved if e["position"] == "helm")
+        assert helm_entry["user_name"] == "Alice"
+        assert helm_entry["source"] == "boat"
+
+    async def test_resolve_crew_race_overrides(self, storage: Storage) -> None:
+        """Race-level entry wins over boat-level default."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        alice_id = await storage.create_placeholder_user("Alice")
+        mark_id = await storage.create_placeholder_user("Mark")
+
+        await storage.set_crew_defaults(
+            None,
+            [
+                {"position_id": helm_id, "user_id": alice_id},
+            ],
+        )
+        await storage.set_crew_defaults(
+            race_id,
+            [
+                {"position_id": helm_id, "user_id": mark_id},
+            ],
+        )
+        resolved = await storage.resolve_crew(race_id)
+        helm_entry = next(e for e in resolved if e["position"] == "helm")
+        assert helm_entry["user_name"] == "Mark"
+        assert helm_entry["source"] == "race"
+        assert helm_entry["supersedes_user_name"] == "Alice"
+
+    async def test_resolve_crew_mixed(self, storage: Storage) -> None:
+        """Some positions overridden at race level, others from boat defaults."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        main_id = await self._pos_id(storage, "main")
+        alice_id = await storage.create_placeholder_user("Alice")
+        bob_id = await storage.create_placeholder_user("Bob")
+        mark_id = await storage.create_placeholder_user("Mark")
+
+        await storage.set_crew_defaults(
+            None,
+            [
+                {"position_id": helm_id, "user_id": alice_id},
+                {"position_id": main_id, "user_id": bob_id},
+            ],
+        )
+        await storage.set_crew_defaults(
+            race_id,
+            [
+                {"position_id": helm_id, "user_id": mark_id},
+            ],
+        )
+        resolved = await storage.resolve_crew(race_id)
+        by_pos = {e["position"]: e for e in resolved}
+        assert by_pos["helm"]["user_name"] == "Mark"
+        assert by_pos["helm"]["source"] == "race"
+        assert by_pos["main"]["user_name"] == "Bob"
+        assert by_pos["main"]["source"] == "boat"
+
+    async def test_non_attributed_crew(self, storage: Storage) -> None:
+        """Non-attributed crew entries track position filled without user name."""
+        race_id = await self._make_race(storage)
+        guest_id = await self._pos_id(storage, "guest")
+        await storage.set_crew_defaults(
+            race_id,
+            [
+                {"position_id": guest_id, "attributed": False},
+            ],
+        )
+        entries = await storage.get_crew_defaults(race_id)
+        assert len(entries) == 1
+        assert entries[0]["attributed"] == 0
+        assert entries[0]["user_id"] is None
+
+    async def test_crew_weight_tracking(self, storage: Storage) -> None:
+        """Body and gear weight are stored per crew entry."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        alice_id = await storage.create_placeholder_user("Alice")
+
+        await storage.set_crew_defaults(
+            race_id,
+            [
+                {
+                    "position_id": helm_id,
+                    "user_id": alice_id,
+                    "body_weight": 155.0,
+                    "gear_weight": 12.5,
+                },
+            ],
+        )
+        entries = await storage.get_crew_defaults(race_id)
+        assert entries[0]["body_weight"] == 155.0
+        assert entries[0]["gear_weight"] == 12.5
+
+    async def test_placeholder_user_creation(self, storage: Storage) -> None:
+        """create_placeholder_user creates user, second call returns same id."""
+        uid1 = await storage.create_placeholder_user("TestSailor")
+        uid2 = await storage.create_placeholder_user("TestSailor")
+        assert uid1 == uid2
+        user = await storage.get_user_by_id(uid1)
+        assert user is not None
+        assert user["name"] == "TestSailor"
+
+    async def test_consent_with_user_id(self, storage: Storage) -> None:
+        """set_crew_consent and get_crew_consents work with user_id."""
+        uid = await storage.create_placeholder_user("ConsentSailor")
+        row_id = await storage.set_crew_consent(uid, "audio", True)
+        assert row_id > 0
+        consents = await storage.get_crew_consents(uid)
+        assert len(consents) == 1
+        assert consents[0]["consent_type"] == "audio"
+        assert consents[0]["granted"] == 1
+
+    async def test_set_crew_defaults_full_replace(self, storage: Storage) -> None:
+        """Second set_crew_defaults call replaces all entries for that level."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        main_id = await self._pos_id(storage, "main")
+        alice_id = await storage.create_placeholder_user("Alice")
+        bob_id = await storage.create_placeholder_user("Bob")
+
+        await storage.set_crew_defaults(
+            race_id,
+            [
+                {"position_id": helm_id, "user_id": alice_id},
+                {"position_id": main_id, "user_id": bob_id},
+            ],
+        )
+        # Replace with just helm
+        await storage.set_crew_defaults(
+            race_id,
+            [
+                {"position_id": helm_id, "user_id": bob_id},
+            ],
+        )
+        entries = await storage.get_crew_defaults(race_id)
+        assert len(entries) == 1
+        assert entries[0]["user_name"] == "Bob"
+
+    async def test_get_race_crew_legacy_compat(self, storage: Storage) -> None:
+        """get_race_crew returns legacy format from resolved crew."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        alice_id = await storage.create_placeholder_user("Alice")
+
+        await storage.set_crew_defaults(
+            None,
+            [
+                {"position_id": helm_id, "user_id": alice_id},
+            ],
         )
         crew = await storage.get_race_crew(race_id)
-        pos_map = {c["position"]: c["sailor"] for c in crew}
-        assert pos_map.get("helm") == "New"
-        assert pos_map.get("pit") == "Pat"
-        assert "main" not in pos_map
+        assert len(crew) == 1
+        assert crew[0] == {"position": "helm", "sailor": "Alice"}
 
-    async def test_get_crew_empty_race(self, storage: Storage) -> None:
-        """get_race_crew returns empty list for a race with no crew set."""
-        race_id = await self._make_race(storage)
-        crew = await storage.get_race_crew(race_id)
-        assert crew == []
-
-    async def test_get_recent_sailors_ordered_by_recency(self, storage: Storage) -> None:
-        """get_recent_sailors returns names newest-first."""
-        race_id = await self._make_race(storage)
-        await storage.set_race_crew(race_id, [{"position": "helm", "sailor": "Older"}])
-        # A second race to set a newer name
-        race2 = await storage.start_race(
-            "Regatta", _CREW_START, _CREW_DATE, 2, "20250901-Regatta-2"
-        )
-        await storage.set_race_crew(race2.id, [{"position": "helm", "sailor": "Newer"}])
-        recent = await storage.get_recent_sailors()
-        assert recent[0] == "Newer"
+    async def test_user_weight(self, storage: Storage) -> None:
+        """update_user_weight stores weight_lbs on user record."""
+        uid = await storage.create_placeholder_user("WeightTest")
+        await storage.update_user_weight(uid, 175.0)
+        user = await storage.get_user_by_id(uid)
+        assert user is not None
+        assert user["weight_lbs"] == 175.0
 
 
 # ---------------------------------------------------------------------------

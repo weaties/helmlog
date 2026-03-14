@@ -19,6 +19,13 @@ a{color:#7eb8f7;text-decoration:none}
   <div class="name">{{ name }}</div>
   <div class="email">{{ email }}</div>
   <div class="role">{{ role }}</div>
+  <div style="margin-top:18px;text-align:left">
+    <label style="color:#8892a4;font-size:.85rem">Body Weight (lbs)</label>
+    <input type="number" id="weight-input" step="0.1" min="0" max="500"
+           value="{{ weight_lbs or '' }}" placeholder="—"
+           style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a3a5c;background:#0d1829;color:#e0e6ed;margin-top:4px;font-size:1rem"/>
+    <button class="btn btn-secondary" style="margin-top:8px;font-size:.85rem;padding:8px 16px" onclick="saveWeight()">Save Weight</button>
+  </div>
 </div>
 {% endblock %}
 {% block scripts %}
@@ -36,5 +43,16 @@ document.getElementById('file').addEventListener('change', async e => {
     alert(d.detail || 'Upload failed');
   }
 });
+async function saveWeight() {
+  const v = document.getElementById('weight-input').value;
+  const weight = v ? parseFloat(v) : null;
+  const r = await fetch('/api/me/weight', {
+    method:'PATCH',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({weight_lbs: weight})
+  });
+  if (r.ok) alert('Weight saved');
+  else alert('Failed to save weight');
+}
 </script>
 {% endblock %}

@@ -522,9 +522,11 @@ async function loadCrew() {
   const data = await r.json();
   const crew = data.crew || [];
   if (crew.length) {
-    body.innerHTML = crew.map(c =>
-      '<span style="color:#8892a4">' + esc(c.position.charAt(0).toUpperCase() + c.position.slice(1)) + ':</span> ' + esc(c.sailor)
-    ).join(' &middot; ');
+    body.innerHTML = crew.map(c => {
+      const pos = esc(c.position.charAt(0).toUpperCase() + c.position.slice(1));
+      const name = c.attributed ? esc(c.user_name || '—') : '<em>(not attributed)</em>';
+      return '<span style="color:#8892a4">' + pos + ':</span> ' + name;
+    }).join(' &middot; ');
   } else {
     body.innerHTML = '<span style="color:#8892a4">No crew recorded</span>';
   }

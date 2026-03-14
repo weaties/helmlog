@@ -220,8 +220,11 @@ class EventRequest(BaseModel):
 
 
 class CrewEntry(BaseModel):
-    position: str
-    sailor: str
+    position_id: int
+    user_id: int | None = None
+    attributed: bool = True
+    body_weight: float | None = None
+    gear_weight: float | None = None
 
 
 class BoatCreate(BaseModel):
@@ -281,9 +284,6 @@ class RaceSailsSet(BaseModel):
     main_id: int | None = None
     jib_id: int | None = None
     spinnaker_id: int | None = None
-
-
-POSITIONS: tuple[str, ...] = ("helm", "main", "pit", "bow", "tactician", "guest")
 
 
 # ---------------------------------------------------------------------------
@@ -462,8 +462,21 @@ def create_app(
                 "role": user.get("role"),
                 "avatar_path": user.get("avatar_path"),
                 "is_developer": bool(user.get("is_developer")),
+                "weight_lbs": user.get("weight_lbs"),
             }
         )
+
+    @app.patch("/api/me/weight", status_code=204)
+    async def api_update_my_weight(
+        request: Request,
+        body: dict[str, Any],
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> None:
+        """Update the current user's body weight."""
+        weight = body.get("weight_lbs")
+        if weight is not None and not isinstance(weight, (int, float)):
+            raise HTTPException(status_code=422, detail="weight_lbs must be a number or null")
+        await storage.update_user_weight(_user["id"], weight)
 
     def _login_ctx(next_url: str, error_html: str = "") -> dict[str, Any]:
         from helmlog.oauth import enabled_providers
@@ -1674,7 +1687,7 @@ def create_app(
             else:
                 elapsed = (now - r.start_utc).total_seconds()
                 duration_s = elapsed
-            crew = await storage.get_race_crew(r.id)
+            crew = await storage.resolve_crew(r.id)
             results = await storage.list_race_results(r.id)
             sails = await storage.get_race_sails(r.id)
             cur = await storage._conn().execute(
@@ -1893,11 +1906,8 @@ def create_app(
 
         race = await storage.start_race(event, now, date_str, race_num, name, session_type)
 
-        # Copy crew from most recently closed session as defaults
-        last_crew = await storage.get_last_session_crew()
-        if last_crew:
-            await storage.set_race_crew(race.id, last_crew)
-            logger.info("Crew carried forward to {}: {} positions", race.name, len(last_crew))
+        # Boat-level crew defaults auto-apply via resolve_crew() —
+        # no explicit copy-forward needed (#305)
 
         if recorder is not None and audio_config is not None:
             from helmlog.audio import AudioDeviceNotFoundError
@@ -2942,15 +2952,27 @@ def create_app(
         if await cur.fetchone() is None:
             raise HTTPException(status_code=404, detail="Race not found")
 
-        invalid = [e.position for e in body if e.position not in POSITIONS]
+        # Validate position_ids exist
+        positions = await storage.get_crew_positions()
+        valid_ids = {p["id"] for p in positions}
+        invalid = [e.position_id for e in body if e.position_id not in valid_ids]
         if invalid:
             raise HTTPException(
                 status_code=422,
-                detail=f"Unknown position(s): {invalid}. Must be one of {list(POSITIONS)}",
+                detail=f"Unknown position_id(s): {invalid}",
             )
 
-        crew = [{"position": e.position, "sailor": e.sailor} for e in body if e.sailor.strip()]
-        await storage.set_race_crew(race_id, crew)
+        crew = [
+            {
+                "position_id": e.position_id,
+                "user_id": e.user_id,
+                "attributed": e.attributed,
+                "body_weight": e.body_weight,
+                "gear_weight": e.gear_weight,
+            }
+            for e in body
+        ]
+        await storage.set_crew_defaults(race_id, crew)
         await _audit(request, "crew.set", detail=str(race_id), user=_user)
 
     @app.get("/api/races/{race_id}/crew")
@@ -2962,20 +2984,93 @@ def create_app(
         if await cur.fetchone() is None:
             raise HTTPException(status_code=404, detail="Race not found")
 
-        crew = await storage.get_race_crew(race_id)
-        recent = await storage.get_recent_sailors()
-        return JSONResponse({"crew": crew, "recent_sailors": recent})
+        crew = await storage.resolve_crew(race_id)
+        return JSONResponse({"crew": crew})
 
     # ------------------------------------------------------------------
-    # /api/sailors/recent
+    # /api/crew/defaults  (boat-level crew)
     # ------------------------------------------------------------------
 
-    @app.get("/api/sailors/recent")
-    async def api_recent_sailors(
+    @app.post("/api/crew/defaults", status_code=204)
+    async def api_set_crew_defaults(
+        request: Request,
+        body: list[CrewEntry],
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> None:
+        """Set boat-level default crew roster."""
+        crew = [
+            {
+                "position_id": e.position_id,
+                "user_id": e.user_id,
+                "attributed": e.attributed,
+                "body_weight": e.body_weight,
+                "gear_weight": e.gear_weight,
+            }
+            for e in body
+        ]
+        await storage.set_crew_defaults(None, crew)
+        await _audit(request, "crew.defaults.set", user=_user)
+
+    @app.get("/api/crew/defaults")
+    async def api_get_crew_defaults(
         _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
     ) -> JSONResponse:
-        sailors = await storage.get_recent_sailors()
-        return JSONResponse({"sailors": sailors})
+        """Get boat-level default crew roster."""
+        defaults = await storage.get_crew_defaults(None)
+        return JSONResponse({"crew": defaults})
+
+    # ------------------------------------------------------------------
+    # /api/crew/positions
+    # ------------------------------------------------------------------
+
+    @app.get("/api/crew/positions")
+    async def api_get_crew_positions(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        positions = await storage.get_crew_positions()
+        return JSONResponse({"positions": positions})
+
+    @app.post("/api/crew/positions", status_code=204)
+    async def api_set_crew_positions(
+        request: Request,
+        body: list[dict[str, Any]],
+        _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+    ) -> None:
+        """Admin: set configured crew positions."""
+        await storage.set_crew_positions(body)
+        await _audit(request, "crew.positions.set", user=_user)
+
+    # ------------------------------------------------------------------
+    # /api/crew/users
+    # ------------------------------------------------------------------
+
+    @app.get("/api/crew/users")
+    async def api_crew_users(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """List users for crew selector (crew→admin→viewer order)."""
+        users = await storage.list_users()
+        role_order = {"crew": 0, "admin": 1, "viewer": 2}
+        users.sort(key=lambda u: (role_order.get(u["role"], 99), u.get("name") or ""))
+        return JSONResponse({"users": users})
+
+    # ------------------------------------------------------------------
+    # /api/crew/placeholder
+    # ------------------------------------------------------------------
+
+    @app.post("/api/crew/placeholder", status_code=201)
+    async def api_create_placeholder(
+        request: Request,
+        body: dict[str, Any],
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Create a placeholder user for non-system crew."""
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="name is required")
+        uid = await storage.create_placeholder_user(name)
+        await _audit(request, "crew.placeholder", detail=name, user=_user)
+        return JSONResponse({"id": uid, "name": name}, status_code=201)
 
     # ------------------------------------------------------------------
     # /api/boats
@@ -4267,6 +4362,7 @@ def create_app(
                 role=role,
                 role_color=role_colors.get(role, "#8892a4"),
                 avatar_url=f"/avatars/{user_id}.jpg?v={int(time.time())}" if user_id else "",
+                weight_lbs=_user.get("weight_lbs"),
             ),
         )
 
@@ -4477,51 +4573,51 @@ def create_app(
         consents = await storage.list_crew_consents()
         return JSONResponse(consents)
 
-    @app.get("/api/crew/{sailor_name}/consents")
-    async def api_get_sailor_consents(
-        sailor_name: str,
+    @app.get("/api/crew/{user_id:int}/consents")
+    async def api_get_user_consents(
+        user_id: int,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> JSONResponse:
-        """Get consent records for a specific sailor."""
-        consents = await storage.get_crew_consents(sailor_name)
+        """Get consent records for a specific user."""
+        consents = await storage.get_crew_consents(user_id)
         return JSONResponse(consents)
 
-    @app.put("/api/crew/{sailor_name}/consents", status_code=200)
+    @app.put("/api/crew/{user_id:int}/consents", status_code=200)
     async def api_set_consent(
         request: Request,
-        sailor_name: str,
+        user_id: int,
         body: dict[str, Any],
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> JSONResponse:
-        """Set or revoke consent for a sailor."""
+        """Set or revoke consent for a user."""
         consent_type = (body.get("consent_type") or "").strip()
         if consent_type not in ("audio", "video", "name", "photo"):
             raise HTTPException(
                 status_code=422, detail="consent_type must be audio/video/name/photo"
             )
         granted = bool(body.get("granted", True))
-        row_id = await storage.set_crew_consent(sailor_name, consent_type, granted)
+        row_id = await storage.set_crew_consent(user_id, consent_type, granted)
         action = "consent.grant" if granted else "consent.revoke"
-        await _audit(request, action, detail=f"{sailor_name}/{consent_type}", user=_user)
+        await _audit(request, action, detail=f"user={user_id}/{consent_type}", user=_user)
         return JSONResponse(
             {
                 "id": row_id,
-                "sailor_name": sailor_name,
+                "user_id": user_id,
                 "consent_type": consent_type,
                 "granted": granted,
             }
         )
 
-    @app.post("/api/crew/{sailor_name}/anonymize", status_code=200)
+    @app.post("/api/crew/{user_id:int}/anonymize", status_code=200)
     async def api_anonymize_sailor(
         request: Request,
-        sailor_name: str,
+        user_id: int,
         _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
     ) -> JSONResponse:
-        """Anonymize a sailor's name across all sessions."""
-        count = await storage.anonymize_sailor(sailor_name)
-        await _audit(request, "sailor.anonymize", detail=sailor_name, user=_user)
-        return JSONResponse({"anonymized": sailor_name, "rows_updated": count})
+        """Anonymize a crew member's name across all sessions."""
+        count = await storage.anonymize_sailor(user_id)
+        await _audit(request, "sailor.anonymize", detail=f"user={user_id}", user=_user)
+        return JSONResponse({"user_id": user_id, "rows_updated": count})
 
     # ------------------------------------------------------------------
     # Camera status for crew (#207)

@@ -175,8 +175,9 @@ async function loadInstruments() {
 
 let pendingCrew = null;
 let crewExpanded = false;
-let focusedCrewInput = null;
 let _crewLoadedForRaceId = null;
+let _crewPositions = [];   // [{id, name, display_order}]
+let _crewUsers = [];       // [{id, name, email, role}]
 
 let instExpanded = false;
 
@@ -192,53 +193,57 @@ function toggleCrew() {
   document.getElementById('crew-chevron').textContent = crewExpanded ? '▼' : '▶';
 }
 
+async function loadCrewMeta() {
+  try {
+    const [posResp, userResp] = await Promise.all([
+      fetch('/api/crew/positions'),
+      fetch('/api/crew/users'),
+    ]);
+    _crewPositions = (await posResp.json()).positions || [];
+    _crewUsers = (await userResp.json()).users || [];
+    renderCrewRows();
+  } catch(e) { console.error('crew meta error', e); }
+}
+
+function renderCrewRows() {
+  const container = document.getElementById('crew-rows');
+  if(!container) return;
+  container.innerHTML = _crewPositions.map(p => {
+    const label = p.name.charAt(0).toUpperCase() + p.name.slice(1);
+    const options = _crewUsers.map(u => {
+      const n = (u.name || u.email).replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+      return '<option value="' + u.id + '">' + n + '</option>';
+    }).join('');
+    return '<div class="crew-row" data-pos-id="' + p.id + '">'
+      + '<span class="crew-pos">' + label + '</span>'
+      + '<select class="crew-select"><option value="">—</option>' + options + '</select>'
+      + '</div>';
+  }).join('');
+}
+
 function getCrewFromInputs() {
-  const positions = ['helm','main','pit','bow','tactician','guest'];
-  const ids = ['crew-helm','crew-main','crew-pit','crew-bow','crew-tac','crew-guest'];
+  const rows = document.querySelectorAll('#crew-rows .crew-row');
   const crew = [];
-  positions.forEach((pos, i) => {
-    const val = document.getElementById(ids[i]).value.trim();
-    if(val) crew.push({position: pos, sailor: val});
+  rows.forEach(row => {
+    const posId = parseInt(row.dataset.posId);
+    const sel = row.querySelector('.crew-select');
+    const userId = sel.value ? parseInt(sel.value) : null;
+    if(userId) crew.push({position_id: posId, user_id: userId});
   });
   return crew;
 }
 
 function setCrewInputs(crew) {
-  const posToId = {helm:'crew-helm',main:'crew-main',pit:'crew-pit',bow:'crew-bow',tactician:'crew-tac',guest:'crew-guest'};
-  Object.values(posToId).forEach(id => { document.getElementById(id).value = ''; });
-  if(crew) crew.forEach(c => {
-    const id = posToId[c.position];
-    if(id) document.getElementById(id).value = c.sailor;
+  const rows = document.querySelectorAll('#crew-rows .crew-row');
+  rows.forEach(row => {
+    const posId = parseInt(row.dataset.posId);
+    const sel = row.querySelector('.crew-select');
+    sel.value = '';
+    if(crew) {
+      const entry = crew.find(c => c.position_id === posId);
+      if(entry && entry.user_id) sel.value = String(entry.user_id);
+    }
   });
-}
-
-function tapSailor(name) {
-  let target = focusedCrewInput;
-  if(!target) {
-    const inputs = [...document.querySelectorAll('.crew-input')];
-    target = inputs.find(i => !i.value.trim()) || inputs[0];
-  }
-  if(!target) return;
-  target.value = name;
-  const inputs = [...document.querySelectorAll('.crew-input')];
-  const idx = inputs.indexOf(target);
-  const nextEmpty = inputs.slice(idx + 1).find(i => !i.value.trim());
-  if(nextEmpty) { nextEmpty.focus(); focusedCrewInput = nextEmpty; }
-}
-
-async function loadRecentSailors() {
-  try {
-    const r = await fetch('/api/sailors/recent');
-    const d = await r.json();
-    const dl = document.getElementById('recent-sailors');
-    dl.innerHTML = d.sailors.map(s => '<option value="' + s.replace(/&/g,'&amp;').replace(/"/g,'&quot;') + '">').join('');
-    const chips = document.getElementById('sailor-chips');
-    chips.innerHTML = d.sailors.map(s => {
-      const display = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      const attr = s.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-      return '<button class="sailor-chip" onpointerdown="event.preventDefault()" onclick="tapSailor(this.dataset.name)" data-name="' + attr + '">' + display + '</button>';
-    }).join('');
-  } catch(e) { console.error('sailors error', e); }
 }
 
 async function saveCrew() {
@@ -249,7 +254,6 @@ async function saveCrew() {
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify(crew)
     });
-    await loadRecentSailors();
   } else {
     pendingCrew = crew;
   }
@@ -431,7 +435,7 @@ async function startSession(type) {
           headers:{'Content-Type':'application/json'},
           body: JSON.stringify(crew)
         });
-        await loadRecentSailors();
+        await loadCrewMeta();
       }
       pendingCrew = null;
     } else {
@@ -1639,9 +1643,6 @@ setInterval(loadState, 10000);
 setInterval(tick, 1000);
 loadInstruments();
 setInterval(loadInstruments, 2000);
-loadRecentSailors();
+loadCrewMeta();
 checkSystemHealth();
 setInterval(checkSystemHealth, 30000);
-document.querySelectorAll('.crew-input').forEach(inp => {
-  inp.addEventListener('focus', () => { focusedCrewInput = inp; });
-});

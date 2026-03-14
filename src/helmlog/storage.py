@@ -82,7 +82,7 @@ _MARK_REFERENCES: frozenset[str] = frozenset(
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 37
+_CURRENT_VERSION: int = 38
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -829,6 +829,37 @@ _MIGRATIONS: dict[int, str] = {
             PRIMARY KEY (user_id, thread_id)
         );
     """,
+    38: """
+        -- Crew management overhaul (#305)
+
+        -- 1. Add weight column to users
+        ALTER TABLE users ADD COLUMN weight_lbs REAL;
+
+        -- 2. Configurable crew positions (replaces hardcoded _POSITIONS)
+        CREATE TABLE IF NOT EXISTS crew_positions (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT NOT NULL,
+            display_order INTEGER NOT NULL,
+            created_at    TEXT NOT NULL
+        );
+
+        -- 3. Two-tier crew defaults (boat-level + race-level)
+        CREATE TABLE IF NOT EXISTS crew_defaults (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            race_id       INTEGER REFERENCES races(id) ON DELETE CASCADE,
+            position_id   INTEGER NOT NULL REFERENCES crew_positions(id),
+            user_id       INTEGER REFERENCES users(id),
+            attributed    INTEGER NOT NULL DEFAULT 1,
+            body_weight   REAL,
+            gear_weight   REAL,
+            created_at    TEXT NOT NULL,
+            UNIQUE(race_id, position_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_crew_defaults_race ON crew_defaults(race_id);
+
+        -- 4. Add user_id column to crew_consents
+        ALTER TABLE crew_consents ADD COLUMN user_id INTEGER REFERENCES users(id);
+    """,
 }
 
 
@@ -860,7 +891,8 @@ def _split_migration_sql(sql: str) -> list[str]:
     return stmts
 
 
-# Canonical order for the 5 J105 positions + one-off guests
+# Default positions — used only for seeding crew_positions table in migration v38.
+# Runtime code should use get_crew_positions() instead.
 _POSITIONS: tuple[str, ...] = ("helm", "main", "pit", "bow", "tactician", "guest")
 
 # Valid sail slot types
@@ -1021,7 +1053,133 @@ class Storage:
             )
             await db.commit()
 
+        # Post-DDL data migration for v38 (crew overhaul)
+        if current < 38:
+            await self._migrate_v38_data()
+
         logger.debug("Schema is at version {}", _CURRENT_VERSION)
+
+    async def _migrate_v38_data(self) -> None:
+        """Data migration for v38: seed positions, migrate race_crew → crew_defaults."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        now = _datetime.now(UTC).isoformat()
+
+        # 1. Seed crew_positions (only if empty — idempotent)
+        cur = await db.execute("SELECT COUNT(*) FROM crew_positions")
+        row = await cur.fetchone()
+        if row is not None and row[0] == 0:
+            for order, name in enumerate(("helm", "main", "pit", "bow", "tactician", "guest")):
+                await db.execute(
+                    "INSERT INTO crew_positions (name, display_order, created_at) VALUES (?, ?, ?)",
+                    (name, order, now),
+                )
+            await db.commit()
+            logger.info("Seeded crew_positions with 6 default positions")
+
+        # Build position name → id map
+        cur = await db.execute("SELECT id, name FROM crew_positions")
+        pos_map: dict[str, int] = {r["name"]: r["id"] for r in await cur.fetchall()}
+
+        # 2. Check if race_crew table exists (it won't on fresh DBs)
+        cur = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='race_crew'"
+        )
+        if await cur.fetchone() is None:
+            return  # Fresh DB, no data to migrate
+
+        # 3. Migrate race_crew rows into crew_defaults
+        # First, collect distinct sailor names and match to users
+        cur = await db.execute("SELECT DISTINCT sailor FROM race_crew")
+        sailor_rows = await cur.fetchall()
+        sailor_to_user: dict[str, int] = {}
+        for sr in sailor_rows:
+            name = sr["sailor"]
+            # Try to match to existing user by name
+            ucur = await db.execute("SELECT id FROM users WHERE name = ?", (name,))
+            urow = await ucur.fetchone()
+            if urow:
+                sailor_to_user[name] = urow["id"]
+            else:
+                # Create placeholder user (no email/credentials)
+                placeholder_email = f"placeholder+{name.lower().replace(' ', '.')}@helmlog.local"
+                try:
+                    pcur = await db.execute(
+                        "INSERT INTO users (email, name, role, created_at)"
+                        " VALUES (?, ?, 'viewer', ?)",
+                        (placeholder_email, name, now),
+                    )
+                    sailor_to_user[name] = pcur.lastrowid or 0
+                except Exception:  # noqa: BLE001
+                    # Email conflict — find existing
+                    ecur = await db.execute(
+                        "SELECT id FROM users WHERE email = ?", (placeholder_email,)
+                    )
+                    erow = await ecur.fetchone()
+                    if erow:
+                        sailor_to_user[name] = erow["id"]
+        await db.commit()
+
+        # 4. Insert race_crew rows into crew_defaults
+        cur = await db.execute("SELECT race_id, position, sailor FROM race_crew")
+        rc_rows = await cur.fetchall()
+        for rc in rc_rows:
+            position_id = pos_map.get(rc["position"])
+            if position_id is None:
+                continue  # Unknown position, skip
+            user_id = sailor_to_user.get(rc["sailor"])
+            await db.execute(
+                "INSERT OR IGNORE INTO crew_defaults"
+                " (race_id, position_id, user_id, attributed, created_at)"
+                " VALUES (?, ?, ?, 1, ?)",
+                (rc["race_id"], position_id, user_id, now),
+            )
+        await db.commit()
+
+        # 5. Migrate crew_consents sailor_name → user_id
+        cur = await db.execute("SELECT id, sailor_name FROM crew_consents WHERE user_id IS NULL")
+        consent_rows = await cur.fetchall()
+        for cr in consent_rows:
+            uid = sailor_to_user.get(cr["sailor_name"])
+            if uid is not None:
+                await db.execute(
+                    "UPDATE crew_consents SET user_id = ? WHERE id = ?",
+                    (uid, cr["id"]),
+                )
+        await db.commit()
+
+        # 6. Rebuild crew_consents without sailor_name column
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS crew_consents_new ("
+            "  id           INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  user_id      INTEGER REFERENCES users(id),"
+            "  consent_type TEXT    NOT NULL,"
+            "  granted      INTEGER NOT NULL DEFAULT 1,"
+            "  granted_at   TEXT    NOT NULL,"
+            "  revoked_at   TEXT,"
+            "  UNIQUE(user_id, consent_type)"
+            ")"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO crew_consents_new"
+            " (id, user_id, consent_type, granted, granted_at, revoked_at)"
+            " SELECT id, user_id, consent_type, granted, granted_at, revoked_at"
+            " FROM crew_consents"
+        )
+        await db.execute("DROP TABLE crew_consents")
+        await db.execute("ALTER TABLE crew_consents_new RENAME TO crew_consents")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_crew_consents_user ON crew_consents(user_id)"
+        )
+        await db.commit()
+
+        # 7. Drop old tables
+        await db.execute("DROP TABLE IF EXISTS race_crew")
+        await db.execute("DROP TABLE IF EXISTS recent_sailors")
+        await db.commit()
+        logger.info("v38 data migration complete: crew_defaults populated, old tables dropped")
 
     # ------------------------------------------------------------------
     # Write (batched)
@@ -1855,8 +2013,8 @@ class Storage:
                 f" ) AS has_transcript,"
                 f" (SELECT COUNT(*) > 0 FROM race_results rr"
                 f"   WHERE rr.race_id = r.id) AS has_results,"
-                f" (SELECT COUNT(*) > 0 FROM race_crew rc"
-                f"   WHERE rc.race_id = r.id) AS has_crew,"
+                f" (SELECT COUNT(*) > 0 FROM crew_defaults cd"
+                f"   WHERE cd.race_id = r.id) AS has_crew,"
                 f" (SELECT COUNT(*) > 0 FROM race_sails rs"
                 f"   WHERE rs.race_id = r.id) AS has_sails,"
                 f" (SELECT COUNT(*) > 0 FROM session_notes sn"
@@ -1953,9 +2111,9 @@ class Storage:
         # Attach crew to all session types (debriefs inherit from parent race)
         for session in result:
             if session["type"] in ("race", "practice"):
-                session["crew"] = await self.get_race_crew(session["id"])
+                session["crew"] = await self.resolve_crew(session["id"])
             elif session["type"] == "debrief" and session.get("parent_race_id"):
-                session["crew"] = await self.get_race_crew(session["parent_race_id"])
+                session["crew"] = await self.resolve_crew(session["parent_race_id"])
             else:
                 session["crew"] = []
 
@@ -2014,87 +2172,199 @@ class Storage:
         return (cur.rowcount or 0) > 0
 
     # ------------------------------------------------------------------
-    # Race crew
+    # Crew positions & defaults (#305)
     # ------------------------------------------------------------------
 
-    async def set_race_crew(self, race_id: int, crew: list[dict[str, str]]) -> None:
-        """Set crew positions for a race (full-replace semantics).
+    async def get_crew_positions(self) -> list[dict[str, Any]]:
+        """Return configured crew positions ordered by display_order."""
+        cur = await self._conn().execute(
+            "SELECT id, name, display_order, created_at FROM crew_positions ORDER BY display_order"
+        )
+        return [dict(r) for r in await cur.fetchall()]
 
-        Each entry must have ``position`` and ``sailor`` keys.  Blank sailor
-        names must be filtered by the caller before invoking this method.
-        All existing positions not present in *crew* are deleted.
-        Each sailor name is upserted into ``recent_sailors``.
+    async def set_crew_positions(self, positions: list[dict[str, Any]]) -> None:
+        """Admin: replace crew positions list.
+
+        Each entry must have ``name`` and ``display_order`` keys.
+        Existing positions not in the new list are deleted (cascades to
+        crew_defaults via FK).
         """
         from datetime import UTC
         from datetime import datetime as _datetime
 
         db = self._conn()
-        now_str = _datetime.now(UTC).isoformat()
+        now = _datetime.now(UTC).isoformat()
 
-        if crew:
-            positions = [c["position"] for c in crew]
-            placeholders = ",".join("?" * len(positions))
-            await db.execute(
-                f"DELETE FROM race_crew WHERE race_id = ? AND position NOT IN ({placeholders})",
-                (race_id, *positions),
-            )
+        # Upsert by name, delete missing
+        new_names = {p["name"] for p in positions}
+        cur = await db.execute("SELECT id, name FROM crew_positions")
+        existing = {r["name"]: r["id"] for r in await cur.fetchall()}
+
+        for name in existing:
+            if name not in new_names:
+                await db.execute("DELETE FROM crew_positions WHERE name = ?", (name,))
+
+        for p in positions:
+            if p["name"] in existing:
+                await db.execute(
+                    "UPDATE crew_positions SET display_order = ? WHERE id = ?",
+                    (p["display_order"], existing[p["name"]]),
+                )
+            else:
+                await db.execute(
+                    "INSERT INTO crew_positions (name, display_order, created_at) VALUES (?, ?, ?)",
+                    (p["name"], p["display_order"], now),
+                )
+        await db.commit()
+
+    async def set_crew_defaults(self, race_id: int | None, crew: list[dict[str, Any]]) -> None:
+        """Set boat-level (race_id=None) or race-level crew (full-replace).
+
+        Each entry must have ``position_id``.  Optional keys: ``user_id``,
+        ``attributed`` (default True), ``body_weight``, ``gear_weight``.
+        """
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        db = self._conn()
+        now = _datetime.now(UTC).isoformat()
+
+        if race_id is None:
+            await db.execute("DELETE FROM crew_defaults WHERE race_id IS NULL")
         else:
-            await db.execute("DELETE FROM race_crew WHERE race_id = ?", (race_id,))
+            await db.execute("DELETE FROM crew_defaults WHERE race_id = ?", (race_id,))
 
         for entry in crew:
-            position = entry["position"]
-            sailor = entry["sailor"]
             await db.execute(
-                "INSERT OR REPLACE INTO race_crew (race_id, position, sailor) VALUES (?, ?, ?)",
-                (race_id, position, sailor),
+                "INSERT INTO crew_defaults"
+                " (race_id, position_id, user_id, attributed, body_weight,"
+                "  gear_weight, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    race_id,
+                    entry["position_id"],
+                    entry.get("user_id"),
+                    int(entry.get("attributed", True)),
+                    entry.get("body_weight"),
+                    entry.get("gear_weight"),
+                    now,
+                ),
             )
-            await db.execute(
-                "INSERT INTO recent_sailors (sailor, last_used) VALUES (?, ?)"
-                " ON CONFLICT(sailor) DO UPDATE SET last_used = excluded.last_used",
-                (sailor, now_str),
-            )
-
         await db.commit()
-        logger.debug("Crew set for race {}: {} positions", race_id, len(crew))
+        logger.debug("Crew defaults set for race_id={}: {} entries", race_id, len(crew))
+
+    async def get_crew_defaults(self, race_id: int | None) -> list[dict[str, Any]]:
+        """Return crew entries for a specific level (boat or race).
+
+        Results include joined position name and user name/email.
+        """
+        db = self._conn()
+        if race_id is None:
+            where, params = "cd.race_id IS NULL", ()
+        else:
+            where, params = "cd.race_id = ?", (race_id,)
+        cur = await db.execute(
+            "SELECT cd.id, cd.race_id, cd.position_id, cd.user_id,"
+            "       cd.attributed, cd.body_weight, cd.gear_weight, cd.created_at,"
+            "       cp.name AS position, cp.display_order,"
+            "       u.name AS user_name, u.email AS user_email"
+            " FROM crew_defaults cd"
+            " JOIN crew_positions cp ON cp.id = cd.position_id"
+            " LEFT JOIN users u ON u.id = cd.user_id"
+            f" WHERE {where}"
+            " ORDER BY cp.display_order",
+            params,
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def resolve_crew(self, race_id: int) -> list[dict[str, Any]]:
+        """Merge boat-level defaults with race-level overrides.
+
+        For each configured position, the race-level entry wins if present;
+        otherwise the boat-level default is used.  Returns position info,
+        user info, attributed flag, weights, and override tracking.
+        """
+        boat_entries = await self.get_crew_defaults(None)
+        race_entries = await self.get_crew_defaults(race_id)
+
+        boat_by_pos: dict[int, dict[str, Any]] = {e["position_id"]: e for e in boat_entries}
+        race_by_pos: dict[int, dict[str, Any]] = {e["position_id"]: e for e in race_entries}
+
+        positions = await self.get_crew_positions()
+        result: list[dict[str, Any]] = []
+
+        for pos in positions:
+            pid = pos["id"]
+            race_row = race_by_pos.get(pid)
+            boat_row = boat_by_pos.get(pid)
+
+            if race_row:
+                entry = dict(race_row)
+                entry["source"] = "race"
+                if boat_row and boat_row.get("user_id") != race_row.get("user_id"):
+                    entry["supersedes_user_id"] = boat_row.get("user_id")
+                    entry["supersedes_user_name"] = boat_row.get("user_name")
+                else:
+                    entry["supersedes_user_id"] = None
+                    entry["supersedes_user_name"] = None
+                result.append(entry)
+            elif boat_row:
+                entry = dict(boat_row)
+                entry["source"] = "boat"
+                entry["supersedes_user_id"] = None
+                entry["supersedes_user_name"] = None
+                result.append(entry)
+
+        return result
+
+    async def create_placeholder_user(self, name: str) -> int:
+        """Create a user with no real credentials for non-system crew.
+
+        Returns the user id (existing or newly created).
+        """
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        email = f"placeholder+{name.lower().replace(' ', '.')}@helmlog.local"
+        db = self._conn()
+
+        # Check if placeholder already exists
+        cur = await db.execute("SELECT id FROM users WHERE email = ?", (email,))
+        row = await cur.fetchone()
+        if row:
+            return row["id"]
+
+        cur = await db.execute(
+            "INSERT INTO users (email, name, role, created_at) VALUES (?, ?, 'viewer', ?)",
+            (email, name, now),
+        )
+        await db.commit()
+        assert cur.lastrowid is not None
+        return cur.lastrowid
 
     async def get_race_crew(self, race_id: int) -> list[dict[str, str]]:
-        """Return crew for *race_id* ordered by canonical position (helm first)."""
-        db = self._conn()
-        cur = await db.execute(
-            "SELECT position, sailor FROM race_crew WHERE race_id = ?",
-            (race_id,),
-        )
-        rows = await cur.fetchall()
-        position_order = {p: i for i, p in enumerate(_POSITIONS)}
-        result = [{"position": row["position"], "sailor": row["sailor"]} for row in rows]
-        result.sort(key=lambda x: position_order.get(x["position"], 99))
+        """Return crew for *race_id* in the legacy format for backward compat.
+
+        Returns list of ``{"position": str, "sailor": str}`` dicts.
+        """
+        resolved = await self.resolve_crew(race_id)
+        result: list[dict[str, str]] = []
+        for entry in resolved:
+            if entry.get("user_name") and entry.get("attributed"):
+                result.append(
+                    {
+                        "position": entry["position"],
+                        "sailor": entry["user_name"],
+                    }
+                )
         return result
 
-    async def get_recent_sailors(self, limit: int = 10) -> list[str]:
-        """Return the most recently used sailor names, newest first."""
+    async def update_user_weight(self, user_id: int, weight_lbs: float | None) -> None:
+        """Update a user's body weight."""
         db = self._conn()
-        cur = await db.execute(
-            "SELECT sailor FROM recent_sailors ORDER BY last_used DESC LIMIT ?",
-            (limit,),
-        )
-        rows = await cur.fetchall()
-        return [row["sailor"] for row in rows]
-
-    async def get_last_session_crew(self) -> list[dict[str, str]]:
-        """Return crew from the most recently ended race/practice, or [] if none."""
-        db = self._conn()
-        cur = await db.execute(
-            "SELECT position, sailor FROM race_crew"
-            " WHERE race_id = ("
-            "   SELECT id FROM races WHERE end_utc IS NOT NULL"
-            "   ORDER BY end_utc DESC LIMIT 1"
-            " )"
-        )
-        rows = await cur.fetchall()
-        position_order = {p: i for i, p in enumerate(_POSITIONS)}
-        result = [{"position": row["position"], "sailor": row["sailor"]} for row in rows]
-        result.sort(key=lambda x: position_order.get(x["position"], 99))
-        return result
+        await db.execute("UPDATE users SET weight_lbs = ? WHERE id = ?", (weight_lbs, user_id))
+        await db.commit()
 
     # ------------------------------------------------------------------
     # Boat registry
@@ -3063,19 +3333,22 @@ class Storage:
         assert cur.lastrowid is not None
         return cur.lastrowid
 
+    _USER_COLS = (
+        "id, email, name, role, created_at, last_seen,"
+        " avatar_path, is_developer, is_active, weight_lbs"
+    )
+
     async def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
-        cols = "id, email, name, role, created_at, last_seen, avatar_path, is_developer, is_active"
         cur = await self._conn().execute(
-            f"SELECT {cols} FROM users WHERE id = ?",
+            f"SELECT {self._USER_COLS} FROM users WHERE id = ?",
             (user_id,),
         )
         row = await cur.fetchone()
         return dict(row) if row else None
 
     async def get_user_by_email(self, email: str) -> dict[str, Any] | None:
-        cols = "id, email, name, role, created_at, last_seen, avatar_path, is_developer, is_active"
         cur = await self._conn().execute(
-            f"SELECT {cols} FROM users WHERE email = ?",
+            f"SELECT {self._USER_COLS} FROM users WHERE email = ?",
             (email.lower().strip(),),
         )
         row = await cur.fetchone()
@@ -3765,8 +4038,8 @@ class Storage:
     # Crew consent (#202)
     # ------------------------------------------------------------------
 
-    async def set_crew_consent(self, sailor_name: str, consent_type: str, granted: bool) -> int:
-        """Record or update crew consent. Returns the row id."""
+    async def set_crew_consent(self, user_id: int, consent_type: str, granted: bool) -> int:
+        """Record or update crew consent for a user. Returns the row id."""
         from datetime import UTC
         from datetime import datetime as _datetime
 
@@ -3774,52 +4047,57 @@ class Storage:
         db = self._conn()
         if granted:
             cur = await db.execute(
-                "INSERT INTO crew_consents (sailor_name, consent_type, granted, granted_at)"
+                "INSERT INTO crew_consents (user_id, consent_type, granted, granted_at)"
                 " VALUES (?, ?, 1, ?)"
-                " ON CONFLICT(sailor_name, consent_type)"
+                " ON CONFLICT(user_id, consent_type)"
                 " DO UPDATE SET granted = 1, granted_at = excluded.granted_at, revoked_at = NULL",
-                (sailor_name.strip(), consent_type, now),
+                (user_id, consent_type, now),
             )
         else:
             cur = await db.execute(
                 "INSERT INTO crew_consents"
-                " (sailor_name, consent_type, granted, granted_at, revoked_at)"
+                " (user_id, consent_type, granted, granted_at, revoked_at)"
                 " VALUES (?, ?, 0, ?, ?)"
-                " ON CONFLICT(sailor_name, consent_type)"
+                " ON CONFLICT(user_id, consent_type)"
                 " DO UPDATE SET granted = 0, revoked_at = excluded.revoked_at",
-                (sailor_name.strip(), consent_type, now, now),
+                (user_id, consent_type, now, now),
             )
         await db.commit()
         return cur.lastrowid or 0
 
-    async def get_crew_consents(self, sailor_name: str) -> list[dict[str, Any]]:
-        """Return all consent records for a sailor."""
+    async def get_crew_consents(self, user_id: int) -> list[dict[str, Any]]:
+        """Return all consent records for a user."""
         cur = await self._conn().execute(
-            "SELECT id, sailor_name, consent_type, granted, granted_at, revoked_at"
-            " FROM crew_consents WHERE sailor_name = ?",
-            (sailor_name.strip(),),
+            "SELECT cc.id, cc.user_id, cc.consent_type, cc.granted,"
+            "       cc.granted_at, cc.revoked_at, u.name AS user_name"
+            " FROM crew_consents cc"
+            " LEFT JOIN users u ON u.id = cc.user_id"
+            " WHERE cc.user_id = ?",
+            (user_id,),
         )
         return [dict(r) for r in await cur.fetchall()]
 
     async def list_crew_consents(self) -> list[dict[str, Any]]:
         """Return all consent records."""
         cur = await self._conn().execute(
-            "SELECT id, sailor_name, consent_type, granted, granted_at, revoked_at"
-            " FROM crew_consents ORDER BY sailor_name, consent_type"
+            "SELECT cc.id, cc.user_id, cc.consent_type, cc.granted,"
+            "       cc.granted_at, cc.revoked_at, u.name AS user_name"
+            " FROM crew_consents cc"
+            " LEFT JOIN users u ON u.id = cc.user_id"
+            " ORDER BY u.name, cc.consent_type"
         )
         return [dict(r) for r in await cur.fetchall()]
 
-    async def anonymize_sailor(self, sailor_name: str, replacement: str = "Anonymous") -> int:
-        """Replace a sailor name across all sessions. Returns number of rows updated."""
+    async def anonymize_sailor(self, user_id: int, replacement: str = "Anonymous") -> int:
+        """Anonymize a crew member by updating their user name. Returns rows updated."""
         db = self._conn()
         cur = await db.execute(
-            "UPDATE race_crew SET sailor = ? WHERE sailor = ?",
-            (replacement, sailor_name.strip()),
+            "UPDATE users SET name = ? WHERE id = ?",
+            (replacement, user_id),
         )
         count = cur.rowcount or 0
-        await db.execute("DELETE FROM recent_sailors WHERE sailor = ?", (sailor_name.strip(),))
         await db.commit()
-        logger.info("Sailor {!r} anonymized to {!r} ({} rows)", sailor_name, replacement, count)
+        logger.info("User {} anonymized to {!r}", user_id, replacement)
         return count
 
     # ------------------------------------------------------------------
