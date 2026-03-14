@@ -3672,6 +3672,199 @@ def create_app(
         return JSONResponse({"deleted": count})
 
     # ------------------------------------------------------------------
+    # /api/sessions/{id}/threads  &  /api/threads  &  /api/comments (#282)
+    # ------------------------------------------------------------------
+
+    @app.post("/api/sessions/{session_id}/threads", status_code=201)
+    async def api_create_thread(
+        request: Request,
+        session_id: int,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Create a comment thread for a session."""
+        body = await request.json()
+        anchor_timestamp: str | None = body.get("anchor_timestamp")
+        mark_reference: str | None = body.get("mark_reference")
+        title: str | None = body.get("title")
+        from helmlog.storage import _MARK_REFERENCES  # noqa: PLC0415
+
+        if mark_reference and mark_reference not in _MARK_REFERENCES:
+            raise HTTPException(
+                status_code=400, detail=f"Unknown mark reference: {mark_reference!r}"
+            )
+        thread_id = await storage.create_comment_thread(
+            session_id,
+            user["id"],
+            anchor_timestamp=anchor_timestamp,
+            mark_reference=mark_reference,
+            title=title,
+        )
+        await _audit(
+            request, "thread.create", detail=f"thread={thread_id} session={session_id}", user=user
+        )
+        return JSONResponse({"id": thread_id}, status_code=201)
+
+    @app.get("/api/sessions/{session_id}/threads")
+    async def api_list_threads(
+        session_id: int,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """List threads for a session with unread counts."""
+        threads = await storage.list_comment_threads(session_id, user["id"])
+        return JSONResponse(threads)
+
+    @app.get("/api/threads/{thread_id}")
+    async def api_get_thread(
+        thread_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Get a thread with all its comments."""
+        thread = await storage.get_comment_thread(thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        return JSONResponse(thread)
+
+    @app.post("/api/threads/{thread_id}/comments", status_code=201)
+    async def api_create_comment(
+        request: Request,
+        thread_id: int,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Add a comment to a thread."""
+        thread = await storage.get_comment_thread(thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        body = await request.json()
+        text: str = body.get("body", "").strip()
+        if not text:
+            raise HTTPException(status_code=422, detail="body is required")
+        comment_id = await storage.create_comment(thread_id, user["id"], text)
+        await _audit(
+            request, "comment.create", detail=f"comment={comment_id} thread={thread_id}", user=user
+        )
+        return JSONResponse({"id": comment_id}, status_code=201)
+
+    @app.put("/api/comments/{comment_id}")
+    async def api_update_comment(
+        request: Request,
+        comment_id: int,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Edit a comment. Only the author can edit."""
+        comment = await storage.get_comment(comment_id)
+        if comment is None:
+            raise HTTPException(status_code=404, detail="Comment not found")
+        if comment["author"] != user["id"] and user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Only the author or admin can edit")
+        body = await request.json()
+        text: str = body.get("body", "").strip()
+        if not text:
+            raise HTTPException(status_code=422, detail="body is required")
+        await storage.update_comment(comment_id, text)
+        await _audit(request, "comment.update", detail=f"comment={comment_id}", user=user)
+        return JSONResponse({"ok": True})
+
+    @app.delete("/api/comments/{comment_id}", status_code=204)
+    async def api_delete_comment(
+        request: Request,
+        comment_id: int,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> Response:
+        """Delete a comment. Only the author or admin can delete."""
+        comment = await storage.get_comment(comment_id)
+        if comment is None:
+            raise HTTPException(status_code=404, detail="Comment not found")
+        if comment["author"] != user["id"] and user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Only the author or admin can delete")
+        await storage.delete_comment(comment_id)
+        await _audit(request, "comment.delete", detail=f"comment={comment_id}", user=user)
+        return Response(status_code=204)
+
+    @app.post("/api/threads/{thread_id}/resolve")
+    async def api_resolve_thread(
+        request: Request,
+        thread_id: int,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Resolve a thread. Only the creator or admin can resolve."""
+        thread = await storage.get_comment_thread(thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        if thread["created_by"] != user["id"] and user.get("role") != "admin":
+            raise HTTPException(
+                status_code=403, detail="Only the thread creator or admin can resolve"
+            )
+        body = await request.json()
+        summary: str | None = body.get("resolution_summary")
+        await storage.resolve_comment_thread(thread_id, user["id"], summary)
+        await _audit(request, "thread.resolve", detail=f"thread={thread_id}", user=user)
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/threads/{thread_id}/unresolve")
+    async def api_unresolve_thread(
+        request: Request,
+        thread_id: int,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Unresolve a thread. Only the creator or admin can unresolve."""
+        thread = await storage.get_comment_thread(thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        if thread["created_by"] != user["id"] and user.get("role") != "admin":
+            raise HTTPException(
+                status_code=403, detail="Only the thread creator or admin can unresolve"
+            )
+        await storage.unresolve_comment_thread(thread_id)
+        await _audit(request, "thread.unresolve", detail=f"thread={thread_id}", user=user)
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/threads/{thread_id}/read")
+    async def api_mark_thread_read(
+        thread_id: int,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Mark a thread as read for the current user."""
+        thread = await storage.get_comment_thread(thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        await storage.mark_thread_read(thread_id, user["id"])
+        return JSONResponse({"ok": True})
+
+    @app.delete("/api/threads/{thread_id}", status_code=204)
+    async def api_delete_thread(
+        request: Request,
+        thread_id: int,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> Response:
+        """Delete a thread. Only the creator or admin can delete."""
+        thread = await storage.get_comment_thread(thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        if thread["created_by"] != user["id"] and user.get("role") != "admin":
+            raise HTTPException(
+                status_code=403, detail="Only the thread creator or admin can delete"
+            )
+        await storage.delete_comment_thread(thread_id)
+        await _audit(request, "thread.delete", detail=f"thread={thread_id}", user=user)
+        return Response(status_code=204)
+
+    @app.post("/api/comments/redact-author")
+    async def api_redact_comment_author(
+        request: Request,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Redact comment attribution for a user. User can redact self; admin can redact anyone."""
+        body = await request.json()
+        target_user_id: int = body.get("user_id", user["id"])
+        if target_user_id != user["id"] and user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Only admin can redact other users")
+        count = await storage.redact_comment_author(target_user_id)
+        await _audit(
+            request, "comment.redact", detail=f"user={target_user_id} count={count}", user=user
+        )
+        return JSONResponse({"redacted": count})
+
+    # ------------------------------------------------------------------
     # /api/sails  &  /api/sessions/{id}/sails
     # ------------------------------------------------------------------
 

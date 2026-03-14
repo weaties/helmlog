@@ -66,12 +66,23 @@ _LIVE_KEYS = (
     "awa_deg",
 )
 
+_MARK_REFERENCES: frozenset[str] = frozenset(
+    {
+        "start",
+        "finish",
+        *(f"weather_mark_{i}" for i in range(1, 10)),
+        *(f"leeward_mark_{i}" for i in range(1, 10)),
+        *(f"gate_{i}" for i in range(1, 10)),
+        *(f"offset_mark_{i}" for i in range(1, 10)),
+    }
+)
+
 
 # ---------------------------------------------------------------------------
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 36
+_CURRENT_VERSION: int = 37
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -781,6 +792,42 @@ _MIGRATIONS: dict[int, str] = {
             ON boat_settings(race_id, ts);
         CREATE INDEX IF NOT EXISTS idx_boat_settings_extraction_run
             ON boat_settings(extraction_run_id);
+    """,
+    37: """
+        CREATE TABLE IF NOT EXISTS comment_threads (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id         INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+            anchor_timestamp   TEXT,
+            mark_reference     TEXT,
+            title              TEXT,
+            created_by         INTEGER REFERENCES users(id),
+            created_at         TEXT NOT NULL,
+            updated_at         TEXT NOT NULL,
+            resolved           INTEGER NOT NULL DEFAULT 0,
+            resolved_at        TEXT,
+            resolved_by        INTEGER REFERENCES users(id),
+            resolution_summary TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_comment_threads_session
+            ON comment_threads(session_id);
+
+        CREATE TABLE IF NOT EXISTS comments (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id  INTEGER NOT NULL REFERENCES comment_threads(id) ON DELETE CASCADE,
+            author     INTEGER REFERENCES users(id),
+            body       TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            edited_at  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_comments_thread
+            ON comments(thread_id);
+
+        CREATE TABLE IF NOT EXISTS comment_read_state (
+            user_id   INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            thread_id INTEGER NOT NULL REFERENCES comment_threads(id) ON DELETE CASCADE,
+            last_read TEXT NOT NULL,
+            PRIMARY KEY (user_id, thread_id)
+        );
     """,
 }
 
@@ -4254,6 +4301,227 @@ class Storage:
         )
         await db.commit()
         return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # Threaded comments (#282)
+    # ------------------------------------------------------------------
+
+    async def create_comment_thread(
+        self,
+        session_id: int,
+        created_by: int,
+        *,
+        anchor_timestamp: str | None = None,
+        mark_reference: str | None = None,
+        title: str | None = None,
+    ) -> int:
+        """Create a comment thread anchored to a session.
+
+        Returns the new thread ID.
+        """
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        cur = await db.execute(
+            "INSERT INTO comment_threads"
+            " (session_id, anchor_timestamp, mark_reference, title,"
+            "  created_by, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (session_id, anchor_timestamp, mark_reference, title, created_by, now, now),
+        )
+        await db.commit()
+        return cur.lastrowid or 0
+
+    async def list_comment_threads(
+        self,
+        session_id: int,
+        user_id: int,
+    ) -> list[dict[str, Any]]:
+        """Return threads for a session with unread counts per user."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT t.id, t.session_id, t.anchor_timestamp, t.mark_reference,"
+            "   t.title, t.created_by, t.created_at, t.updated_at,"
+            "   t.resolved, t.resolved_at, t.resolved_by, t.resolution_summary,"
+            "   u.name AS author_name, u.email AS author_email,"
+            "   (SELECT COUNT(*) FROM comments c WHERE c.thread_id = t.id) AS comment_count,"
+            "   (SELECT COUNT(*) FROM comments c WHERE c.thread_id = t.id"
+            "     AND c.created_at > COALESCE("
+            "       (SELECT rs.last_read FROM comment_read_state rs"
+            "         WHERE rs.user_id = ? AND rs.thread_id = t.id), '')) AS unread_count"
+            " FROM comment_threads t"
+            " LEFT JOIN users u ON t.created_by = u.id"
+            " WHERE t.session_id = ?"
+            " ORDER BY t.created_at",
+            (user_id, session_id),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_comment_thread(
+        self,
+        thread_id: int,
+    ) -> dict[str, Any] | None:
+        """Return a single thread with its comments."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT t.*, u.name AS author_name, u.email AS author_email"
+            " FROM comment_threads t"
+            " LEFT JOIN users u ON t.created_by = u.id"
+            " WHERE t.id = ?",
+            (thread_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        thread = dict(row)
+        cur = await db.execute(
+            "SELECT c.id, c.thread_id, c.author, c.body, c.created_at, c.edited_at,"
+            "   u.name AS author_name, u.email AS author_email"
+            " FROM comments c"
+            " LEFT JOIN users u ON c.author = u.id"
+            " WHERE c.thread_id = ?"
+            " ORDER BY c.created_at",
+            (thread_id,),
+        )
+        thread["comments"] = [dict(r) for r in await cur.fetchall()]
+        return thread
+
+    async def create_comment(
+        self,
+        thread_id: int,
+        author: int,
+        body: str,
+    ) -> int:
+        """Add a comment to a thread. Returns the comment ID."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        cur = await db.execute(
+            "INSERT INTO comments (thread_id, author, body, created_at) VALUES (?, ?, ?, ?)",
+            (thread_id, author, body, now),
+        )
+        # Touch thread updated_at
+        await db.execute(
+            "UPDATE comment_threads SET updated_at = ? WHERE id = ?",
+            (now, thread_id),
+        )
+        await db.commit()
+        return cur.lastrowid or 0
+
+    async def update_comment(
+        self,
+        comment_id: int,
+        body: str,
+    ) -> bool:
+        """Edit a comment body. Returns True if found."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        cur = await db.execute(
+            "UPDATE comments SET body = ?, edited_at = ? WHERE id = ?",
+            (body, now, comment_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+    async def delete_comment(self, comment_id: int) -> bool:
+        """Delete a comment. Returns True if found."""
+        db = self._conn()
+        cur = await db.execute("DELETE FROM comments WHERE id = ?", (comment_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+    async def get_comment(self, comment_id: int) -> dict[str, Any] | None:
+        """Return a single comment row."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT id, thread_id, author, body, created_at, edited_at FROM comments WHERE id = ?",
+            (comment_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def resolve_comment_thread(
+        self,
+        thread_id: int,
+        user_id: int,
+        resolution_summary: str | None = None,
+    ) -> bool:
+        """Mark a thread as resolved. Returns True if found."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        cur = await db.execute(
+            "UPDATE comment_threads"
+            " SET resolved = 1, resolved_at = ?, resolved_by = ?,"
+            "     resolution_summary = ?, updated_at = ?"
+            " WHERE id = ?",
+            (now, user_id, resolution_summary, now, thread_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+    async def unresolve_comment_thread(self, thread_id: int) -> bool:
+        """Mark a thread as unresolved. Returns True if found."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        cur = await db.execute(
+            "UPDATE comment_threads"
+            " SET resolved = 0, resolved_at = NULL, resolved_by = NULL,"
+            "     resolution_summary = NULL, updated_at = ?"
+            " WHERE id = ?",
+            (now, thread_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+    async def mark_thread_read(self, thread_id: int, user_id: int) -> None:
+        """Update the read-state for a user on a thread."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        await db.execute(
+            "INSERT INTO comment_read_state (user_id, thread_id, last_read)"
+            " VALUES (?, ?, ?)"
+            " ON CONFLICT(user_id, thread_id) DO UPDATE SET last_read = excluded.last_read",
+            (user_id, thread_id, now),
+        )
+        await db.commit()
+
+    async def redact_comment_author(self, user_id: int) -> int:
+        """Redact a user's attribution from all comments.
+
+        Replaces the author with NULL so the UI shows 'Crew Member'.
+        Returns the number of comments redacted.
+        """
+        db = self._conn()
+        cur = await db.execute(
+            "UPDATE comments SET author = NULL WHERE author = ?",
+            (user_id,),
+        )
+        await db.commit()
+        return cur.rowcount
+
+    async def delete_comment_thread(self, thread_id: int) -> bool:
+        """Delete a thread and all its comments (cascade). Returns True if found."""
+        db = self._conn()
+        cur = await db.execute("DELETE FROM comment_threads WHERE id = ?", (thread_id,))
+        await db.commit()
+        return cur.rowcount > 0
 
     # ------------------------------------------------------------------
     # Helpers
