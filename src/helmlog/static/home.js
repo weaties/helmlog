@@ -197,6 +197,19 @@ function toggleCrew() {
   if (crewExpanded && !_crewMetaLoaded) loadCrewMeta();
 }
 
+async function loadCrewSummary() {
+  // Fetch resolved crew for summary display on initial page load (no edit form needed)
+  try {
+    let url = '/api/crew/defaults';
+    if (state && state.current_race) {
+      url = '/api/races/' + state.current_race.id + '/crew';
+    }
+    const r = await fetch(url);
+    const data = await r.json();
+    updateCrewSummary(data.crew || []);
+  } catch (e) { console.error('crew summary error', e); }
+}
+
 async function loadCrewMeta() {
   try {
     const [posResp, userResp] = await Promise.all([
@@ -1890,6 +1903,7 @@ async function runSynthesize() {
 }
 
 loadState();
+loadCrewSummary();
 setInterval(loadState, 10000);
 setInterval(tick, 1000);
 loadInstruments();
