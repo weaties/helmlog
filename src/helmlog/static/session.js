@@ -1615,9 +1615,14 @@ async function loadDiscussion() {
     const title = t.title ? esc(t.title) : 'Thread #' + t.id;
     const author = t.author_name || t.author_email || 'Crew Member';
     const count = t.comment_count === 1 ? '1 comment' : t.comment_count + ' comments';
+    const resolutionHtml = t.resolved && t.resolution_summary
+      ? '<div style="background:#0d2a1a;border:1px solid #22543d;border-radius:4px;padding:4px 8px;margin-top:4px;font-size:.72rem;color:#86efac">'
+        + '<strong>Resolution:</strong> ' + esc(t.resolution_summary) + '</div>'
+      : '';
     return '<div class="thread-item' + resolved + '" onclick="openThread(' + t.id + ')">'
       + '<div><strong style="color:#e8eaf0">' + title + '</strong>' + anchor + unread + resolvedTag + '</div>'
       + '<div style="font-size:.72rem;color:#8892a4;margin-top:2px">' + esc(author) + ' &middot; ' + count + ' &middot; ' + fmtTime(t.created_at) + '</div>'
+      + resolutionHtml
       + '</div>';
   }).join('');
 }
