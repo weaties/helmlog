@@ -361,8 +361,9 @@ async function toggleHistoryCrew(sessionId) {
         const g = c.gear_weight || 0;
         totalBody += b;
         totalGear += g;
-        wt = ' <span style="color:#6b7a90;font-size:.72rem">(' + (b ? b.toFixed(0) : '0');
-        if (g) wt += '+' + g.toFixed(0) + 'g';
+        wt = ' <span style="color:#6b7a90;font-size:.72rem">(';
+        wt += b ? b.toFixed(0) + ' lbs' : '0';
+        if (g) wt += ' + ' + g.toFixed(0) + ' gear';
         wt += ')</span>';
       }
       return '<span style="color:#8892a4">' + pos + ':</span> ' + name + wt;
