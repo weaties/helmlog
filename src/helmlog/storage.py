@@ -2222,9 +2222,20 @@ class Storage:
 
         Each entry must have ``position_id``.  Optional keys: ``user_id``,
         ``attributed`` (default True), ``body_weight``, ``gear_weight``.
+
+        Raises ``ValueError`` if the same user_id appears in multiple entries.
         """
         from datetime import UTC
         from datetime import datetime as _datetime
+
+        # Validate no duplicate user_ids
+        seen_user_ids: set[int] = set()
+        for entry in crew:
+            uid = entry.get("user_id")
+            if uid is not None:
+                if uid in seen_user_ids:
+                    raise ValueError(f"Duplicate user_id {uid} in crew list")
+                seen_user_ids.add(uid)
 
         db = self._conn()
         now = _datetime.now(UTC).isoformat()

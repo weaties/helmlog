@@ -726,6 +726,22 @@ class TestCrewStorage:
         assert len(crew) == 1
         assert crew[0] == {"position": "helm", "sailor": "Alice"}
 
+    async def test_duplicate_user_id_rejected(self, storage: Storage) -> None:
+        """set_crew_defaults raises ValueError if same user_id appears twice."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        main_id = await self._pos_id(storage, "main")
+        alice_id = await storage.create_placeholder_user("Alice")
+
+        with pytest.raises(ValueError, match="Duplicate user_id"):
+            await storage.set_crew_defaults(
+                race_id,
+                [
+                    {"position_id": helm_id, "user_id": alice_id},
+                    {"position_id": main_id, "user_id": alice_id},
+                ],
+            )
+
     async def test_user_weight(self, storage: Storage) -> None:
         """update_user_weight stores weight_lbs on user record."""
         uid = await storage.create_placeholder_user("WeightTest")

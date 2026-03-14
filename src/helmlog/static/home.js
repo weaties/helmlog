@@ -219,12 +219,13 @@ function renderCrewRows() {
     html += '<div class="crew-row" data-pos-id="' + p.id + '">';
     html += '<span class="crew-pos">' + escHtml(label) + '</span>';
     html += '<select class="crew-select" '
-      + (canEdit ? 'onchange="onCrewChange()"' : 'disabled') + '>';
+      + (canEdit ? 'onchange="onCrewChange(this)"' : 'disabled') + '>';
     html += '<option value="">\u2014</option>';
     for (const u of _crewUsers) {
       const n = escAttr(u.name || u.email);
       html += '<option value="' + u.id + '">' + n + '</option>';
     }
+    if (canEdit) html += '<option value="__new__">+ Add new...</option>';
     html += '</select>';
     html += '</div>';
   }
@@ -261,6 +262,7 @@ function setCrewInputs(crew) {
       }
     }
   });
+  refreshCrewDropdowns();
 }
 
 function getCrewFromInputs() {
@@ -281,15 +283,63 @@ function updateCrewSummary(crew) {
   if (el) el.textContent = filled > 0 ? filled + ' assigned' : '';
 }
 
-function onCrewChange() {
-  // Debounced auto-save (like boat setup)
+async function onCrewChange(selectEl) {
+  // Handle "Add new..." option
+  if (selectEl && selectEl.value === '__new__') {
+    selectEl.value = '';  // Reset while prompting
+    const name = prompt('New crew member name:');
+    if (name && name.trim()) {
+      try {
+        const r = await fetch('/api/crew/placeholder', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({name: name.trim()})
+        });
+        if (r.ok) {
+          const data = await r.json();
+          _crewUsers.push({id: data.id, name: data.name, email: '', role: 'viewer'});
+          selectEl.value = String(data.id);
+        }
+      } catch (e) { console.error('create placeholder error', e); }
+    }
+  }
+  refreshCrewDropdowns();
+  // Debounced auto-save
   if (_crewSaveTimer) clearTimeout(_crewSaveTimer);
   const statusEl = document.getElementById('crew-status');
   if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Saving...'; }
   _crewSaveTimer = setTimeout(() => saveCrew(), 600);
-  // Update select border color
-  document.querySelectorAll('#crew-rows .crew-select').forEach(sel => {
-    sel.classList.toggle('has-value', !!sel.value);
+}
+
+function refreshCrewDropdowns() {
+  // Collect currently assigned user IDs per position
+  const assigned = new Map();
+  document.querySelectorAll('#crew-rows .crew-row').forEach(row => {
+    const sel = row.querySelector('.crew-select');
+    if (sel.value && sel.value !== '__new__') assigned.set(row.dataset.posId, sel.value);
+  });
+  const takenIds = new Set(assigned.values());
+
+  // Rebuild options in each dropdown, filtering out users taken by other positions
+  document.querySelectorAll('#crew-rows .crew-row').forEach(row => {
+    const sel = row.querySelector('.crew-select');
+    const currentVal = sel.value;
+    const role = typeof _userRole !== 'undefined' ? _userRole : 'viewer';
+    const canEdit = role === 'admin' || role === 'crew';
+
+    let html = '<option value="">\u2014</option>';
+    for (const u of _crewUsers) {
+      const uid = String(u.id);
+      // Show if: this is the currently selected user for this position, or not taken elsewhere
+      if (uid === currentVal || !takenIds.has(uid)) {
+        const n = escAttr(u.name || u.email);
+        const selected = uid === currentVal ? ' selected' : '';
+        html += '<option value="' + uid + '"' + selected + '>' + n + '</option>';
+      }
+    }
+    if (canEdit) html += '<option value="__new__">+ Add new...</option>';
+    sel.innerHTML = html;
+    sel.classList.toggle('has-value', !!currentVal && currentVal !== '__new__');
   });
 }
 

@@ -887,6 +887,28 @@ async def test_post_crew_invalid_position(storage: Storage) -> None:
 
 
 @pytest.mark.asyncio
+async def test_post_crew_duplicate_user_rejected(storage: Storage) -> None:
+    """POST /api/races/{id}/crew with same user in two positions returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _set_event(client)
+        race_id = (await client.post("/api/races/start")).json()["id"]
+        pos_ids = await _get_pos_ids(client)
+        alice_id = await _make_crew_user(client, "Alice")
+        resp = await client.post(
+            f"/api/races/{race_id}/crew",
+            json=[
+                {"position_id": pos_ids["helm"], "user_id": alice_id},
+                {"position_id": pos_ids["main"], "user_id": alice_id},
+            ],
+        )
+    assert resp.status_code == 422
+    assert "Duplicate" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_get_crew_unknown_race(storage: Storage) -> None:
     """GET /api/races/{id}/crew for a non-existent race returns 404."""
     app = create_app(storage)

@@ -2972,7 +2972,10 @@ def create_app(
             }
             for e in body
         ]
-        await storage.set_crew_defaults(race_id, crew)
+        try:
+            await storage.set_crew_defaults(race_id, crew)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         await _audit(request, "crew.set", detail=str(race_id), user=_user)
 
     @app.get("/api/races/{race_id}/crew")
@@ -3008,7 +3011,10 @@ def create_app(
             }
             for e in body
         ]
-        await storage.set_crew_defaults(None, crew)
+        try:
+            await storage.set_crew_defaults(None, crew)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         await _audit(request, "crew.defaults.set", user=_user)
 
     @app.get("/api/crew/defaults")
