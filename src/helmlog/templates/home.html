@@ -138,6 +138,21 @@
   </div>
 </div>
 
+<div class="card" id="sails-card">
+  <div class="crew-header" onclick="toggleSailsCard()">
+    <span class="label" style="margin-bottom:0">Sails</span>
+    <span style="display:flex;align-items:center;gap:8px">
+      <span id="sails-count" style="font-size:.78rem;color:#8892a4"></span>
+      <span id="sails-chevron" style="color:#8892a4;font-size:.85rem">&#9654;</span>
+    </span>
+  </div>
+  <div id="sails-summary" style="font-size:.82rem;margin-top:6px"></div>
+  <div id="sails-body" style="display:none;margin-top:10px">
+    <div id="sails-rows"></div>
+    <div id="sails-status" style="font-size:.78rem;color:#8892a4;margin-top:6px;display:none"></div>
+  </div>
+</div>
+
 <div id="controls">
   <button class="btn btn-primary"  id="btn-start-race"     onclick="startSession('race')">&#9654; START RACE 1</button>
   <button class="btn btn-practice" id="btn-start-practice" onclick="startSession('practice')">&#9654; START PRACTICE</button>

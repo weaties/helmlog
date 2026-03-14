@@ -125,7 +125,7 @@ _MARK_REFERENCES: frozenset[str] = frozenset(
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 38
+_CURRENT_VERSION: int = 41
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -361,6 +361,22 @@ _MIGRATIONS: dict[int, str] = {
             UNIQUE(race_id, sail_id)
         );
         CREATE INDEX IF NOT EXISTS idx_race_sails_race_id ON race_sails(race_id);
+
+        CREATE TABLE IF NOT EXISTS sail_defaults (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            sail_id INTEGER NOT NULL REFERENCES sails(id) ON DELETE CASCADE,
+            UNIQUE(sail_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS sail_changes (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            race_id      INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+            ts           TEXT NOT NULL,
+            main_id      INTEGER REFERENCES sails(id),
+            jib_id       INTEGER REFERENCES sails(id),
+            spinnaker_id INTEGER REFERENCES sails(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sail_changes_race_ts ON sail_changes(race_id, ts);
     """,
     15: """
         CREATE TABLE IF NOT EXISTS transcripts (
@@ -903,6 +919,32 @@ _MIGRATIONS: dict[int, str] = {
         -- 4. Add user_id column to crew_consents
         ALTER TABLE crew_consents ADD COLUMN user_id INTEGER REFERENCES users(id);
     """,
+    39: """
+        -- Point-of-sail field for sail inventory (#308)
+        ALTER TABLE sails ADD COLUMN point_of_sail TEXT NOT NULL DEFAULT 'both';
+        UPDATE sails SET point_of_sail = 'upwind' WHERE type = 'jib';
+        UPDATE sails SET point_of_sail = 'downwind' WHERE type = 'spinnaker';
+    """,
+    40: """
+        -- Default sail selection — boat-level defaults (#306)
+        CREATE TABLE IF NOT EXISTS sail_defaults (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            sail_id INTEGER NOT NULL REFERENCES sails(id) ON DELETE CASCADE,
+            UNIQUE(sail_id)
+        );
+    """,
+    41: """
+        -- Timestamped sail changes (#311)
+        CREATE TABLE IF NOT EXISTS sail_changes (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            race_id      INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+            ts           TEXT NOT NULL,
+            main_id      INTEGER REFERENCES sails(id),
+            jib_id       INTEGER REFERENCES sails(id),
+            spinnaker_id INTEGER REFERENCES sails(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sail_changes_race_ts ON sail_changes(race_id, ts);
+    """,
 }
 
 
@@ -1100,6 +1142,10 @@ class Storage:
         if current < 38:
             await self._migrate_v38_data()
 
+        # Post-DDL data migration for v41 (sail_changes from race_sails)
+        if current < 41:
+            await self._migrate_v41_sail_changes()
+
         logger.debug("Schema is at version {}", _CURRENT_VERSION)
 
     async def _migrate_v38_data(self) -> None:
@@ -1223,6 +1269,56 @@ class Storage:
         await db.execute("DROP TABLE IF EXISTS recent_sailors")
         await db.commit()
         logger.info("v38 data migration complete: crew_defaults populated, old tables dropped")
+
+    async def _migrate_v41_sail_changes(self) -> None:
+        """Data migration for v41: convert race_sails rows into sail_changes."""
+        db = self._conn()
+
+        # Check if sail_changes is already populated (idempotent)
+        cur = await db.execute("SELECT COUNT(*) FROM sail_changes")
+        row = await cur.fetchone()
+        if row is not None and row[0] > 0:
+            return
+
+        # For each race that has race_sails entries, create a sail_changes row
+        # using the race start_utc as the timestamp.
+        cur = await db.execute(
+            "SELECT DISTINCT rs.race_id, r.start_utc"
+            " FROM race_sails rs"
+            " JOIN races r ON r.id = rs.race_id"
+            " WHERE r.start_utc IS NOT NULL"
+        )
+        races = await cur.fetchall()
+        for race in races:
+            race_id = race["race_id"]
+            ts = race["start_utc"]
+            # Collect sail_ids by type for this race
+            scur = await db.execute(
+                "SELECT s.type, s.id"
+                " FROM race_sails rs JOIN sails s ON s.id = rs.sail_id"
+                " WHERE rs.race_id = ?",
+                (race_id,),
+            )
+            sails_by_type: dict[str, int | None] = {"main": None, "jib": None, "spinnaker": None}
+            for srow in await scur.fetchall():
+                if srow["type"] in sails_by_type:
+                    sails_by_type[srow["type"]] = srow["id"]
+            await db.execute(
+                "INSERT INTO sail_changes (race_id, ts, main_id, jib_id, spinnaker_id)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    race_id,
+                    ts,
+                    sails_by_type["main"],
+                    sails_by_type["jib"],
+                    sails_by_type["spinnaker"],
+                ),
+            )
+        await db.commit()
+        if races:
+            logger.info(
+                "v41 data migration: converted {} race_sails rows to sail_changes", len(races)
+            )
 
     # ------------------------------------------------------------------
     # Write (batched)
@@ -3047,16 +3143,23 @@ class Storage:
         sail_type: str,
         name: str,
         notes: str | None = None,
+        point_of_sail: str | None = None,
     ) -> int:
         """Insert a sail into the inventory and return its id.
 
+        If *point_of_sail* is ``None`` a sensible default is chosen based on
+        *sail_type*: ``jib`` → ``'upwind'``, ``spinnaker`` → ``'downwind'``,
+        everything else → ``'both'``.
+
         Raises ``ValueError`` on duplicate (type, name).
         """
+        if point_of_sail is None:
+            point_of_sail = {"jib": "upwind", "spinnaker": "downwind"}.get(sail_type, "both")
         db = self._conn()
         try:
             cur = await db.execute(
-                "INSERT INTO sails (type, name, notes) VALUES (?, ?, ?)",
-                (sail_type, name.strip(), notes),
+                "INSERT INTO sails (type, name, notes, point_of_sail) VALUES (?, ?, ?, ?)",
+                (sail_type, name.strip(), notes, point_of_sail),
             )
             await db.commit()
         except Exception as exc:
@@ -3076,7 +3179,8 @@ class Storage:
         db = self._conn()
         where = "" if include_inactive else "WHERE active = 1"
         cur = await db.execute(
-            f"SELECT id, type, name, notes, active FROM sails {where} ORDER BY type, name"
+            "SELECT id, type, name, notes, active, point_of_sail"
+            f" FROM sails {where} ORDER BY type, name"
         )
         rows = await cur.fetchall()
         return [
@@ -3086,6 +3190,7 @@ class Storage:
                 "name": row["name"],
                 "notes": row["notes"],
                 "active": bool(row["active"]),
+                "point_of_sail": row["point_of_sail"],
             }
             for row in rows
         ]
@@ -3097,9 +3202,10 @@ class Storage:
         name: str | None = None,
         notes: str | None = None,
         active: bool | None = None,
+        point_of_sail: str | None = None,
     ) -> bool:
         """Update sail fields.  Returns True if the sail was found and updated."""
-        if name is None and notes is None and active is None:
+        if name is None and notes is None and active is None and point_of_sail is None:
             return True  # nothing to do — treat as no-op success
         db = self._conn()
         parts: list[str] = []
@@ -3113,6 +3219,9 @@ class Storage:
         if active is not None:
             parts.append("active = ?")
             params.append(1 if active else 0)
+        if point_of_sail is not None:
+            parts.append("point_of_sail = ?")
+            params.append(point_of_sail)
         params.append(sail_id)
         cur = await db.execute(f"UPDATE sails SET {', '.join(parts)} WHERE id = ?", params)
         await db.commit()
@@ -3128,10 +3237,56 @@ class Storage:
     ) -> None:
         """Replace the sail selection for *race_id*.
 
-        Existing sail associations for the race are deleted and the provided
-        non-None sail ids are re-inserted.
+        Delegates to :meth:`insert_sail_change` with ``ts = now()``,
+        which also syncs the legacy ``race_sails`` table.
+        """
+        from datetime import UTC as _utc
+        from datetime import datetime as _dt
+
+        ts = _dt.now(_utc).isoformat()
+        await self.insert_sail_change(
+            race_id,
+            ts,
+            main_id=main_id,
+            jib_id=jib_id,
+            spinnaker_id=spinnaker_id,
+        )
+
+    async def get_race_sails(self, race_id: int) -> dict[str, Any]:
+        """Return the sail selection for *race_id*.
+
+        Delegates to :meth:`get_current_sails` which reads from
+        ``sail_changes`` instead of the legacy ``race_sails`` table.
+        """
+        return await self.get_current_sails(race_id)
+
+    # ------------------------------------------------------------------
+    # Sail changes (timestamped)
+    # ------------------------------------------------------------------
+
+    async def insert_sail_change(
+        self,
+        race_id: int,
+        ts: str,
+        *,
+        main_id: int | None,
+        jib_id: int | None,
+        spinnaker_id: int | None,
+    ) -> int:
+        """Insert a timestamped sail-change snapshot.
+
+        Also syncs the legacy ``race_sails`` table for backward compat.
+        Returns the new ``sail_changes`` row id.
         """
         db = self._conn()
+        cur = await db.execute(
+            "INSERT INTO sail_changes (race_id, ts, main_id, jib_id, spinnaker_id)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (race_id, ts, main_id, jib_id, spinnaker_id),
+        )
+        change_id = cur.lastrowid or 0
+
+        # Sync legacy race_sails table
         await db.execute("DELETE FROM race_sails WHERE race_id = ?", (race_id,))
         for sail_id in (main_id, jib_id, spinnaker_id):
             if sail_id is not None:
@@ -3140,21 +3295,100 @@ class Storage:
                     (race_id, sail_id),
                 )
         await db.commit()
-        logger.debug("Race sails set for race {}", race_id)
+        logger.debug("Sail change recorded for race {} at {}", race_id, ts)
+        return change_id
 
-    async def get_race_sails(self, race_id: int) -> dict[str, Any]:
-        """Return the sail selection for *race_id*.
+    async def get_current_sails(self, race_id: int) -> dict[str, Any]:
+        """Return the latest sail selection for *race_id* from ``sail_changes``.
+
+        Returns a dict with keys ``main``, ``jib``, ``spinnaker``, each
+        containing the full sail row dict or ``None`` if not set.
+        Falls back to empty if no rows exist.
+        """
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT sc.main_id, sc.jib_id, sc.spinnaker_id"
+            " FROM sail_changes sc"
+            " WHERE sc.race_id = ?"
+            " ORDER BY sc.ts DESC LIMIT 1",
+            (race_id,),
+        )
+        row = await cur.fetchone()
+        result: dict[str, dict[str, Any] | None] = dict.fromkeys(_SAIL_TYPES)
+        if row is None:
+            return result
+
+        for sail_type, col in (
+            ("main", "main_id"),
+            ("jib", "jib_id"),
+            ("spinnaker", "spinnaker_id"),
+        ):
+            sail_id = row[col]
+            if sail_id is None:
+                continue
+            scur = await db.execute(
+                "SELECT id, type, name, notes, active, point_of_sail FROM sails WHERE id = ?",
+                (sail_id,),
+            )
+            srow = await scur.fetchone()
+            if srow is not None:
+                result[sail_type] = {
+                    "id": srow["id"],
+                    "type": srow["type"],
+                    "name": srow["name"],
+                    "notes": srow["notes"],
+                    "active": bool(srow["active"]),
+                    "point_of_sail": srow["point_of_sail"],
+                }
+        return result
+
+    async def get_sail_change_history(self, race_id: int) -> list[dict[str, Any]]:
+        """Return all sail changes for *race_id* ordered by ts ASC, with resolved sail names."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT sc.id, sc.ts, sc.main_id, sc.jib_id, sc.spinnaker_id"
+            " FROM sail_changes sc"
+            " WHERE sc.race_id = ?"
+            " ORDER BY sc.ts ASC",
+            (race_id,),
+        )
+        rows = await cur.fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            entry: dict[str, Any] = {"id": row["id"], "ts": row["ts"]}
+            for sail_type, col in (
+                ("main", "main_id"),
+                ("jib", "jib_id"),
+                ("spinnaker", "spinnaker_id"),
+            ):
+                sail_id = row[col]
+                if sail_id is None:
+                    entry[sail_type] = None
+                    continue
+                scur = await db.execute(
+                    "SELECT id, type, name FROM sails WHERE id = ?",
+                    (sail_id,),
+                )
+                srow = await scur.fetchone()
+                entry[sail_type] = {"id": srow["id"], "name": srow["name"]} if srow else None
+            result.append(entry)
+        return result
+
+    # ------------------------------------------------------------------
+    # Sail defaults (boat-level)
+    # ------------------------------------------------------------------
+
+    async def get_sail_defaults(self) -> dict[str, Any]:
+        """Return the boat-level default sail selection.
 
         Returns a dict with keys ``main``, ``jib``, ``spinnaker``, each
         containing the full sail row dict or ``None`` if not set.
         """
         db = self._conn()
         cur = await db.execute(
-            "SELECT s.id, s.type, s.name, s.notes, s.active"
-            " FROM race_sails rs"
-            " JOIN sails s ON s.id = rs.sail_id"
-            " WHERE rs.race_id = ?",
-            (race_id,),
+            "SELECT s.id, s.type, s.name, s.notes, s.active, s.point_of_sail"
+            " FROM sail_defaults sd"
+            " JOIN sails s ON s.id = sd.sail_id",
         )
         rows = await cur.fetchall()
         result: dict[str, dict[str, Any] | None] = dict.fromkeys(_SAIL_TYPES)
@@ -3167,8 +3401,166 @@ class Storage:
                     "name": row["name"],
                     "notes": row["notes"],
                     "active": bool(row["active"]),
+                    "point_of_sail": row["point_of_sail"],
                 }
         return result
+
+    async def set_sail_defaults(
+        self,
+        *,
+        main_id: int | None,
+        jib_id: int | None,
+        spinnaker_id: int | None,
+    ) -> None:
+        """Replace the boat-level default sail selection.
+
+        Existing defaults are deleted and the provided non-None sail ids
+        are re-inserted.  Validates that each sail exists and matches the
+        expected type.
+        """
+        db = self._conn()
+        slot_map: dict[str, int | None] = {
+            "main": main_id,
+            "jib": jib_id,
+            "spinnaker": spinnaker_id,
+        }
+        for slot_type, sail_id in slot_map.items():
+            if sail_id is None:
+                continue
+            cur = await db.execute("SELECT type FROM sails WHERE id = ?", (sail_id,))
+            row = await cur.fetchone()
+            if row is None:
+                msg = f"Sail id={sail_id} not found"
+                raise ValueError(msg)
+            if row["type"] != slot_type:
+                msg = (
+                    f"Sail id={sail_id} has type {row['type']!r},"
+                    f" expected {slot_type!r} for the {slot_type} slot"
+                )
+                raise ValueError(msg)
+        await db.execute("DELETE FROM sail_defaults")
+        for sail_id in (main_id, jib_id, spinnaker_id):
+            if sail_id is not None:
+                await db.execute(
+                    "INSERT OR IGNORE INTO sail_defaults (sail_id) VALUES (?)",
+                    (sail_id,),
+                )
+        await db.commit()
+        logger.debug("Sail defaults updated")
+
+    # ------------------------------------------------------------------
+    # Sail stats (for sail management page #307)
+    # ------------------------------------------------------------------
+
+    async def get_sail_stats(self) -> list[dict[str, Any]]:
+        """Return all sails (including inactive) with accumulated maneuver counts.
+
+        Each dict contains the sail fields plus ``total_tacks``,
+        ``total_gybes``, and ``total_sessions``.  Tack/gybe counts are
+        attributed using ``sail_changes`` — the active sail at each
+        maneuver's timestamp is determined by the latest ``sail_changes``
+        row with ``ts <= maneuver.ts``.
+        """
+        db = self._conn()
+        sails = await self.list_sails(include_inactive=True)
+        for sail in sails:
+            sid = sail["id"]
+            pos = sail["point_of_sail"]
+            # Count sessions this sail was used in (via sail_changes)
+            cur = await db.execute(
+                "SELECT COUNT(DISTINCT race_id) AS cnt FROM sail_changes"
+                " WHERE main_id = ? OR jib_id = ? OR spinnaker_id = ?",
+                (sid, sid, sid),
+            )
+            sail["total_sessions"] = (await cur.fetchone())["cnt"]
+
+            # Maneuver counts filtered by point_of_sail, attributed via sail_changes
+            if pos == "upwind":
+                type_filter = "('tack')"
+            elif pos == "downwind":
+                type_filter = "('gybe')"
+            else:
+                type_filter = "('tack', 'gybe')"
+
+            cur = await db.execute(
+                "SELECT m.type, COUNT(*) AS cnt"
+                " FROM maneuvers m"
+                " JOIN sail_changes sc ON sc.race_id = m.session_id"
+                "   AND sc.ts = ("
+                "     SELECT MAX(sc2.ts) FROM sail_changes sc2"
+                "     WHERE sc2.race_id = m.session_id AND sc2.ts <= m.ts"
+                "   )"
+                f" WHERE (sc.main_id = ? OR sc.jib_id = ? OR sc.spinnaker_id = ?)"
+                f"   AND m.type IN {type_filter}"
+                " GROUP BY m.type",
+                (sid, sid, sid),
+            )
+            counts = {row["type"]: row["cnt"] for row in await cur.fetchall()}
+            sail["total_tacks"] = counts.get("tack", 0)
+            sail["total_gybes"] = counts.get("gybe", 0)
+        return sails
+
+    async def get_sail_session_history(self, sail_id: int) -> list[dict[str, Any]]:
+        """Return sessions that used *sail_id*, newest first.
+
+        Each entry includes the session info, per-session tack/gybe
+        counts, and wind summary (avg TWS, min/max TWS).
+        Uses ``sail_changes`` instead of legacy ``race_sails``.
+        """
+        db = self._conn()
+        # Get the sail's point_of_sail for filtering
+        cur = await db.execute("SELECT point_of_sail FROM sails WHERE id = ?", (sail_id,))
+        sail_row = await cur.fetchone()
+        if sail_row is None:
+            return []
+        pos = sail_row["point_of_sail"]
+
+        # Sessions this sail was used in (via sail_changes)
+        cur = await db.execute(
+            "SELECT DISTINCT r.id, r.name, r.event, r.date, r.start_utc, r.end_utc"
+            " FROM sail_changes sc"
+            " JOIN races r ON r.id = sc.race_id"
+            " WHERE sc.main_id = ? OR sc.jib_id = ? OR sc.spinnaker_id = ?"
+            " ORDER BY r.start_utc DESC",
+            (sail_id, sail_id, sail_id),
+        )
+        sessions = [dict(row) for row in await cur.fetchall()]
+
+        for sess in sessions:
+            sid = sess["id"]
+            # Maneuver counts for this session
+            cur = await db.execute(
+                "SELECT type, COUNT(*) AS cnt FROM maneuvers"
+                " WHERE session_id = ? AND type IN ('tack', 'gybe')"
+                " GROUP BY type",
+                (sid,),
+            )
+            counts = {row["type"]: row["cnt"] for row in await cur.fetchall()}
+            sess["tacks"] = counts.get("tack", 0) if pos in ("upwind", "both") else None
+            sess["gybes"] = counts.get("gybe", 0) if pos in ("downwind", "both") else None
+
+            # Wind summary (true wind only: reference IN (0, 4))
+            start = sess.get("start_utc")
+            end = sess.get("end_utc")
+            if start and end:
+                cur = await db.execute(
+                    "SELECT AVG(wind_speed_kts) AS avg_tws,"
+                    " MIN(wind_speed_kts) AS min_tws,"
+                    " MAX(wind_speed_kts) AS max_tws"
+                    " FROM winds"
+                    " WHERE reference IN (0, 4) AND ts >= ? AND ts <= ?",
+                    (start, end),
+                )
+                wind = await cur.fetchone()
+                if wind and wind["avg_tws"] is not None:
+                    sess["avg_tws"] = round(wind["avg_tws"], 1)
+                    sess["min_tws"] = round(wind["min_tws"], 1)
+                    sess["max_tws"] = round(wind["max_tws"], 1)
+                else:
+                    sess["avg_tws"] = sess["min_tws"] = sess["max_tws"] = None
+            else:
+                sess["avg_tws"] = sess["min_tws"] = sess["max_tws"] = None
+        return sessions
 
     # ------------------------------------------------------------------
     # Transcripts

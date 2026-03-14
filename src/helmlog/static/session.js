@@ -762,7 +762,26 @@ async function loadSails() {
       + '</select></div>';
   });
   html += '<button class="btn-export" style="background:#2563eb;color:#fff;border-color:#2563eb;font-size:.78rem;margin-top:4px" onclick="saveSails()">Save Sails</button>';
+  html += '<div id="sail-changes-timeline"></div>';
   body.innerHTML = html;
+
+  // If no sails are set for this session, pre-select from boat-level defaults
+  const hasAnySail = slots.some(slot => current[slot] && current[slot].id);
+  if (!hasAnySail) {
+    try {
+      const defaultsResp = await fetch('/api/sails/defaults');
+      if (defaultsResp.ok) {
+        const defaults = await defaultsResp.json();
+        slots.forEach(slot => {
+          if (defaults[slot] && defaults[slot].id) {
+            const sel = document.getElementById('sail-select-' + slot);
+            if (sel) sel.value = String(defaults[slot].id);
+          }
+        });
+      }
+    } catch (_) { /* ignore — defaults are a convenience, not critical */ }
+  }
+  await loadSailChangeTimeline();
 }
 
 async function saveSails() {
@@ -775,7 +794,43 @@ async function saveSails() {
   const r = await fetch('/api/sessions/' + SESSION_ID + '/sails', {
     method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
   });
-  if (!r.ok) alert('Failed to save sails');
+  if (!r.ok) { alert('Failed to save sails'); return; }
+  await loadSailChangeTimeline();
+}
+
+async function loadSailChangeTimeline() {
+  const container = document.getElementById('sail-changes-timeline');
+  if (!container) return;
+  try {
+    const r = await fetch('/api/sessions/' + SESSION_ID + '/sail-changes');
+    if (!r.ok) return;
+    const data = await r.json();
+    const changes = data.changes || [];
+    if (changes.length <= 1) {
+      container.style.display = 'none';
+      return;
+    }
+    container.style.display = 'block';
+    let html = '<div style="font-size:.75rem;color:#8892a4;margin-top:8px;border-top:1px solid #1e3a5f;padding-top:8px">'
+      + '<strong>Sail Changes</strong></div>';
+    html += '<div style="font-size:.75rem;margin-top:4px">';
+    changes.forEach((c, i) => {
+      const ts = c.ts ? new Date(c.ts + (c.ts.endsWith('Z') ? '' : 'Z')) : null;
+      const timeStr = ts ? ts.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '—';
+      const names = ['main', 'jib', 'spinnaker']
+        .filter(s => c[s] && c[s].name)
+        .map(s => esc(c[s].name));
+      const label = names.length ? names.join(' · ') : '(none)';
+      const isFirst = i === 0;
+      html += '<div style="display:flex;gap:8px;align-items:baseline;margin-bottom:2px">'
+        + '<span style="color:#8892a4;min-width:70px">' + timeStr + '</span>'
+        + '<span' + (isFirst ? ' style="color:#6b7a90"' : '') + '>'
+        + (isFirst ? '(start) ' : '') + label + '</span>'
+        + '</div>';
+    });
+    html += '</div>';
+    container.innerHTML = html;
+  } catch (e) { console.error('sail changes timeline error', e); }
 }
 
 // ---------------------------------------------------------------------------

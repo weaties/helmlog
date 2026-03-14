@@ -281,12 +281,14 @@ class SailCreate(BaseModel):
     type: str  # 'main' | 'jib' | 'spinnaker'
     name: str
     notes: str | None = None
+    point_of_sail: str | None = None  # 'upwind' | 'downwind' | 'both'
 
 
 class SailUpdate(BaseModel):
     name: str | None = None
     notes: str | None = None
     active: bool | None = None
+    point_of_sail: str | None = None  # 'upwind' | 'downwind' | 'both'
 
 
 class RaceSailsSet(BaseModel):
@@ -1009,6 +1011,13 @@ def create_app(
                 user_role=user_role,
             ),
         )
+
+    @app.get("/sails", response_class=HTMLResponse, include_in_schema=False)
+    async def sails_page(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> Response:
+        return _templates.TemplateResponse(request, "sails.html", _tpl_ctx(request, "/sails"))
 
     @app.get("/admin/boats", response_class=HTMLResponse, include_in_schema=False)
     async def admin_boats_page(request: Request) -> Response:
@@ -2012,6 +2021,23 @@ def create_app(
         # Boat-level crew defaults auto-apply via resolve_crew() —
         # no explicit copy-forward needed (#305)
 
+        # Auto-apply sail defaults as initial sail_changes row (#311)
+        try:
+            sail_defaults = await storage.get_sail_defaults()
+            has_any = any(sail_defaults[t] is not None for t in ("main", "jib", "spinnaker"))
+            if has_any:
+                await storage.insert_sail_change(
+                    race.id,
+                    race.start_utc.isoformat(),
+                    main_id=sail_defaults["main"]["id"] if sail_defaults["main"] else None,
+                    jib_id=sail_defaults["jib"]["id"] if sail_defaults["jib"] else None,
+                    spinnaker_id=(
+                        sail_defaults["spinnaker"]["id"] if sail_defaults["spinnaker"] else None
+                    ),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to auto-apply sail defaults for race {}: {}", race.name, exc)
+
         if recorder is not None and audio_config is not None:
             from helmlog.audio import AudioDeviceNotFoundError
 
@@ -2109,8 +2135,20 @@ def create_app(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("WLAN auto-revert error: {}", exc)
 
+        async def _auto_detect_maneuvers(rid: int) -> None:
+            try:
+                from helmlog.maneuver_detector import detect_maneuvers
+
+                maneuvers = await detect_maneuvers(storage, rid)
+                tacks = sum(1 for m in maneuvers if m.type == "tack")
+                gybes = sum(1 for m in maneuvers if m.type == "gybe")
+                logger.info("Auto-detected {} tacks, {} gybes for race {}", tacks, gybes, rid)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Auto maneuver detection failed for race {}: {}", rid, exc)
+
         asyncio.ensure_future(_stop_cameras(race_id))
         asyncio.ensure_future(_network_auto_switch_end())
+        asyncio.ensure_future(_auto_detect_maneuvers(race_id))
 
         if recorder is not None and _audio_session_id is not None:
             completed = await recorder.stop()
@@ -2516,6 +2554,37 @@ def create_app(
                 [{"ts": s.ts, "parameter": s.parameter, "value": s.value} for s in race_level],
                 source="synthesized",
             )
+
+        # Auto-apply sail defaults for synthesized race (#311)
+        try:
+            sail_defaults = await storage.get_sail_defaults()
+            has_any = any(sail_defaults[t] is not None for t in ("main", "jib", "spinnaker"))
+            if has_any:
+                await storage.insert_sail_change(
+                    race_id,
+                    start_utc.isoformat(),
+                    main_id=sail_defaults["main"]["id"] if sail_defaults["main"] else None,
+                    jib_id=sail_defaults["jib"]["id"] if sail_defaults["jib"] else None,
+                    spinnaker_id=(
+                        sail_defaults["spinnaker"]["id"] if sail_defaults["spinnaker"] else None
+                    ),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to auto-apply sail defaults for synth {}: {}", name, exc)
+
+        # Auto-detect maneuvers for synthesized race
+        async def _auto_detect_synth(rid: int) -> None:
+            try:
+                from helmlog.maneuver_detector import detect_maneuvers
+
+                maneuvers = await detect_maneuvers(storage, rid)
+                tacks = sum(1 for m in maneuvers if m.type == "tack")
+                gybes = sum(1 for m in maneuvers if m.type == "gybe")
+                logger.info("Synth auto-detected {} tacks, {} gybes for race {}", tacks, gybes, rid)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Synth auto maneuver detection failed for race {}: {}", rid, exc)
+
+        asyncio.ensure_future(_auto_detect_synth(race_id))
 
         detail = name + (f" [peer={peer_fingerprint}]" if peer_fingerprint else "")
         await _audit(request, "session.synthesize", detail=detail, user=_user)
@@ -4074,6 +4143,8 @@ def create_app(
 
     from helmlog.storage import _SAIL_TYPES  # noqa: PLC0415
 
+    _POINT_OF_SAIL_VALUES = ("upwind", "downwind", "both")
+
     @app.get("/api/sails")
     async def api_list_sails(
         _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
@@ -4100,8 +4171,15 @@ def create_app(
             )
         if not body.name.strip():
             raise HTTPException(status_code=422, detail="name must not be blank")
+        if body.point_of_sail is not None and body.point_of_sail not in _POINT_OF_SAIL_VALUES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid point_of_sail {body.point_of_sail!r}. Must be one of {list(_POINT_OF_SAIL_VALUES)}",
+            )
         try:
-            sail_id = await storage.add_sail(body.type, body.name, body.notes)
+            sail_id = await storage.add_sail(
+                body.type, body.name, body.notes, point_of_sail=body.point_of_sail
+            )
         except ValueError as exc:
             raise HTTPException(
                 status_code=409,
@@ -4112,6 +4190,65 @@ def create_app(
             {"id": sail_id, "type": body.type, "name": body.name.strip()}, status_code=201
         )
 
+    @app.get("/api/sails/defaults")
+    async def api_get_sail_defaults(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return the boat-level default sail selection."""
+        defaults = await storage.get_sail_defaults()
+        return JSONResponse(defaults)
+
+    @app.put("/api/sails/defaults", status_code=200)
+    async def api_set_sail_defaults(
+        request: Request,
+        body: RaceSailsSet,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Set the boat-level default sail selection."""
+        # Validate that each supplied sail_id references a sail of the correct type
+        slot_map = {"main": body.main_id, "jib": body.jib_id, "spinnaker": body.spinnaker_id}
+        for slot_type, sail_id in slot_map.items():
+            if sail_id is None:
+                continue
+            all_sails = await storage.list_sails(include_inactive=True)
+            matched = next((s for s in all_sails if s["id"] == sail_id), None)
+            if matched is None:
+                raise HTTPException(status_code=422, detail=f"Sail id={sail_id} not found")
+            if matched["type"] != slot_type:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Sail id={sail_id} has type {matched['type']!r},"
+                        f" expected {slot_type!r} for the {slot_type} slot"
+                    ),
+                )
+
+        await storage.set_sail_defaults(
+            main_id=body.main_id,
+            jib_id=body.jib_id,
+            spinnaker_id=body.spinnaker_id,
+        )
+        defaults = await storage.get_sail_defaults()
+        await _audit(request, "sails.defaults.set", user=_user)
+        return JSONResponse(defaults)
+
+    @app.get("/api/sails/stats")
+    async def api_sail_stats(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return all sails with accumulated tack/gybe counts and session totals."""
+        stats = await storage.get_sail_stats()
+        return JSONResponse(stats)
+
+    @app.get("/api/sails/{sail_id}/sessions")
+    async def api_sail_sessions(
+        sail_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return session history for a specific sail."""
+        history = await storage.get_sail_session_history(sail_id)
+        return JSONResponse(history)
+
     @app.patch("/api/sails/{sail_id}", status_code=200)
     async def api_update_sail(
         request: Request,
@@ -4119,9 +4256,18 @@ def create_app(
         body: SailUpdate,
         _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
     ) -> JSONResponse:
-        """Update sail name/notes or retire it."""
+        """Update sail name/notes, point-of-sail, or retire it."""
+        if body.point_of_sail is not None and body.point_of_sail not in _POINT_OF_SAIL_VALUES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid point_of_sail {body.point_of_sail!r}. Must be one of {list(_POINT_OF_SAIL_VALUES)}",
+            )
         found = await storage.update_sail(
-            sail_id, name=body.name, notes=body.notes, active=body.active
+            sail_id,
+            name=body.name,
+            notes=body.notes,
+            active=body.active,
+            point_of_sail=body.point_of_sail,
         )
         if not found:
             raise HTTPException(status_code=404, detail="Sail not found")
@@ -4170,8 +4316,10 @@ def create_app(
                     ),
                 )
 
-        await storage.set_race_sails(
+        ts = datetime.now(UTC).isoformat()
+        await storage.insert_sail_change(
             session_id,
+            ts,
             main_id=body.main_id,
             jib_id=body.jib_id,
             spinnaker_id=body.spinnaker_id,
@@ -4179,6 +4327,18 @@ def create_app(
         sails = await storage.get_race_sails(session_id)
         await _audit(request, "sails.set", detail=str(session_id), user=_user)
         return JSONResponse(sails)
+
+    @app.get("/api/sessions/{session_id}/sail-changes")
+    async def api_get_sail_changes(
+        session_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return the full sail change history for a session."""
+        race = await storage.get_race(session_id)
+        if race is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        changes = await storage.get_sail_change_history(session_id)
+        return JSONResponse({"changes": changes})
 
     # ------------------------------------------------------------------
     # /api/audio/{session_id}/download  &  /api/audio/{session_id}/stream

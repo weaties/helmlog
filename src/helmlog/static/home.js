@@ -74,6 +74,11 @@ function render(s) {
       if (_crewMetaLoaded) loadCrewCurrentValues();
       else loadCrewMeta();
     }
+    if(cur.id !== _sailsLoadedForRaceId) {
+      _sailsLoadedForRaceId = cur.id;
+      if (_sailsMetaLoaded) loadSailsCurrentValues();
+      else loadSailsMeta();
+    }
     document.getElementById('btn-note').style.display = '';
   } else {
     curCard.classList.add('hidden');
@@ -83,6 +88,8 @@ function render(s) {
     curRaceStartMs = null;
     if (_crewLoadedForRaceId !== null && _crewMetaLoaded) loadCrewCurrentValues();
     _crewLoadedForRaceId = null;
+    if (_sailsLoadedForRaceId !== null && _sailsMetaLoaded) loadSailsCurrentValues();
+    _sailsLoadedForRaceId = null;
     clearInterval(tickInterval);
     document.getElementById('btn-note').style.display = 'none';
     document.getElementById('note-panel').style.display = 'none';
@@ -527,6 +534,157 @@ async function saveCrew() {
   } catch (e) {
     if (statusEl) { statusEl.textContent = 'Save failed'; }
     console.error('crew save error', e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sails Card (home page accordion — mirrors crew pattern)
+// ---------------------------------------------------------------------------
+
+let _sailsExpanded = false;
+let _sailsMetaLoaded = false;
+let _sailsLoadedForRaceId = null;
+let _sailsInventory = {};  // {main: [...], jib: [...], spinnaker: [...]}
+let _sailsSaveTimer = null;
+
+function toggleSailsCard() {
+  _sailsExpanded = !_sailsExpanded;
+  document.getElementById('sails-body').style.display = _sailsExpanded ? 'block' : 'none';
+  document.getElementById('sails-chevron').textContent = _sailsExpanded ? '\u25BC' : '\u25B6';
+  const summaryEl = document.getElementById('sails-summary');
+  if (summaryEl) summaryEl.style.display = _sailsExpanded ? 'none' : '';
+  if (_sailsExpanded && !_sailsMetaLoaded) loadSailsMeta();
+}
+
+async function loadSailsSummary() {
+  try {
+    let url = '/api/sails/defaults';
+    if (state && state.current_race) {
+      url = '/api/sessions/' + state.current_race.id + '/sails';
+    }
+    const r = await fetch(url);
+    const data = await r.json();
+    updateSailsSummary(data);
+  } catch (e) { console.error('sails summary error', e); }
+}
+
+async function loadSailsMeta() {
+  try {
+    const resp = await fetch('/api/sails');
+    _sailsInventory = await resp.json();
+    _sailsMetaLoaded = true;
+    renderSailsRows();
+    await loadSailsCurrentValues();
+  } catch (e) { console.error('sails meta error', e); }
+}
+
+function renderSailsRows() {
+  const container = document.getElementById('sails-rows');
+  if (!container) return;
+  const role = typeof _userRole !== 'undefined' ? _userRole : 'viewer';
+  const canEdit = role === 'admin' || role === 'crew';
+  const slots = ['main', 'jib', 'spinnaker'];
+  let html = '';
+  slots.forEach(slot => {
+    const label = slot.charAt(0).toUpperCase() + slot.slice(1);
+    const opts = (_sailsInventory[slot] || []).map(s =>
+      '<option value="' + s.id + '">' + escHtml(s.name) + '</option>'
+    ).join('');
+    html += '<div class="crew-row" data-sail-slot="' + slot + '">';
+    html += '<span class="crew-pos">' + escHtml(label) + '</span>';
+    html += '<select class="crew-select" id="home-sail-' + slot + '" '
+      + (canEdit ? 'onchange="onSailChange()"' : 'disabled') + '>';
+    html += '<option value="">\u2014</option>' + opts;
+    html += '</select>';
+    html += '</div>';
+  });
+  container.innerHTML = html;
+}
+
+async function loadSailsCurrentValues() {
+  try {
+    let url = '/api/sails/defaults';
+    if (state && state.current_race) {
+      url = '/api/sessions/' + state.current_race.id + '/sails';
+    }
+    const r = await fetch(url);
+    const data = await r.json();
+    setSailsInputs(data);
+    updateSailsSummary(data);
+  } catch (e) { console.error('sails current error', e); }
+}
+
+function setSailsInputs(data) {
+  ['main', 'jib', 'spinnaker'].forEach(slot => {
+    const sel = document.getElementById('home-sail-' + slot);
+    if (!sel) return;
+    if (data[slot] && data[slot].id) {
+      sel.value = String(data[slot].id);
+      sel.classList.add('has-value');
+    } else {
+      sel.value = '';
+      sel.classList.remove('has-value');
+    }
+  });
+}
+
+function getSailsFromInputs() {
+  const result = {};
+  ['main', 'jib', 'spinnaker'].forEach(slot => {
+    const sel = document.getElementById('home-sail-' + slot);
+    result[slot + '_id'] = sel && sel.value ? parseInt(sel.value, 10) : null;
+  });
+  return result;
+}
+
+function updateSailsSummary(data) {
+  const countEl = document.getElementById('sails-count');
+  const summaryEl = document.getElementById('sails-summary');
+  const names = [];
+  ['main', 'jib', 'spinnaker'].forEach(slot => {
+    if (data[slot] && data[slot].name) names.push(data[slot].name);
+  });
+  if (countEl) countEl.textContent = names.length > 0 ? names.length + ' set' : '';
+  if (!summaryEl) return;
+  if (!names.length) { summaryEl.innerHTML = ''; return; }
+  summaryEl.innerHTML = '<span style="color:#8892a4">' + names.map(n => escHtml(n)).join(' \u00b7 ') + '</span>';
+  summaryEl.style.display = _sailsExpanded ? 'none' : '';
+}
+
+function onSailChange() {
+  if (_sailsSaveTimer) clearTimeout(_sailsSaveTimer);
+  const statusEl = document.getElementById('sails-status');
+  if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = 'Saving...'; }
+  _sailsSaveTimer = setTimeout(() => saveSailsCard(), 600);
+}
+
+async function saveSailsCard() {
+  const payload = getSailsFromInputs();
+  const statusEl = document.getElementById('sails-status');
+  try {
+    const isRace = state && state.current_race;
+    let url, method;
+    if (isRace) {
+      url = '/api/sessions/' + state.current_race.id + '/sails';
+      method = 'PUT';
+    } else {
+      url = '/api/sails/defaults';
+      method = 'PUT';
+    }
+    await fetch(url, {
+      method: method,
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    // Re-fetch for summary
+    const resolveUrl = isRace ? '/api/sessions/' + state.current_race.id + '/sails' : '/api/sails/defaults';
+    const rr = await fetch(resolveUrl);
+    const resolved = await rr.json();
+    updateSailsSummary(resolved);
+    if (statusEl) { statusEl.textContent = 'Saved'; setTimeout(() => { statusEl.style.display = 'none'; }, 1500); }
+  } catch (e) {
+    if (statusEl) { statusEl.textContent = 'Save failed'; }
+    console.error('sails save error', e);
   }
 }
 
@@ -1904,6 +2062,7 @@ async function runSynthesize() {
 
 loadState();
 loadCrewSummary();
+loadSailsSummary();
 setInterval(loadState, 10000);
 setInterval(tick, 1000);
 loadInstruments();

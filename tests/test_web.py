@@ -2048,6 +2048,319 @@ async def test_state_includes_sails(storage: Storage) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Issue #308 — Point-of-sail field for sails
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_add_sail_with_explicit_point_of_sail(storage: Storage) -> None:
+    """POST /api/sails with explicit point_of_sail stores and returns it."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post(
+            "/api/sails", json={"type": "main", "name": "Reef 1", "point_of_sail": "upwind"}
+        )
+        resp = await client.get("/api/sails")
+    data = resp.json()
+    main_sails = data["main"]
+    assert len(main_sails) == 1
+    assert main_sails[0]["point_of_sail"] == "upwind"
+
+
+@pytest.mark.asyncio
+async def test_add_sail_default_point_of_sail(storage: Storage) -> None:
+    """POST /api/sails without point_of_sail defaults by type."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _add_sail(client, "main", "Full Main")
+        await _add_sail(client, "jib", "J1")
+        await _add_sail(client, "spinnaker", "A2")
+        resp = await client.get("/api/sails")
+    data = resp.json()
+    assert data["main"][0]["point_of_sail"] == "both"
+    assert data["jib"][0]["point_of_sail"] == "upwind"
+    assert data["spinnaker"][0]["point_of_sail"] == "downwind"
+
+
+@pytest.mark.asyncio
+async def test_update_sail_point_of_sail(storage: Storage) -> None:
+    """PATCH /api/sails/{id} can update point_of_sail."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        sail_id = await _add_sail(client, "main", "Full Main")
+        patch_resp = await client.patch(f"/api/sails/{sail_id}", json={"point_of_sail": "upwind"})
+        assert patch_resp.status_code == 200
+        resp = await client.get("/api/sails")
+    data = resp.json()
+    assert data["main"][0]["point_of_sail"] == "upwind"
+
+
+@pytest.mark.asyncio
+async def test_add_sail_invalid_point_of_sail_422(storage: Storage) -> None:
+    """POST /api/sails with invalid point_of_sail returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/sails", json={"type": "main", "name": "Test", "point_of_sail": "sideways"}
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_sail_invalid_point_of_sail_422(storage: Storage) -> None:
+    """PATCH /api/sails/{id} with invalid point_of_sail returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        sail_id = await _add_sail(client, "main", "Full Main")
+        resp = await client.patch(f"/api/sails/{sail_id}", json={"point_of_sail": "sideways"})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_list_sails_includes_point_of_sail(storage: Storage) -> None:
+    """GET /api/sails includes point_of_sail in each sail entry."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _add_sail(client, "jib", "J1")
+        resp = await client.get("/api/sails")
+    data = resp.json()
+    assert "point_of_sail" in data["jib"][0]
+
+
+# ---------------------------------------------------------------------------
+# Sail defaults (#306)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_sail_defaults_empty(storage: Storage) -> None:
+    """GET /api/sails/defaults returns all-None when no defaults are set."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/sails/defaults")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data == {"main": None, "jib": None, "spinnaker": None}
+
+
+@pytest.mark.asyncio
+async def test_set_and_get_sail_defaults(storage: Storage) -> None:
+    """PUT /api/sails/defaults persists and GET returns them."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        main_id = await _add_sail(client, "main", "Full Main")
+        jib_id = await _add_sail(client, "jib", "J1")
+        resp = await client.put(
+            "/api/sails/defaults",
+            json={"main_id": main_id, "jib_id": jib_id, "spinnaker_id": None},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["main"]["id"] == main_id
+        assert data["jib"]["id"] == jib_id
+        assert data["spinnaker"] is None
+
+        # GET should return the same
+        resp2 = await client.get("/api/sails/defaults")
+        assert resp2.json() == data
+
+
+@pytest.mark.asyncio
+async def test_set_sail_defaults_invalid_id_422(storage: Storage) -> None:
+    """PUT /api/sails/defaults with non-existent sail returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put("/api/sails/defaults", json={"main_id": 999})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_set_sail_defaults_wrong_type_422(storage: Storage) -> None:
+    """PUT /api/sails/defaults with sail in wrong slot returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        jib_id = await _add_sail(client, "jib", "J1")
+        resp = await client.put("/api/sails/defaults", json={"main_id": jib_id})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_clear_sail_defaults(storage: Storage) -> None:
+    """PUT /api/sails/defaults with all None clears defaults."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        main_id = await _add_sail(client, "main", "Full Main")
+        await client.put("/api/sails/defaults", json={"main_id": main_id})
+        # Clear
+        resp = await client.put(
+            "/api/sails/defaults",
+            json={"main_id": None, "jib_id": None, "spinnaker_id": None},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data == {"main": None, "jib": None, "spinnaker": None}
+
+
+@pytest.mark.asyncio
+async def test_sail_defaults_do_not_affect_session_sails(storage: Storage) -> None:
+    """Session sails remain independent of defaults."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        main_id = await _add_sail(client, "main", "Full Main")
+        jib_id = await _add_sail(client, "jib", "J1")
+
+        # Set defaults to main only
+        await client.put("/api/sails/defaults", json={"main_id": main_id})
+
+        # Start a session and set sails to jib only
+        await _set_event(client)
+        race_resp = await client.post("/api/races/start")
+        session_id = race_resp.json()["id"]
+        await client.put(
+            f"/api/sessions/{session_id}/sails",
+            json={"main_id": None, "jib_id": jib_id, "spinnaker_id": None},
+        )
+
+        # Session sails should be jib only
+        sails_resp = await client.get(f"/api/sessions/{session_id}/sails")
+        sails = sails_resp.json()
+        assert sails["main"] is None
+        assert sails["jib"]["id"] == jib_id
+
+        # Defaults should still be main only
+        defaults_resp = await client.get("/api/sails/defaults")
+        defaults = defaults_resp.json()
+        assert defaults["main"]["id"] == main_id
+        assert defaults["jib"] is None
+
+
+# ---------------------------------------------------------------------------
+# Sail stats & session history (#307)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sail_stats_empty(storage: Storage) -> None:
+    """GET /api/sails/stats returns empty list when no sails exist."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/sails/stats")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_sail_stats_with_sails(storage: Storage) -> None:
+    """GET /api/sails/stats returns sails with zero counts when no sessions."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _add_sail(client, "main", "Full Main")
+        await _add_sail(client, "jib", "J1")
+        resp = await client.get("/api/sails/stats")
+    data = resp.json()
+    assert len(data) == 2
+    for s in data:
+        assert s["total_tacks"] == 0
+        assert s["total_gybes"] == 0
+        assert s["total_sessions"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sail_session_history_empty(storage: Storage) -> None:
+    """GET /api/sails/{id}/sessions returns empty list for unused sail."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        sail_id = await _add_sail(client, "main", "Full Main")
+        resp = await client.get(f"/api/sails/{sail_id}/sessions")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_sail_session_history_with_session(storage: Storage) -> None:
+    """GET /api/sails/{id}/sessions returns session info when sail is used."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        main_id = await _add_sail(client, "main", "Full Main")
+        await _set_event(client)
+        race = (await client.post("/api/races/start")).json()
+        await client.put(
+            f"/api/sessions/{race['id']}/sails",
+            json={"main_id": main_id},
+        )
+        resp = await client.get(f"/api/sails/{main_id}/sessions")
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["id"] == race["id"]
+    assert data[0]["tacks"] == 0
+    assert data[0]["gybes"] == 0  # main is 'both', so both tacks and gybes are shown
+
+
+@pytest.mark.asyncio
+async def test_sail_stats_counts_sessions(storage: Storage) -> None:
+    """GET /api/sails/stats counts sessions a sail was used in."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        main_id = await _add_sail(client, "main", "Full Main")
+        await _set_event(client)
+        race = (await client.post("/api/races/start")).json()
+        await client.put(
+            f"/api/sessions/{race['id']}/sails",
+            json={"main_id": main_id},
+        )
+        resp = await client.get("/api/sails/stats")
+    data = resp.json()
+    main_stat = next(s for s in data if s["id"] == main_id)
+    assert main_stat["total_sessions"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sails_page_renders(storage: Storage) -> None:
+    """GET /sails returns 200."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/sails")
+    assert resp.status_code == 200
+    assert "Sails" in resp.text
+
+
+# ---------------------------------------------------------------------------
 # Audio download / stream endpoints (#21)
 # ---------------------------------------------------------------------------
 
@@ -3259,3 +3572,125 @@ async def test_anonymize_sailor(storage: Storage) -> None:
         resp = await client.post(f"/api/crew/{uid}/anonymize")
     assert resp.status_code == 200
     assert resp.json()["rows_updated"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Issue #311 — Timestamped sail changes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_put_sails_creates_sail_change(storage: Storage) -> None:
+    """PUT /api/sessions/{id}/sails creates a timestamped sail_changes row."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _set_event(client)
+        race_id = (await client.post("/api/races/start")).json()["id"]
+        main_id = await _add_sail(client, "main", "Full Main")
+
+        await client.put(
+            f"/api/sessions/{race_id}/sails",
+            json={"main_id": main_id, "jib_id": None, "spinnaker_id": None},
+        )
+        changes_resp = await client.get(f"/api/sessions/{race_id}/sail-changes")
+    assert changes_resp.status_code == 200
+    changes = changes_resp.json()["changes"]
+    # At least the auto-applied defaults row + the PUT row
+    assert len(changes) >= 1
+    latest = changes[-1]
+    assert latest["main"] is not None
+    assert latest["main"]["id"] == main_id
+
+
+@pytest.mark.asyncio
+async def test_multiple_puts_get_returns_latest(storage: Storage) -> None:
+    """Multiple PUTs → GET returns latest; GET sail-changes returns full history."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _set_event(client)
+        race_id = (await client.post("/api/races/start")).json()["id"]
+        main1 = await _add_sail(client, "main", "Full Main")
+        main2 = await _add_sail(client, "main", "Reef 1")
+        jib1 = await _add_sail(client, "jib", "J1")
+
+        await client.put(
+            f"/api/sessions/{race_id}/sails",
+            json={"main_id": main1, "jib_id": jib1, "spinnaker_id": None},
+        )
+        await client.put(
+            f"/api/sessions/{race_id}/sails",
+            json={"main_id": main2, "jib_id": jib1, "spinnaker_id": None},
+        )
+
+        # GET returns latest
+        get_resp = await client.get(f"/api/sessions/{race_id}/sails")
+        data = get_resp.json()
+        assert data["main"]["id"] == main2
+        assert data["jib"]["id"] == jib1
+
+        # GET sail-changes returns full history
+        changes_resp = await client.get(f"/api/sessions/{race_id}/sail-changes")
+        changes = changes_resp.json()["changes"]
+        # At least the 2 explicit PUTs
+        assert len(changes) >= 2
+        main_ids = [c["main"]["id"] for c in changes if c["main"] is not None]
+        assert main2 in main_ids
+
+
+@pytest.mark.asyncio
+async def test_sail_changes_404_unknown_session(storage: Storage) -> None:
+    """GET /api/sessions/{id}/sail-changes returns 404 for unknown session."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/sessions/99999/sail-changes")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_race_start_auto_applies_sail_defaults(storage: Storage) -> None:
+    """Starting a race auto-applies sail defaults as initial sail_changes row."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Create sails and set defaults
+        main_id = await _add_sail(client, "main", "Full Main")
+        jib_id = await _add_sail(client, "jib", "J1")
+        await client.put(
+            "/api/sails/defaults",
+            json={"main_id": main_id, "jib_id": jib_id, "spinnaker_id": None},
+        )
+
+        await _set_event(client)
+        race_id = (await client.post("/api/races/start")).json()["id"]
+
+        # Session sails should reflect defaults
+        sails_resp = await client.get(f"/api/sessions/{race_id}/sails")
+        sails = sails_resp.json()
+        assert sails["main"] is not None
+        assert sails["main"]["id"] == main_id
+        assert sails["jib"] is not None
+        assert sails["jib"]["id"] == jib_id
+
+        # sail-changes should have the initial row
+        changes_resp = await client.get(f"/api/sessions/{race_id}/sail-changes")
+        changes = changes_resp.json()["changes"]
+        assert len(changes) >= 1
+        assert changes[0]["main"]["id"] == main_id
+
+
+@pytest.mark.asyncio
+async def test_v41_migration_creates_sail_changes_table(storage: Storage) -> None:
+    """Migration v41 creates the sail_changes table."""
+    db = storage._conn()
+    cur = await db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='sail_changes'"
+    )
+    row = await cur.fetchone()
+    assert row is not None

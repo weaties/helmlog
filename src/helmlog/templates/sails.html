@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block title %}HelmLog — Sails{% endblock %}
+{% block extra_css %}
+<style>
+h1{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:4px}
+h2{font-size:1rem;font-weight:600;color:#e8eaf0;margin:20px 0 10px}
+.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:16px}
+table{width:100%;border-collapse:collapse;font-size:.85rem}
+th{text-align:left;padding:6px 8px;color:#8892a4;font-weight:500;border-bottom:1px solid #1e3a5f}
+td{padding:6px 8px;border-bottom:1px solid #0d1a2e;vertical-align:middle}
+.ubtn{cursor:pointer;background:none;border:1px solid #2563eb;color:#7eb8f7;border-radius:4px;padding:4px 10px;font-size:.8rem;white-space:nowrap}
+.ubtn-danger{border-color:#ef4444;color:#f87171}
+.edit-input{background:#0a1628;border:1px solid #2563eb;border-radius:4px;padding:6px 8px;color:#e8eaf0;font-size:.85rem;width:100%;min-height:36px;box-sizing:border-box;margin:0}
+.edit-select{background:#0a1628;border:1px solid #2563eb;border-radius:4px;padding:6px 8px;color:#e8eaf0;font-size:.85rem;min-height:36px;margin:0}
+.btn{padding:10px 18px;border:none;border-radius:8px;font-size:.9rem;font-weight:700;cursor:pointer;background:#2563eb;color:#fff}
+label{font-size:.85rem;color:#8892a4;display:block;margin-bottom:4px}
+input,select{background:#0a1628;border:1px solid #2563eb;border-radius:6px;padding:8px 10px;color:#e8eaf0;font-size:.9rem;margin-bottom:10px}
+.pos-badge{font-size:.72rem;padding:2px 6px;border-radius:3px;font-weight:600}
+.pos-upwind{background:#1e3a5f;color:#60a5fa}
+.pos-downwind{background:#1e3a2f;color:#4ade80}
+.pos-both{background:#2e2a1f;color:#fbbf24}
+.stat{color:#e0e8f0;font-variant-numeric:tabular-nums}
+.stat-zero{color:#4b5563}
+.retired{opacity:.5}
+.detail-row td{padding:0;border:none}
+.detail-content{background:#0a1628;padding:12px;border-radius:6px;margin:4px 8px 8px}
+.session-item{display:flex;gap:12px;align-items:center;padding:6px 0;border-bottom:1px solid #1e3a5f;font-size:.82rem;flex-wrap:wrap}
+.session-item:last-child{border-bottom:none}
+.session-item a{color:#7eb8f7;text-decoration:none}
+.session-item a:hover{text-decoration:underline}
+.wind-tag{color:#8892a4;font-size:.78rem}
+.u-actions{white-space:nowrap}
+.u-actions .ubtn{margin-left:4px}
+.u-actions .ubtn:first-child{margin-left:0}
+@media (max-width: 640px) {
+  table thead{display:none}
+  tbody tr:not(.detail-row){display:block;border:1px solid #1e3a5f;border-radius:8px;padding:12px;margin-bottom:10px}
+  tbody td{display:flex;justify-content:space-between;align-items:center;border:none;padding:4px 0;gap:8px}
+  tbody td::before{content:attr(data-label);color:#8892a4;font-size:.78rem;flex-shrink:0;min-width:70px}
+  tbody td:last-child{flex-wrap:wrap;gap:6px;margin-top:6px;padding-top:8px;border-top:1px solid #1e3a5f}
+  tbody td:last-child::before{display:none}
+  .card{padding:12px}
+  .ubtn{padding:6px 12px;font-size:.85rem}
+  .detail-row{display:block;border:none;margin-top:-10px;margin-bottom:10px}
+  .detail-row td{display:block}
+  .detail-row td::before{display:none}
+}
+</style>
+{% endblock %}
+{% block content %}
+<h1>Sails</h1>
+<div class="card">
+<h2>Sail Inventory</h2>
+<table>
+<thead><tr><th>Type</th><th>Name</th><th>Point of Sail</th><th>Tacks</th><th>Gybes</th><th>Sessions</th><th>Notes</th><th></th></tr></thead>
+<tbody id="sail-tbody"></tbody>
+</table>
+</div>
+<div class="card">
+<h2>Add a Sail</h2>
+<form id="add-sail-form">
+<label>Type</label>
+<select id="add-type"><option value="main">Main</option><option value="jib">Jib</option><option value="spinnaker">Spinnaker</option></select>
+<label>Name</label><input type="text" id="add-name" required placeholder="e.g. Full Main"/>
+<label>Point of Sail</label>
+<select id="add-pos"><option value="">Auto (by type)</option><option value="upwind">Upwind</option><option value="downwind">Downwind</option><option value="both">Both</option></select>
+<label>Notes</label><input type="text" id="add-notes" placeholder="Optional"/>
+<button class="btn" type="submit">Add Sail</button>
+</form>
+<div id="add-result" style="margin-top:8px;font-size:.85rem"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const POS_LABELS = {upwind: 'Upwind', downwind: 'Downwind', both: 'Both'};
+const POS_CLASS = {upwind: 'pos-upwind', downwind: 'pos-downwind', both: 'pos-both'};
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+async function loadSails() {
+  const resp = await fetch('/api/sails/stats');
+  const sails = await resp.json();
+  const tbody = document.getElementById('sail-tbody');
+  let html = '';
+  for (const s of sails) {
+    const cls = s.active ? '' : ' class="retired"';
+    const showTacks = s.point_of_sail !== 'downwind';
+    const showGybes = s.point_of_sail !== 'upwind';
+    html += '<tr data-sid="' + s.id + '"' + cls + '>'
+      + '<td data-label="Type">' + esc(s.type.charAt(0).toUpperCase() + s.type.slice(1)) + '</td>'
+      + '<td data-label="Name" class="s-name">' + esc(s.name) + (s.active ? '' : ' <span style="color:#ef4444;font-size:.75rem">(retired)</span>') + '</td>'
+      + '<td data-label="Point of Sail"><span class="pos-badge ' + POS_CLASS[s.point_of_sail] + '">' + POS_LABELS[s.point_of_sail] + '</span></td>'
+      + '<td data-label="Tacks" class="stat' + (showTacks && s.total_tacks ? '' : ' stat-zero') + '">' + (showTacks ? s.total_tacks : '\u2014') + '</td>'
+      + '<td data-label="Gybes" class="stat' + (showGybes && s.total_gybes ? '' : ' stat-zero') + '">' + (showGybes ? s.total_gybes : '\u2014') + '</td>'
+      + '<td data-label="Sessions" class="stat' + (s.total_sessions ? '' : ' stat-zero') + '">' + s.total_sessions + '</td>'
+      + '<td data-label="Notes" class="s-notes">' + (s.notes ? esc(s.notes) : '') + '</td>'
+      + '<td class="u-actions">'
+        + '<button class="ubtn" onclick="toggleHistory(' + s.id + ')">History</button> '
+        + '<button class="ubtn" onclick="editSail(' + s.id + ')">Edit</button> '
+        + (s.active
+          ? '<button class="ubtn ubtn-danger" onclick="retireSail(' + s.id + ')">Retire</button>'
+          : '<button class="ubtn" onclick="reactivateSail(' + s.id + ')">Reactivate</button>')
+      + '</td></tr>';
+    html += '<tr class="detail-row" id="detail-' + s.id + '" style="display:none"><td colspan="8"><div class="detail-content" id="detail-content-' + s.id + '">Loading...</div></td></tr>';
+  }
+  tbody.innerHTML = html;
+}
+
+async function toggleHistory(sailId) {
+  const row = document.getElementById('detail-' + sailId);
+  if (row.style.display !== 'none') {
+    row.style.display = 'none';
+    return;
+  }
+  row.style.display = 'table-row';
+  const container = document.getElementById('detail-content-' + sailId);
+  container.innerHTML = 'Loading...';
+  const resp = await fetch('/api/sails/' + sailId + '/sessions');
+  const sessions = await resp.json();
+  if (!sessions.length) {
+    container.innerHTML = '<span style="color:#8892a4">No sessions yet</span>';
+    return;
+  }
+  let html = '';
+  for (const s of sessions) {
+    let stats = [];
+    if (s.tacks !== null) stats.push(s.tacks + ' tack' + (s.tacks !== 1 ? 's' : ''));
+    if (s.gybes !== null) stats.push(s.gybes + ' gybe' + (s.gybes !== 1 ? 's' : ''));
+    let wind = '';
+    if (s.avg_tws !== null) {
+      wind = ' <span class="wind-tag">TWS ' + s.avg_tws + ' avg (' + s.min_tws + '\u2013' + s.max_tws + ') kts</span>';
+    }
+    html += '<div class="session-item">'
+      + '<a href="/session/' + s.id + '">' + esc(s.name) + '</a>'
+      + '<span style="color:#8892a4">' + s.date + '</span>'
+      + '<span>' + stats.join(', ') + '</span>'
+      + wind
+      + '</div>';
+  }
+  container.innerHTML = html;
+}
+
+function editSail(sailId) {
+  const row = document.querySelector('tr[data-sid="' + sailId + '"]');
+  if (!row) return;
+  const nameTd = row.querySelector('.s-name');
+  const notesTd = row.querySelector('.s-notes');
+  const actionsTd = row.querySelector('.u-actions');
+  const curName = nameTd.textContent.replace(/\(retired\)/g, '').trim();
+  const curNotes = notesTd.textContent.trim();
+
+  nameTd.innerHTML = '<input class="edit-input" id="edit-name-' + sailId + '" value="' + curName.replace(/"/g, '&quot;') + '" />';
+  notesTd.innerHTML = '<input class="edit-input" id="edit-notes-' + sailId + '" value="' + curNotes.replace(/"/g, '&quot;') + '" />';
+  actionsTd.innerHTML = '<button onclick="saveSail(' + sailId + ')" class="ubtn" style="border-color:#22c55e;color:#4ade80">Save</button>'
+    + ' <button onclick="loadSails()" class="ubtn" style="border-color:#374151;color:#8892a4">Cancel</button>';
+  document.getElementById('edit-name-' + sailId).focus();
+}
+
+async function saveSail(sailId) {
+  const name = document.getElementById('edit-name-' + sailId).value.trim();
+  const notes = document.getElementById('edit-notes-' + sailId).value.trim();
+  if (!name) { alert('Name is required'); return; }
+  const r = await fetch('/api/sails/' + sailId, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: name, notes: notes || null}),
+  });
+  if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.detail || 'Failed'); return; }
+  loadSails();
+}
+
+async function retireSail(sailId) {
+  const r = await fetch('/api/sails/' + sailId, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({active: false}),
+  });
+  if (r.ok) loadSails();
+}
+
+async function reactivateSail(sailId) {
+  const r = await fetch('/api/sails/' + sailId, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({active: true}),
+  });
+  if (r.ok) loadSails();
+}
+
+document.getElementById('add-sail-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const payload = {
+    type: document.getElementById('add-type').value,
+    name: document.getElementById('add-name').value.trim(),
+    notes: document.getElementById('add-notes').value.trim() || null,
+  };
+  const pos = document.getElementById('add-pos').value;
+  if (pos) payload.point_of_sail = pos;
+  const r = await fetch('/api/sails', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  const result = document.getElementById('add-result');
+  if (r.ok) {
+    result.style.color = '#4ade80';
+    result.textContent = 'Sail added';
+    document.getElementById('add-name').value = '';
+    document.getElementById('add-notes').value = '';
+    loadSails();
+  } else {
+    const d = await r.json().catch(() => ({}));
+    result.style.color = '#f87171';
+    result.textContent = d.detail || 'Failed to add sail';
+  }
+});
+
+loadSails();
+</script>
+{% endblock %}
