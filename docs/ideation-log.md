@@ -953,3 +953,20 @@ the opposite of performative broadcasting.
   insight is principle #6 — the visual/interaction design should not resemble a social
   feed. Entering co-op discussions from the track replay (not a notification timeline)
   is a concrete way to enforce this.
+- *2026-03-14:* Jason Kottke's "Just Enough Social" member profiles
+  (kottke.org/26/03/people-in-this-neighborhood) provide a concrete reference
+  implementation. Key pattern: **graduated disclosure** — display names are public,
+  bios visible only to members, full profile visible only to the owner. Users control
+  their exposure level at each tier. This maps well to IDX-013's co-op visibility
+  rules but introduces a useful tension: Kottke embraces "no one knows you're a dog"
+  anonymity (members choose how much to reveal), while IDX-013 mandates full identity
+  (boat + crew + position) for accountability. Both are valid — they serve different
+  trust models. For HelmLog, the resolution may be: **mandatory boat identity, optional
+  personal disclosure.** Your boat and position are always visible (the co-op needs
+  to know who's talking about the leeward mark rounding), but personal details
+  (real name, email, bio) follow Kottke's graduated model — you control what's shared
+  beyond the role. This preserves IDX-013's accountability ("@SailFast/tactician said
+  this") while giving individuals control over personal exposure. Also reinforces the
+  broader "Just Enough Social" label as a design philosophy for all co-op communication
+  features — build the minimum social surface that enables genuine collaboration, resist
+  the pull toward full social platform features.
