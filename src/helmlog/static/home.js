@@ -1403,7 +1403,7 @@ function initSynthMap() {
   const el = document.getElementById('synth-map');
   if (!el || _synthMap) return;
 
-  _synthMap = L.map('synth-map').setView([47.63, -122.40], 12);
+  _synthMap = L.map('synth-map').setView([47.6815, -122.4085], 12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap', maxZoom: 18,
   }).addTo(_synthMap);
@@ -1480,8 +1480,8 @@ function onSynthWindChange() {
 
 async function updateSynthMarks() {
   if (!_synthMapReady()) return;
-  const lat = parseFloat(document.getElementById('synth-lat').value) || 47.63;
-  const lon = parseFloat(document.getElementById('synth-lon').value) || -122.40;
+  const lat = parseFloat(document.getElementById('synth-lat').value) || 47.6815;
+  const lon = parseFloat(document.getElementById('synth-lon').value) || -122.4085;
   const windDir = parseFloat(document.getElementById('synth-wind-dir').value) || 0;
   const courseType = document.getElementById('synth-course').value;
 
@@ -1828,8 +1828,8 @@ async function runSynthesize() {
       wind_speed_low: parseFloat(document.getElementById('synth-tws-lo').value) || 8,
       wind_speed_high: parseFloat(document.getElementById('synth-tws-hi').value) || 14,
       laps: parseInt(document.getElementById('synth-laps').value) || 2,
-      start_lat: parseFloat(document.getElementById('synth-lat').value) || 47.63,
-      start_lon: parseFloat(document.getElementById('synth-lon').value) || -122.40,
+      start_lat: parseFloat(document.getElementById('synth-lat').value) || 47.6815,
+      start_lon: parseFloat(document.getElementById('synth-lon').value) || -122.4085,
       seed: Math.floor(Math.random() * 100000),
       wind_seed: _importedWindSeed != null ? _importedWindSeed : undefined,
       start_utc: _importedStartUtc || undefined,
