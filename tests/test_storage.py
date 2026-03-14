@@ -726,6 +726,22 @@ class TestCrewStorage:
         assert len(crew) == 1
         assert crew[0] == {"position": "helm", "sailor": "Alice"}
 
+    async def test_user_without_name_shows_email(self, storage: Storage) -> None:
+        """Users with no name show email as user_name in crew entries."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        # Create a real user with no name (like an OAuth user)
+        uid = await storage.create_user("noname@example.com", None, "crew")
+        await storage.set_crew_defaults(
+            race_id,
+            [{"position_id": helm_id, "user_id": uid}],
+        )
+        entries = await storage.get_crew_defaults(race_id)
+        assert entries[0]["user_name"] == "noname@example.com"
+        # Legacy compat also works
+        crew = await storage.get_race_crew(race_id)
+        assert crew[0]["sailor"] == "noname@example.com"
+
     async def test_duplicate_user_id_rejected(self, storage: Storage) -> None:
         """set_crew_defaults raises ValueError if same user_id appears twice."""
         race_id = await self._make_race(storage)

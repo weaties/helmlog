@@ -2278,7 +2278,7 @@ class Storage:
             "SELECT cd.id, cd.race_id, cd.position_id, cd.user_id,"
             "       cd.attributed, cd.body_weight, cd.gear_weight, cd.created_at,"
             "       cp.name AS position, cp.display_order,"
-            "       u.name AS user_name, u.email AS user_email"
+            "       COALESCE(u.name, u.email) AS user_name, u.email AS user_email"
             " FROM crew_defaults cd"
             " JOIN crew_positions cp ON cp.id = cd.position_id"
             " LEFT JOIN users u ON u.id = cd.user_id"
@@ -2362,11 +2362,11 @@ class Storage:
         resolved = await self.resolve_crew(race_id)
         result: list[dict[str, str]] = []
         for entry in resolved:
-            if entry.get("user_name") and entry.get("attributed"):
+            if entry.get("user_id") and entry.get("attributed"):
                 result.append(
                     {
                         "position": entry["position"],
-                        "sailor": entry["user_name"],
+                        "sailor": entry.get("user_name") or entry.get("user_email") or "—",
                     }
                 )
         return result
