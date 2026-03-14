@@ -961,6 +961,8 @@ def create_app(
         cur = await storage._conn().execute("SELECT name FROM races WHERE id = ?", (session_id,))
         row = await cur.fetchone()
         session_name = row["name"] if row else f"Session {session_id}"
+        user: dict[str, Any] | None = getattr(request.state, "user", None)
+        user_role = user.get("role", "viewer") if user else "viewer"
         return _templates.TemplateResponse(
             request,
             "session.html",
@@ -971,6 +973,7 @@ def create_app(
                 session_name=session_name,
                 grafana_port=cfg.grafana_port,
                 grafana_uid=cfg.grafana_uid,
+                user_role=user_role,
             ),
         )
 

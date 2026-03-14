@@ -514,22 +514,141 @@ async function deleteResult(resultId) {
 // Crew
 // ---------------------------------------------------------------------------
 
+let _sessionCrew = [];
+let _sessionCrewUsers = [];
+let _sessionCrewPositions = [];
+const _sessionUserRole = cfg.dataset.userRole || 'viewer';
+
 async function loadCrew() {
   const card = document.getElementById('crew-card');
   card.style.display = '';
   const body = document.getElementById('crew-body');
   const r = await fetch('/api/races/' + SESSION_ID + '/crew');
   const data = await r.json();
-  const crew = data.crew || [];
-  if (crew.length) {
-    body.innerHTML = crew.map(c => {
+  _sessionCrew = data.crew || [];
+  renderCrewCollapsed();
+  // Start collapsed — show summary
+  _collapsed['crew'] = true;
+  body.style.display = 'none';
+  document.getElementById('crew-toggle').innerHTML = '&#9654;';
+}
+
+function renderCrewCollapsed() {
+  const summary = document.getElementById('crew-summary');
+  if (!summary) return;
+  if (_sessionCrew.length) {
+    summary.innerHTML = _sessionCrew.map(c => {
       const pos = esc(c.position.charAt(0).toUpperCase() + c.position.slice(1));
-      const name = c.attributed ? esc(c.user_name || '—') : '<em>(not attributed)</em>';
+      const name = c.attributed ? esc(c.user_name || '\u2014') : '<em>(not attributed)</em>';
       return '<span style="color:#8892a4">' + pos + ':</span> ' + name;
-    }).join(' &middot; ');
+    }).join(' &nbsp;\u00b7&nbsp; ');
   } else {
-    body.innerHTML = '<span style="color:#8892a4">No crew recorded</span>';
+    summary.innerHTML = '<span style="color:#8892a4">No crew recorded</span>';
   }
+}
+
+async function loadCrewEditForm() {
+  const body = document.getElementById('crew-body');
+  if (!body) return;
+  // Lazy-load positions and users
+  if (!_sessionCrewPositions.length) {
+    const [posR, usrR] = await Promise.all([
+      fetch('/api/crew/positions'),
+      fetch('/api/crew/users'),
+    ]);
+    _sessionCrewPositions = (await posR.json()).positions || [];
+    _sessionCrewUsers = (await usrR.json()).users || [];
+  }
+  const canEdit = _sessionUserRole === 'admin' || _sessionUserRole === 'crew';
+  let html = '';
+  for (const p of _sessionCrewPositions) {
+    const label = esc(p.name.charAt(0).toUpperCase() + p.name.slice(1));
+    const entry = _sessionCrew.find(c => c.position_id === p.id);
+    const curVal = entry && entry.user_id ? String(entry.user_id) : '';
+    html += '<div class="crew-row" data-pos-id="' + p.id + '">';
+    html += '<span class="crew-pos">' + label + '</span>';
+    html += '<select class="crew-select' + (curVal ? ' has-value' : '') + '" '
+      + (canEdit ? 'onchange="onSessionCrewChange(this)"' : 'disabled') + '>';
+    html += '<option value="">\u2014</option>';
+    // Build filtered options
+    const taken = new Set();
+    for (const c of _sessionCrew) {
+      if (c.user_id && c.position_id !== p.id) taken.add(String(c.user_id));
+    }
+    for (const u of _sessionCrewUsers) {
+      const uid = String(u.id);
+      if (uid === curVal || !taken.has(uid)) {
+        const n = esc(u.name || u.email);
+        html += '<option value="' + uid + '"' + (uid === curVal ? ' selected' : '') + '>' + n + '</option>';
+      }
+    }
+    if (canEdit) html += '<option value="__new__">+ Add new...</option>';
+    html += '</select></div>';
+  }
+  body.innerHTML = html;
+}
+
+function toggleCrewSection() {
+  _collapsed['crew'] = !_collapsed['crew'];
+  const body = document.getElementById('crew-body');
+  const toggle = document.getElementById('crew-toggle');
+  const summary = document.getElementById('crew-summary');
+  if (_collapsed['crew']) {
+    body.style.display = 'none';
+    summary.style.display = '';
+    toggle.innerHTML = '&#9654;';
+  } else {
+    body.style.display = '';
+    summary.style.display = 'none';
+    toggle.innerHTML = '&#9660;';
+    loadCrewEditForm();
+  }
+}
+
+async function onSessionCrewChange(selectEl) {
+  // Handle "Add new..."
+  if (selectEl && selectEl.value === '__new__') {
+    selectEl.value = '';
+    const name = prompt('New crew member name:');
+    if (name && name.trim()) {
+      try {
+        const r = await fetch('/api/crew/placeholder', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({name: name.trim()})
+        });
+        if (r.ok) {
+          const data = await r.json();
+          _sessionCrewUsers.push({id: data.id, name: data.name, email: '', role: 'viewer'});
+          const opt = document.createElement('option');
+          opt.value = String(data.id);
+          selectEl.appendChild(opt);
+          selectEl.value = String(data.id);
+        }
+      } catch (e) { console.error('create placeholder error', e); }
+    }
+  }
+  // Save all crew
+  const crew = [];
+  document.querySelectorAll('#crew-body .crew-row').forEach(row => {
+    const posId = parseInt(row.dataset.posId);
+    const sel = row.querySelector('.crew-select');
+    const userId = sel.value && sel.value !== '__new__' ? parseInt(sel.value) : null;
+    if (userId) crew.push({position_id: posId, user_id: userId});
+    sel.classList.toggle('has-value', !!sel.value && sel.value !== '__new__');
+  });
+  await fetch('/api/races/' + SESSION_ID + '/crew', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(crew)
+  });
+  // Reload resolved crew and update summary
+  const r = await fetch('/api/races/' + SESSION_ID + '/crew');
+  const data = await r.json();
+  _sessionCrew = data.crew || [];
+  renderCrewCollapsed();
+  // Refresh dropdowns to filter assigned users
+  loadCrewEditForm();
 }
 
 // ---------------------------------------------------------------------------
