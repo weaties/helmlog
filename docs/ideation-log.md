@@ -199,6 +199,11 @@ isn't a group chat.
   of IDX-001 and the developer-facing nature of IDX-006. Start with a single global
   feed gated by any co-op membership. The 7-day expiry and post limits are the key
   insight — they make moderation almost unnecessary.
+- *2026-03-14:* IDX-018 identifies a risk with the feed model — Julie Beck's research
+  shows that scrollable feeds make even real relationships feel parasocial. The TGP
+  feed's constraints (post limits, ephemeral content) partially mitigate this, but
+  the feed should remain the casual/social layer, not the primary channel for race
+  analysis discussion (that's IDX-013's role).
 
 ---
 
@@ -636,6 +641,12 @@ Coaches need special consideration:
   considerations. Coaches are a key use case for the intra-boat tier — they
   work across boats and need thread access patterns that don't map cleanly to
   "crew on one boat." Open questions added around coach identity model.
+- *2026-03-14:* IDX-018 (anti-parasocial design principles, from Julie Beck's
+  Atlantic article) validates this design direction. Mark-anchoring and position-based
+  @mentions are inherently anti-parasocial — they ground discussion in shared physical
+  experience. Key new consideration: make the track replay the primary entry point for
+  threads, not a separate "discussions" tab. Format should feel like conversation at
+  the yacht club bar, not a social media feed.
 
 ---
 
@@ -854,3 +865,91 @@ mental model needed to be an effective middle-loop supervisor.
   immediately. The `/architecture` skill is higher effort but would be valuable before
   major features or after returning from a break. Complexity hotspot detection could
   be a simple addition to `/pr-checklist` — flag if any touched file exceeds 200 lines.
+
+---
+
+## IDX-018: Anti-parasocial design principles for co-op communication
+
+- **Date captured:** 2026-03-14
+- **Origin:** Julie Beck, "When Real Relationships Start to Look Parasocial" (*The Atlantic*, Oct 2025) — how social media formats make real friendships feel like content to consume
+- **Status:** `raw`
+- **Related:** IDX-007 (TGP feed), IDX-008 (quote-reply/forking), IDX-013 (co-op threads), `docs/data-licensing.md`
+
+**Description:**
+Not a feature — a set of design principles that should govern how HelmLog builds
+communication features (IDX-007, IDX-013). Beck's article argues that the *format*
+of online communication — scrollable feeds, broadcast posting, passive consumption —
+rewires how people perceive even real friends, making genuine relationships feel
+parasocial. The key insight: when you consume a friend's update in the same format
+as an influencer's post, your brain processes both the same way.
+
+HelmLog's co-op communication should be deliberately designed to resist this effect.
+Sailing teams need genuine vulnerability and reciprocity in post-race debrief —
+the opposite of performative broadcasting.
+
+**Principles (derived from Beck + existing HelmLog design):**
+
+1. **Address, don't broadcast.** Communication should be directed at specific
+   people or about specific events, not posted to "the feed." IDX-013's @mentions
+   and mark-anchoring already do this — a comment pinned to the leeward mark in
+   Race 3 and addressed to `@SailFast/tactician` is a conversation, not content.
+   IDX-007's global feed is more vulnerable to the broadcast trap.
+
+2. **Anchor to shared experience, not timeline.** Beck identifies the scrollable
+   timeline as the format that makes friends look like influencers. HelmLog's
+   natural anchor is the *race* — threads pinned to tracks, marks, and timestamps
+   mean the context is a shared sailing experience, not a content feed. Design
+   should lean hard into this: enter discussions from the track replay, not a
+   notification inbox.
+
+3. **Require engagement, not consumption.** Passive scrolling is the core
+   parasocial behavior. Design affordances that make participation the default:
+   - Quote-reply (IDX-008) forces engagement with specific content
+   - Post limits (IDX-007) make each post cost something, discouraging broadcast-style updates
+   - No "like" button — if you agree, say why; if you appreciate, quote and respond
+   - Consider: threads only visible to participants + mentioned users, not browsable by the whole co-op?
+
+4. **Reciprocity over audience.** Beck's "imagined audience" concept: when people
+   post, they think of *an audience*, not specific people. Counter this by making
+   the recipient explicit. IDX-013's visibility tiers help — a boat-private thread
+   between a coach and their boats is a conversation, not a broadcast. IDX-007's
+   global feed could add a "reply expected" convention or norm.
+
+5. **Identity enables vulnerability.** Beck notes that self-disclosure collapses
+   when people assume they know each other from posts. IDX-013's mandatory identity
+   (boat + crew + position) and protest firewall create the conditions for genuine
+   self-disclosure: you know who's talking, and what's said can't be used against
+   you in protest. This is the opposite of anonymous social media — full identity
+   with full protection.
+
+6. **Format should feel like conversation, not content.** The visual and
+   interaction design should not resemble a social media feed. No infinite scroll,
+   no algorithmic ordering, no engagement metrics. Threads anchored to marks on
+   a track chart feel like standing around the yacht club bar pointing at the
+   race course, not scrolling Instagram.
+
+**Implications for existing ideas:**
+
+- **IDX-007 (TGP feed):** The feed model is inherently more susceptible to the
+  parasocial trap than IDX-013's anchored threads. If we build both, the TGP feed
+  should be the casual/social layer (and its constraints — post limits, ephemeral
+  content — partially mitigate the risk), while IDX-013 threads are the race-analysis
+  layer where genuine discussion happens. The TGP feed should not become the primary
+  communication channel for co-op members.
+
+- **IDX-013 (co-op threads):** Already well-aligned with these principles. The
+  mark-anchoring and position-based @mentions are inherently anti-parasocial because
+  they ground communication in shared physical experience. Consider making the track
+  replay the primary entry point for threads, not a separate "discussions" tab.
+
+- **IDX-008 (quote-reply):** Quote-reply is a key anti-parasocial affordance — it
+  forces engagement with specific content rather than passive consumption. Prioritize
+  this in the MVP of whichever communication system ships first.
+
+**Notes:**
+- *2026-03-14:* Initial capture. The Beck article validates design instincts already
+  present in IDX-013 (mandatory identity, protest firewall, mark-anchoring) and adds
+  a theoretical framework for *why* these constraints matter. The biggest actionable
+  insight is principle #6 — the visual/interaction design should not resemble a social
+  feed. Entering co-op discussions from the track replay (not a notification timeline)
+  is a concrete way to enforce this.
