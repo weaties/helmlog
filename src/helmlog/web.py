@@ -4121,6 +4121,48 @@ def create_app(
             {"id": sail_id, "type": body.type, "name": body.name.strip()}, status_code=201
         )
 
+    @app.get("/api/sails/defaults")
+    async def api_get_sail_defaults(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return the boat-level default sail selection."""
+        defaults = await storage.get_sail_defaults()
+        return JSONResponse(defaults)
+
+    @app.put("/api/sails/defaults", status_code=200)
+    async def api_set_sail_defaults(
+        request: Request,
+        body: RaceSailsSet,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Set the boat-level default sail selection."""
+        # Validate that each supplied sail_id references a sail of the correct type
+        slot_map = {"main": body.main_id, "jib": body.jib_id, "spinnaker": body.spinnaker_id}
+        for slot_type, sail_id in slot_map.items():
+            if sail_id is None:
+                continue
+            all_sails = await storage.list_sails(include_inactive=True)
+            matched = next((s for s in all_sails if s["id"] == sail_id), None)
+            if matched is None:
+                raise HTTPException(status_code=422, detail=f"Sail id={sail_id} not found")
+            if matched["type"] != slot_type:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Sail id={sail_id} has type {matched['type']!r},"
+                        f" expected {slot_type!r} for the {slot_type} slot"
+                    ),
+                )
+
+        await storage.set_sail_defaults(
+            main_id=body.main_id,
+            jib_id=body.jib_id,
+            spinnaker_id=body.spinnaker_id,
+        )
+        defaults = await storage.get_sail_defaults()
+        await _audit(request, "sails.defaults.set", user=_user)
+        return JSONResponse(defaults)
+
     @app.patch("/api/sails/{sail_id}", status_code=200)
     async def api_update_sail(
         request: Request,

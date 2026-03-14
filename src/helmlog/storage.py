@@ -125,7 +125,7 @@ _MARK_REFERENCES: frozenset[str] = frozenset(
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 39
+_CURRENT_VERSION: int = 40
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -361,6 +361,12 @@ _MIGRATIONS: dict[int, str] = {
             UNIQUE(race_id, sail_id)
         );
         CREATE INDEX IF NOT EXISTS idx_race_sails_race_id ON race_sails(race_id);
+
+        CREATE TABLE IF NOT EXISTS sail_defaults (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            sail_id INTEGER NOT NULL REFERENCES sails(id) ON DELETE CASCADE,
+            UNIQUE(sail_id)
+        );
     """,
     15: """
         CREATE TABLE IF NOT EXISTS transcripts (
@@ -908,6 +914,14 @@ _MIGRATIONS: dict[int, str] = {
         ALTER TABLE sails ADD COLUMN point_of_sail TEXT NOT NULL DEFAULT 'both';
         UPDATE sails SET point_of_sail = 'upwind' WHERE type = 'jib';
         UPDATE sails SET point_of_sail = 'downwind' WHERE type = 'spinnaker';
+    """,
+    40: """
+        -- Default sail selection — boat-level defaults (#306)
+        CREATE TABLE IF NOT EXISTS sail_defaults (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            sail_id INTEGER NOT NULL REFERENCES sails(id) ON DELETE CASCADE,
+            UNIQUE(sail_id)
+        );
     """,
 }
 
@@ -3188,6 +3202,82 @@ class Storage:
                     "point_of_sail": row["point_of_sail"],
                 }
         return result
+
+    # ------------------------------------------------------------------
+    # Sail defaults (boat-level)
+    # ------------------------------------------------------------------
+
+    async def get_sail_defaults(self) -> dict[str, Any]:
+        """Return the boat-level default sail selection.
+
+        Returns a dict with keys ``main``, ``jib``, ``spinnaker``, each
+        containing the full sail row dict or ``None`` if not set.
+        """
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT s.id, s.type, s.name, s.notes, s.active, s.point_of_sail"
+            " FROM sail_defaults sd"
+            " JOIN sails s ON s.id = sd.sail_id",
+        )
+        rows = await cur.fetchall()
+        result: dict[str, dict[str, Any] | None] = dict.fromkeys(_SAIL_TYPES)
+        for row in rows:
+            sail_type = row["type"]
+            if sail_type in result:
+                result[sail_type] = {
+                    "id": row["id"],
+                    "type": sail_type,
+                    "name": row["name"],
+                    "notes": row["notes"],
+                    "active": bool(row["active"]),
+                    "point_of_sail": row["point_of_sail"],
+                }
+        return result
+
+    async def set_sail_defaults(
+        self,
+        *,
+        main_id: int | None,
+        jib_id: int | None,
+        spinnaker_id: int | None,
+    ) -> None:
+        """Replace the boat-level default sail selection.
+
+        Existing defaults are deleted and the provided non-None sail ids
+        are re-inserted.  Validates that each sail exists and matches the
+        expected type.
+        """
+        db = self._conn()
+        slot_map: dict[str, int | None] = {
+            "main": main_id,
+            "jib": jib_id,
+            "spinnaker": spinnaker_id,
+        }
+        for slot_type, sail_id in slot_map.items():
+            if sail_id is None:
+                continue
+            cur = await db.execute(
+                "SELECT type FROM sails WHERE id = ?", (sail_id,)
+            )
+            row = await cur.fetchone()
+            if row is None:
+                msg = f"Sail id={sail_id} not found"
+                raise ValueError(msg)
+            if row["type"] != slot_type:
+                msg = (
+                    f"Sail id={sail_id} has type {row['type']!r},"
+                    f" expected {slot_type!r} for the {slot_type} slot"
+                )
+                raise ValueError(msg)
+        await db.execute("DELETE FROM sail_defaults")
+        for sail_id in (main_id, jib_id, spinnaker_id):
+            if sail_id is not None:
+                await db.execute(
+                    "INSERT OR IGNORE INTO sail_defaults (sail_id) VALUES (?)",
+                    (sail_id,),
+                )
+        await db.commit()
+        logger.debug("Sail defaults updated")
 
     # ------------------------------------------------------------------
     # Transcripts

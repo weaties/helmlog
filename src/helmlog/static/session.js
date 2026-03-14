@@ -763,6 +763,23 @@ async function loadSails() {
   });
   html += '<button class="btn-export" style="background:#2563eb;color:#fff;border-color:#2563eb;font-size:.78rem;margin-top:4px" onclick="saveSails()">Save Sails</button>';
   body.innerHTML = html;
+
+  // If no sails are set for this session, pre-select from boat-level defaults
+  const hasAnySail = slots.some(slot => current[slot] && current[slot].id);
+  if (!hasAnySail) {
+    try {
+      const defaultsResp = await fetch('/api/sails/defaults');
+      if (defaultsResp.ok) {
+        const defaults = await defaultsResp.json();
+        slots.forEach(slot => {
+          if (defaults[slot] && defaults[slot].id) {
+            const sel = document.getElementById('sail-select-' + slot);
+            if (sel) sel.value = String(defaults[slot].id);
+          }
+        });
+      }
+    } catch (_) { /* ignore — defaults are a convenience, not critical */ }
+  }
 }
 
 async function saveSails() {

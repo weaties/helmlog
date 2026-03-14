@@ -2144,6 +2144,131 @@ async def test_list_sails_includes_point_of_sail(storage: Storage) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Sail defaults (#306)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_sail_defaults_empty(storage: Storage) -> None:
+    """GET /api/sails/defaults returns all-None when no defaults are set."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/sails/defaults")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data == {"main": None, "jib": None, "spinnaker": None}
+
+
+@pytest.mark.asyncio
+async def test_set_and_get_sail_defaults(storage: Storage) -> None:
+    """PUT /api/sails/defaults persists and GET returns them."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        main_id = await _add_sail(client, "main", "Full Main")
+        jib_id = await _add_sail(client, "jib", "J1")
+        resp = await client.put(
+            "/api/sails/defaults",
+            json={"main_id": main_id, "jib_id": jib_id, "spinnaker_id": None},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["main"]["id"] == main_id
+        assert data["jib"]["id"] == jib_id
+        assert data["spinnaker"] is None
+
+        # GET should return the same
+        resp2 = await client.get("/api/sails/defaults")
+        assert resp2.json() == data
+
+
+@pytest.mark.asyncio
+async def test_set_sail_defaults_invalid_id_422(storage: Storage) -> None:
+    """PUT /api/sails/defaults with non-existent sail returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/sails/defaults", json={"main_id": 999}
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_set_sail_defaults_wrong_type_422(storage: Storage) -> None:
+    """PUT /api/sails/defaults with sail in wrong slot returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        jib_id = await _add_sail(client, "jib", "J1")
+        resp = await client.put(
+            "/api/sails/defaults", json={"main_id": jib_id}
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_clear_sail_defaults(storage: Storage) -> None:
+    """PUT /api/sails/defaults with all None clears defaults."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        main_id = await _add_sail(client, "main", "Full Main")
+        await client.put(
+            "/api/sails/defaults", json={"main_id": main_id}
+        )
+        # Clear
+        resp = await client.put(
+            "/api/sails/defaults",
+            json={"main_id": None, "jib_id": None, "spinnaker_id": None},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data == {"main": None, "jib": None, "spinnaker": None}
+
+
+@pytest.mark.asyncio
+async def test_sail_defaults_do_not_affect_session_sails(storage: Storage) -> None:
+    """Session sails remain independent of defaults."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        main_id = await _add_sail(client, "main", "Full Main")
+        jib_id = await _add_sail(client, "jib", "J1")
+
+        # Set defaults to main only
+        await client.put("/api/sails/defaults", json={"main_id": main_id})
+
+        # Start a session and set sails to jib only
+        await _set_event(client)
+        race_resp = await client.post("/api/races/start")
+        session_id = race_resp.json()["id"]
+        await client.put(
+            f"/api/sessions/{session_id}/sails",
+            json={"main_id": None, "jib_id": jib_id, "spinnaker_id": None},
+        )
+
+        # Session sails should be jib only
+        sails_resp = await client.get(f"/api/sessions/{session_id}/sails")
+        sails = sails_resp.json()
+        assert sails["main"] is None
+        assert sails["jib"]["id"] == jib_id
+
+        # Defaults should still be main only
+        defaults_resp = await client.get("/api/sails/defaults")
+        defaults = defaults_resp.json()
+        assert defaults["main"]["id"] == main_id
+        assert defaults["jib"] is None
+
+
+# ---------------------------------------------------------------------------
 # Audio download / stream endpoints (#21)
 # ---------------------------------------------------------------------------
 
