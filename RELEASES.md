@@ -1,5 +1,68 @@
 # Release Notes
 
+## Sprint 3 — Auth, Boat Settings, Comments & Developer Tooling (2026-03-14)
+
+Sprint 3 adds multi-method authentication, boat tuning capture, and
+collaborative race discussion.
+
+### Authentication overhaul — invitation + password + OAuth (#268, #272, #279, #280)
+
+Replace the single-use magic-link flow with a proper auth system:
+
+- **Invitation workflow** — admins send email invitations; users register with
+  a password on first visit
+- **Password authentication** — bcrypt-hashed credentials with forgot/reset flow
+- **OAuth login** — Google, Apple, and GitHub identity providers via Authlib
+- **Session middleware** — secure cookie-based sessions replace per-request
+  token lookup
+- **Developer role** (#271) — orthogonal `is_developer` flag gates access to
+  the synthesizer and non-standard branch selection in the deploy UI
+
+### Boat tuning settings (#274, #275, #297, #298)
+
+Structured capture and playback of boat tuning parameters:
+
+- **Time-series data model** — `boat_settings` table (schema v35) stores
+  parameter values with timestamps, supporting both boat-level defaults and
+  race-specific overrides
+- **Manual input UI** — phone-friendly accordion card on the home page with
+  category groups ordered by change frequency, auto-save on field change
+- **Session playback panel** — read-only settings panel on the session detail
+  page resolves values by timestamp; overridden defaults shown with
+  strikethrough annotation; updates when clicking the track or scrubbing video
+- **Synthesizer integration** — synthesized sessions now generate realistic
+  J/105 tuning data (rig tensions, sail controls, wind-responsive adjustments)
+
+### Threaded comments Phase 1 (#304)
+
+Collaborative race discussion anchored to sessions:
+
+- **Comment threads** — create threads on a session with optional timestamp or
+  mark reference (weather_mark_1, leeward_mark_2, etc.)
+- **Threaded replies** — nested comments with per-user read/unread tracking and
+  unread badges
+- **Resolve/unresolve** — mark threads as resolved with a summary; resolved
+  threads show as hollow green rings on the track map
+- **Track map integration** — right-click the track to start a discussion at
+  that timestamp; colored dots show open (purple), unread (blue), and resolved
+  (green) threads with tooltip previews
+- **Crew redaction** — comment content is redacted in co-op API responses per
+  data licensing policy
+
+### Developer experience & infrastructure
+
+- **Promote gate** (#302, #303) — `promote.yml` GitHub Actions workflow gates
+  `main → stage` promotion on a new RELEASES.md heading; ideation-only commits
+  are exempt
+- **/release-notes skill** — drafts a RELEASES.md entry from commits since
+  the last stage promotion
+- **/ideate skill** (#289) — capture half-baked ideas into `docs/ideation-log.md`
+  with structured metadata
+- **Bootstrap fixes** (#291, #292, #294) — admin login URL printed correctly,
+  `sudo` added to data dir removal in `reset-pi.sh`
+
+---
+
 ## Sprint 2 complete — Performance Analysis & Synthesizer (2026-03-12)
 
 Sprint 2 (March 10–24) is feature-complete. 
