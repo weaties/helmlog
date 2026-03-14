@@ -5,21 +5,34 @@
 h1{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:12px}
 .card{background:#131f35;border-radius:12px;padding:24px;text-align:center}
 .avatar{width:128px;height:128px;border-radius:50%;object-fit:cover;cursor:pointer;border:3px solid {{ role_color }};margin-bottom:16px}
-.email{color:#8892a4;font-size:.85rem;margin-bottom:8px}
+.avatar-hint{color:#6b7a90;font-size:.75rem;margin-top:-10px;margin-bottom:12px}
+.email{color:#8892a4;font-size:.9rem;margin-bottom:8px}
 .role{background:{{ role_color }}22;color:{{ role_color }};padding:2px 10px;border-radius:4px;font-size:.8rem;display:inline-block}
 a{color:#7eb8f7;text-decoration:none}
-.profile-field{text-align:left;margin-top:18px}
-.profile-field label{color:#8892a4;font-size:.85rem}
-.profile-input{width:100%;padding:8px;border-radius:6px;border:1px solid #2a3a5c;background:#0d1829;color:#e0e6ed;margin-top:4px;font-size:1rem;box-sizing:border-box}
-.profile-row{display:flex;gap:8px;align-items:flex-end;margin-top:4px}
-.profile-row .profile-input{flex:1;margin-top:0}
-.profile-row .btn{flex-shrink:0}
+.profile-field{text-align:left;margin-top:24px}
+.profile-field > label{color:#8892a4;font-size:.9rem;display:block;margin-bottom:6px}
+.profile-input{
+  width:100%;padding:14px 12px;border-radius:8px;border:1px solid #2a3a5c;
+  background:#0d1829;color:#e0e6ed;font-size:1.1rem;box-sizing:border-box;
+  min-height:48px;
+}
+.profile-input:focus{border-color:#2563eb;outline:none}
+.profile-row{display:flex;gap:10px;align-items:stretch;margin-top:6px}
+.profile-row .profile-input{flex:1}
+.profile-row .btn{flex-shrink:0;min-height:48px;padding:12px 20px;font-size:.95rem;display:flex;align-items:center}
+.consent-label{
+  display:flex;align-items:center;gap:8px;margin-top:8px;
+  color:#8892a4;font-size:.9rem;cursor:pointer;padding:8px 0;
+}
+.consent-label input[type="checkbox"]{width:20px;height:20px;cursor:pointer}
+.bio-note{color:#6b7a90;font-size:.8rem;margin:6px 0 0;line-height:1.4}
 </style>
 {% endblock %}
 {% block content %}
 <h1 style="margin-bottom:12px">Profile</h1>
 <div class="card">
   <img class="avatar" id="avatar" src="{{ avatar_url }}" alt="avatar" onclick="document.getElementById('file').click()"/>
+  <div class="avatar-hint">Tap photo to change</div>
   <input type="file" id="file" accept="image/*" style="display:none"/>
   <div class="email">{{ email }}</div>
   <div class="role">{{ role }}</div>
@@ -27,19 +40,19 @@ a{color:#7eb8f7;text-decoration:none}
     <label for="name-input">Display Name</label>
     <div class="profile-row">
       <input type="text" id="name-input" class="profile-input" value="{{ name }}" placeholder="Your name"/>
-      <button class="btn btn-secondary" style="font-size:.85rem;padding:8px 16px" onclick="saveName()">Save</button>
+      <button class="btn btn-secondary" onclick="saveName()">Save</button>
     </div>
   </div>
   <div class="profile-field">
-    <label>Body Weight (lbs)</label>
-    <p style="color:#6b7a90;font-size:.75rem;margin:4px 0 0">Weight is biometric data. By saving, you consent to its storage for crew weight tracking. You may clear it at any time by saving an empty value.</p>
-    <label style="display:flex;align-items:center;gap:6px;margin-top:6px;color:#8892a4;font-size:.85rem;cursor:pointer">
+    <label for="weight-input">Body Weight (lbs)</label>
+    <p class="bio-note">Weight is biometric data stored for crew weight tracking. You may clear it at any time by saving an empty value.</p>
+    <label class="consent-label">
       <input type="checkbox" id="bio-consent" {% if bio_consent %}checked{% endif %}/> I consent to biometric data storage
     </label>
     <div class="profile-row">
       <input type="number" id="weight-input" class="profile-input" step="0.1" min="0" max="500"
              value="{{ weight_lbs or '' }}" placeholder="—"/>
-      <button class="btn btn-secondary" style="font-size:.85rem;padding:8px 16px" onclick="saveWeight()">Save</button>
+      <button class="btn btn-secondary" onclick="saveWeight()">Save</button>
     </div>
   </div>
 </div>

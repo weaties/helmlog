@@ -95,22 +95,31 @@ function editUser(userId) {
   if (!row) return;
   const emailTd = row.querySelector('.u-email');
   const nameTd = row.querySelector('.u-name');
+  const weightTd = row.querySelector('.u-weight');
   const curEmail = emailTd.textContent.trim();
   const curName = nameTd.textContent.trim();
+  const curWeight = weightTd ? weightTd.textContent.replace(/[^\d.]/g, '') : '';
   emailTd.innerHTML = '<input class="edit-input" id="edit-email-'+userId+'" value="'+curEmail.replace(/"/g,'&quot;')+'" />';
   nameTd.innerHTML = '<input class="edit-input" id="edit-name-'+userId+'" value="'+curName.replace(/"/g,'&quot;')+'" placeholder="Display name" />'
     + '<div class="edit-actions"><button class="edit-save" onclick="saveUser('+userId+')">Save</button>'
     + '<button class="edit-cancel" onclick="location.reload()">Cancel</button></div>';
+  if (weightTd) {
+    weightTd.innerHTML = '<input class="edit-input" id="edit-weight-'+userId+'" type="number" step="0.1" min="0" max="500" value="'+curWeight+'" placeholder="lbs" style="width:80px" />';
+  }
   document.getElementById('edit-name-'+userId).focus();
 }
 async function saveUser(userId) {
   const name = document.getElementById('edit-name-'+userId).value.trim();
   const email = document.getElementById('edit-email-'+userId).value.trim();
+  const weightEl = document.getElementById('edit-weight-'+userId);
+  const weightVal = weightEl ? weightEl.value.trim() : '';
   if (!email) { alert('Email is required'); return; }
+  const payload = {name: name || null, email: email};
+  if (weightEl) payload.weight_lbs = weightVal ? parseFloat(weightVal) : null;
   const r = await fetch('/admin/users/' + userId, {
     method:'PUT',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({name: name || null, email: email})
+    body: JSON.stringify(payload)
   });
   if (r.ok) {
     location.reload();

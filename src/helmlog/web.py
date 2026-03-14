@@ -1064,7 +1064,7 @@ def create_app(
             f'<td class="u-name">{_esc(u["name"] or "")}</td>'
             f"<td>{_badge(u['role'])}</td>"
             f"<td>{'&#9989;' if u.get('is_developer') else '\u2014'}</td>"
-            f"<td>{_fmt_weight(u.get('weight_lbs'))}</td>"
+            f'<td class="u-weight">{_fmt_weight(u.get("weight_lbs"))}</td>'
             f"<td>{_local_ts(u['last_seen'])}</td>"
             f'<td><button onclick="editUser({u["id"]})" class="ubtn" style="border-color:#22c55e;color:#4ade80">Edit</button>'  # noqa: E501
             f' <button onclick="changeRole({u["id"]})" class="ubtn">Role</button>'
@@ -1202,11 +1202,18 @@ def create_app(
             if existing and existing["id"] != user_id:
                 raise HTTPException(status_code=409, detail="Email already in use")
         await storage.update_user_profile(user_id, name, email)
+        # Weight update (admin bypass — no biometric consent required from admin)
+        if "weight_lbs" in body:
+            w = body["weight_lbs"]
+            weight_val = float(w) if w is not None and w != "" else None
+            await storage.update_user_weight(user_id, weight_val)
         changes = []
         if name is not None:
             changes.append(f"name={name!r}")
         if email is not None:
             changes.append(f"email={email!r}")
+        if "weight_lbs" in body:
+            changes.append(f"weight_lbs={body['weight_lbs']!r}")
         await _audit(
             request, "user.update", detail=f"user={user_id} {' '.join(changes)}", user=_user
         )
