@@ -1062,12 +1062,11 @@ def create_app(
             f'<tr data-uid="{u["id"]}">'
             f'<td class="u-email" data-label="Email">{_esc(u["email"])}</td>'
             f'<td class="u-name" data-label="Name">{_esc(u["name"] or "")}</td>'
-            f'<td data-label="Role">{_badge(u["role"])}</td>'
-            f'<td data-label="Dev">{"&#9989;" if u.get("is_developer") else "\u2014"}</td>'
+            f'<td class="u-role" data-label="Role" data-role="{u["role"]}">{_badge(u["role"])}</td>'
+            f'<td class="u-dev" data-label="Dev" data-dev="{1 if u.get("is_developer") else 0}">{"&#9989;" if u.get("is_developer") else "\u2014"}</td>'  # noqa: E501
             f'<td class="u-weight" data-label="Weight">{_fmt_weight(u.get("weight_lbs"))}</td>'
             f'<td data-label="Last seen">{_local_ts(u["last_seen"])}</td>'
-            f'<td><button onclick="editUser({u["id"]})" class="ubtn" style="border-color:#22c55e;color:#4ade80">Edit</button>'  # noqa: E501
-            f' <button onclick="changeRole({u["id"]})" class="ubtn">Role</button>'
+            f'<td class="u-actions"><button onclick="editUser({u["id"]})" class="ubtn ubtn-edit" style="border-color:#22c55e;color:#4ade80">Edit</button>'  # noqa: E501
             f' <button onclick="toggleDev({u["id"]},{1 if not u.get("is_developer") else 0})" class="ubtn" style="border-color:#d97706;color:#fbbf24">{"Remove dev" if u.get("is_developer") else "Make dev"}</button></td>'  # noqa: E501
             f"</tr>"
             for u in users
@@ -1204,6 +1203,12 @@ def create_app(
             if existing and existing["id"] != user_id:
                 raise HTTPException(status_code=409, detail="Email already in use")
         await storage.update_user_profile(user_id, name, email)
+        # Role update
+        role = body.get("role")
+        if role is not None:
+            if role not in ("viewer", "crew", "admin"):
+                raise HTTPException(status_code=422, detail="Invalid role")
+            await storage.update_user_role(user_id, role)
         # Weight update (admin bypass — no biometric consent required from admin)
         if "weight_lbs" in body:
             w = body["weight_lbs"]
@@ -1214,6 +1219,8 @@ def create_app(
             changes.append(f"name={name!r}")
         if email is not None:
             changes.append(f"email={email!r}")
+        if role is not None:
+            changes.append(f"role={role!r}")
         if "weight_lbs" in body:
             changes.append(f"weight_lbs={body['weight_lbs']!r}")
         await _audit(

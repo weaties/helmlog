@@ -7,17 +7,17 @@ h2{font-size:1rem;font-weight:600;color:#e8eaf0;margin:20px 0 10px}
 .card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:16px}
 table{width:100%;border-collapse:collapse;font-size:.85rem}
 th{text-align:left;padding:6px 8px;color:#8892a4;font-weight:500;border-bottom:1px solid #1e3a5f}
-td{padding:6px 8px;border-bottom:1px solid #0d1a2e}
+td{padding:6px 8px;border-bottom:1px solid #0d1a2e;vertical-align:middle}
 label{font-size:.85rem;color:#8892a4;display:block;margin-bottom:4px}
 input,select{background:#0a1628;border:1px solid #2563eb;border-radius:6px;padding:8px 10px;color:#e8eaf0;font-size:.9rem;margin-bottom:10px}
 .btn{padding:10px 18px;border:none;border-radius:8px;font-size:.9rem;font-weight:700;cursor:pointer;background:#2563eb;color:#fff}
 #invite-result{margin-top:12px;font-size:.85rem;color:#4ade80;word-break:break-all}
 .ubtn{cursor:pointer;background:none;border:1px solid #2563eb;color:#7eb8f7;border-radius:4px;padding:4px 10px;font-size:.8rem;white-space:nowrap}
-.edit-input{background:#0a1628;border:1px solid #2563eb;border-radius:4px;padding:6px 8px;color:#e8eaf0;font-size:.85rem;width:100%;min-height:36px;box-sizing:border-box}
-.edit-actions{margin-top:6px;display:flex;gap:6px}
-.edit-actions button{font-size:.8rem;padding:6px 12px;border-radius:4px;cursor:pointer;border:none;min-height:36px}
-.edit-save{background:#22c55e;color:#fff}
-.edit-cancel{background:#374151;color:#8892a4}
+.edit-input{background:#0a1628;border:1px solid #2563eb;border-radius:4px;padding:6px 8px;color:#e8eaf0;font-size:.85rem;width:100%;min-height:36px;box-sizing:border-box;margin:0}
+.edit-select{background:#0a1628;border:1px solid #2563eb;border-radius:4px;padding:6px 8px;color:#e8eaf0;font-size:.85rem;min-height:36px;margin:0}
+.u-actions{white-space:nowrap}
+.u-actions .ubtn{margin-left:4px}
+.u-actions .ubtn:first-child{margin-left:0}
 /* --- Mobile: table → stacked cards --- */
 @media (max-width: 640px) {
   table thead{display:none}
@@ -28,8 +28,7 @@ input,select{background:#0a1628;border:1px solid #2563eb;border-radius:6px;paddi
   tbody td:last-child::before{display:none}
   .card{padding:12px}
   .ubtn{padding:6px 12px;font-size:.85rem}
-  .edit-input{min-height:40px;font-size:.9rem;padding:8px}
-  .edit-actions button{min-height:40px;padding:8px 16px;font-size:.85rem}
+  .edit-input,.edit-select{min-height:40px;font-size:.9rem;padding:8px}
 }
 </style>
 {% endblock %}
@@ -85,12 +84,6 @@ document.getElementById('invite-form').addEventListener('submit', async e => {
   const d = await r.json();
   document.getElementById('invite-result').textContent = d.invite_url || JSON.stringify(d);
 });
-async function changeRole(userId) {
-  const role = prompt('New role (viewer/crew/admin):');
-  if (!role) return;
-  await fetch('/admin/users/' + userId + '/role', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({role})});
-  location.reload();
-}
 async function toggleDev(userId, value) {
   await fetch('/admin/users/' + userId + '/developer', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({is_developer: !!value})});
   location.reload();
@@ -103,32 +96,61 @@ async function revokeInvite(invId) {
   await fetch('/admin/invitations/' + invId + '/revoke', {method:'POST'});
   location.reload();
 }
+
 function editUser(userId) {
   const row = document.querySelector('tr[data-uid="' + userId + '"]');
   if (!row) return;
   const emailTd = row.querySelector('.u-email');
   const nameTd = row.querySelector('.u-name');
+  const roleTd = row.querySelector('.u-role');
   const weightTd = row.querySelector('.u-weight');
+  const actionsTd = row.querySelector('.u-actions');
+
   const curEmail = emailTd.textContent.trim();
   const curName = nameTd.textContent.trim();
+  const curRole = roleTd.dataset.role || 'viewer';
   const curWeight = weightTd ? weightTd.textContent.replace(/[^\d.]/g, '') : '';
+
+  // Email → input
   emailTd.innerHTML = '<input class="edit-input" id="edit-email-'+userId+'" value="'+curEmail.replace(/"/g,'&quot;')+'" />';
-  nameTd.innerHTML = '<input class="edit-input" id="edit-name-'+userId+'" value="'+curName.replace(/"/g,'&quot;')+'" placeholder="Display name" />'
-    + '<div class="edit-actions"><button class="edit-save" onclick="saveUser('+userId+')">Save</button>'
-    + '<button class="edit-cancel" onclick="location.reload()">Cancel</button></div>';
+
+  // Name → input
+  nameTd.innerHTML = '<input class="edit-input" id="edit-name-'+userId+'" value="'+curName.replace(/"/g,'&quot;')+'" placeholder="Display name" />';
+
+  // Role → select dropdown
+  var roles = ['viewer','crew','admin'];
+  var roleHtml = '<select class="edit-select" id="edit-role-'+userId+'">';
+  for (var i = 0; i < roles.length; i++) {
+    roleHtml += '<option value="'+roles[i]+'"'+(roles[i]===curRole?' selected':'')+'>'+roles[i]+'</option>';
+  }
+  roleHtml += '</select>';
+  roleTd.innerHTML = roleHtml;
+
+  // Weight → input
   if (weightTd) {
     weightTd.innerHTML = '<input class="edit-input" id="edit-weight-'+userId+'" type="number" step="0.1" min="0" max="500" value="'+curWeight+'" placeholder="lbs" style="width:80px" />';
   }
+
+  // Actions: Edit → Save + Cancel
+  actionsTd.innerHTML =
+    '<button onclick="saveUser('+userId+')" class="ubtn" style="border-color:#22c55e;color:#4ade80">Save</button>'
+    + ' <button onclick="location.reload()" class="ubtn" style="border-color:#374151;color:#8892a4">Cancel</button>';
+
   document.getElementById('edit-name-'+userId).focus();
 }
+
 async function saveUser(userId) {
   const name = document.getElementById('edit-name-'+userId).value.trim();
   const email = document.getElementById('edit-email-'+userId).value.trim();
+  const roleEl = document.getElementById('edit-role-'+userId);
   const weightEl = document.getElementById('edit-weight-'+userId);
   const weightVal = weightEl ? weightEl.value.trim() : '';
   if (!email) { alert('Email is required'); return; }
+
   const payload = {name: name || null, email: email};
+  if (roleEl) payload.role = roleEl.value;
   if (weightEl) payload.weight_lbs = weightVal ? parseFloat(weightVal) : null;
+
   const r = await fetch('/admin/users/' + userId, {
     method:'PUT',
     headers:{'Content-Type':'application/json'},
