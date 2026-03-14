@@ -1601,6 +1601,13 @@ function _updateBoatSettingsForUtc(utcDate) {
 let _threads = [];
 let _discussionMarkers = [];
 
+function _threadTitle(t) {
+  if (t.title) return esc(t.title);
+  const body = t.first_comment_body || (t.comments && t.comments.length ? t.comments[0].body : null);
+  if (body) return esc(body.length > 60 ? body.slice(0, 60) + '\u2026' : body);
+  return 'Thread #' + t.id;
+}
+
 async function loadDiscussion() {
   const card = document.getElementById('discussion-card');
   card.style.display = '';
@@ -1627,7 +1634,7 @@ async function loadDiscussion() {
       : '';
     const resolved = t.resolved ? ' resolved' : '';
     const resolvedTag = t.resolved ? '<span style="color:#4ade80;font-size:.7rem;margin-left:6px">&#10003; Resolved</span>' : '';
-    const title = t.title ? esc(t.title) : 'Thread #' + t.id;
+    const title = _threadTitle(t);
     const author = t.author_name || t.author_email || 'Crew Member';
     const count = t.comment_count === 1 ? '1 comment' : t.comment_count + ' comments';
     const resolutionHtml = t.resolved && t.resolution_summary
@@ -1654,7 +1661,7 @@ function _addDiscussionMarkers() {
     const latLng = _trackData.latLngs[idx];
     if (!latLng) return;
 
-    const title = t.title ? esc(t.title) : 'Thread #' + t.id;
+    const title = _threadTitle(t);
     const unread = t.unread_count > 0 ? ' <span class="thread-unread">' + t.unread_count + '</span>' : '';
     const resolvedTag = t.resolved ? '<div style="color:#4ade80;font-size:.7rem;margin-top:2px">&#10003; Resolved</div>' : '';
     const author = t.author_name || t.author_email || 'Crew Member';
@@ -1782,7 +1789,7 @@ async function openThread(threadId) {
   const r = await fetch('/api/threads/' + threadId);
   if (!r.ok) { loadDiscussion(); return; }
   const t = await r.json();
-  const title = t.title ? esc(t.title) : 'Thread #' + t.id;
+  const title = _threadTitle(t);
   const anchor = t.mark_reference
     ? '<span class="thread-anchor">' + esc(t.mark_reference.replace(/_/g, ' ')) + '</span>'
     : t.anchor_timestamp
