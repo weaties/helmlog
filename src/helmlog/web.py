@@ -5990,6 +5990,22 @@ def create_app(
         return JSONResponse({"sails": sails_out})
 
     # ------------------------------------------------------------------
+    # /api/users/names — lightweight user list for @mention autocomplete
+    # ------------------------------------------------------------------
+
+    @app.get("/api/users/names")
+    async def api_user_names(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return list of {id, name} for @mention autocomplete."""
+        users = await storage.list_users()
+        return JSONResponse([
+            {"id": u["id"], "name": u["name"] or u["email"]}
+            for u in users
+            if u.get("name") or u.get("email")
+        ])
+
+    # ------------------------------------------------------------------
     # /api/notifications — Notification system (#284)
     # ------------------------------------------------------------------
 

@@ -2101,7 +2101,7 @@ async function openThread(threadId) {
     return '<div class="comment-item">'
       + '<span class="comment-author">' + esc(author) + '</span>'
       + '<span class="comment-time">' + fmtTime(c.created_at) + '</span>' + edited
-      + '<div class="comment-body">' + esc(c.body) + '</div>'
+      + '<div class="comment-body">' + _renderMentions(esc(c.body)) + '</div>'
       + '</div>';
   }).join('');
   body.innerHTML = '<div style="margin-bottom:8px">'
@@ -2167,6 +2167,123 @@ async function unresolveThread(threadId) {
   });
   openThread(threadId);
 }
+
+// ---------------------------------------------------------------------------
+// @mention autocomplete (#284)
+// ---------------------------------------------------------------------------
+
+let _mentionUsers = null; // [{id, name}, ...]
+
+function _renderMentions(escapedText) {
+  return escapedText.replace(/@([\w.\-]+)/g, '<span style="color:#60a5fa;font-weight:600">@$1</span>');
+}
+
+async function _loadMentionUsers() {
+  if (_mentionUsers) return _mentionUsers;
+  try {
+    const r = await fetch('/api/users/names');
+    if (r.ok) _mentionUsers = await r.json();
+    else _mentionUsers = [];
+  } catch (e) { _mentionUsers = []; }
+  return _mentionUsers;
+}
+
+function _getMentionContext(el) {
+  const val = el.value;
+  const pos = el.selectionStart;
+  // Walk backward from cursor to find @
+  let i = pos - 1;
+  while (i >= 0 && /[\w.\-]/.test(val[i])) i--;
+  if (i < 0 || val[i] !== '@') return null;
+  // Don't trigger if @ is preceded by a word char (e.g. email)
+  if (i > 0 && /\w/.test(val[i - 1])) return null;
+  const query = val.substring(i + 1, pos);
+  return { start: i, end: pos, query };
+}
+
+function _insertMention(el, ctx, name) {
+  const before = el.value.substring(0, ctx.start);
+  const after = el.value.substring(ctx.end);
+  el.value = before + '@' + name + ' ' + after;
+  const newPos = ctx.start + name.length + 2;
+  el.setSelectionRange(newPos, newPos);
+  el.focus();
+  _removeMentionDropdown();
+}
+
+function _removeMentionDropdown() {
+  const existing = document.getElementById('mention-dropdown');
+  if (existing) existing.remove();
+}
+
+function _showMentionDropdown(el, matches, ctx) {
+  _removeMentionDropdown();
+  if (!matches.length) return;
+
+  const dd = document.createElement('div');
+  dd.id = 'mention-dropdown';
+  dd.style.cssText = 'position:absolute;z-index:9999;background:#131f35;border:1px solid #2563eb;'
+    + 'border-radius:6px;max-height:150px;overflow-y:auto;min-width:160px;box-shadow:0 4px 12px rgba(0,0,0,.5)';
+
+  for (const u of matches.slice(0, 8)) {
+    const item = document.createElement('div');
+    item.textContent = u.name;
+    item.style.cssText = 'padding:6px 10px;cursor:pointer;font-size:.82rem;color:#e8eaf0';
+    item.addEventListener('mouseenter', () => { item.style.background = '#1e3a5f'; });
+    item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
+    item.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      _insertMention(el, ctx, u.name);
+    });
+    dd.appendChild(item);
+  }
+
+  // Position below the textarea
+  const rect = el.getBoundingClientRect();
+  dd.style.left = rect.left + 'px';
+  dd.style.top = (rect.bottom + 2) + 'px';
+  dd.style.position = 'fixed';
+  document.body.appendChild(dd);
+}
+
+let _mentionActiveEl = null;
+
+function _handleMentionInput(e) {
+  const el = e.target;
+  if (el.tagName !== 'TEXTAREA') return;
+  _mentionActiveEl = el;
+  const ctx = _getMentionContext(el);
+  if (!ctx) { _removeMentionDropdown(); return; }
+  _loadMentionUsers().then(users => {
+    const q = ctx.query.toLowerCase();
+    const matches = users.filter(u => u.name && u.name.toLowerCase().includes(q));
+    _showMentionDropdown(el, matches, ctx);
+  });
+}
+
+function _handleMentionKeydown(e) {
+  const dd = document.getElementById('mention-dropdown');
+  if (!dd) return;
+  if (e.key === 'Escape') { _removeMentionDropdown(); return; }
+  if (e.key === 'Tab' || e.key === 'Enter') {
+    const first = dd.querySelector('div');
+    if (first && _mentionActiveEl) {
+      e.preventDefault();
+      const ctx = _getMentionContext(_mentionActiveEl);
+      if (ctx) {
+        const name = first.textContent;
+        _insertMention(_mentionActiveEl, ctx, name);
+      }
+    }
+  }
+}
+
+// Use event delegation on the discussion card
+document.addEventListener('input', _handleMentionInput);
+document.addEventListener('keydown', _handleMentionKeydown);
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#mention-dropdown')) _removeMentionDropdown();
+});
 
 // ---------------------------------------------------------------------------
 // Go
