@@ -125,7 +125,7 @@ _MARK_REFERENCES: frozenset[str] = frozenset(
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 43
+_CURRENT_VERSION: int = 44
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -999,6 +999,26 @@ _MIGRATIONS: dict[int, str] = {
             frequency TEXT NOT NULL DEFAULT 'immediate',
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, scope, type, channel)
+        );
+    """,
+    44: """
+        -- Pluggable visualization framework (#286)
+        CREATE TABLE IF NOT EXISTS visualization_preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope TEXT NOT NULL,
+            scope_id TEXT,
+            plugin_names TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(scope, scope_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS visualization_selections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            session_id INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+            plugin_names TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, session_id)
         );
     """,
 }
@@ -5438,6 +5458,71 @@ class Storage:
             if pref is not None:
                 return pref["model_name"]  # type: ignore[no-any-return]
         return None
+
+    # ------------------------------------------------------------------
+    # Visualization preferences (#286)
+    # ------------------------------------------------------------------
+
+    async def get_viz_preference(self, scope: str, scope_id: str | None) -> dict[str, Any] | None:
+        """Return the visualization preference row for a scope, or None."""
+        db = self._conn()
+        if scope_id is None:
+            cur = await db.execute(
+                "SELECT scope, scope_id, plugin_names, updated_at"
+                " FROM visualization_preferences WHERE scope = ? AND scope_id IS NULL",
+                (scope,),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT scope, scope_id, plugin_names, updated_at"
+                " FROM visualization_preferences WHERE scope = ? AND scope_id = ?",
+                (scope, scope_id),
+            )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def set_viz_preference(self, scope: str, scope_id: str | None, plugin_names: str) -> None:
+        """Set or update the preferred visualization plugins at the given scope."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        await db.execute(
+            "INSERT INTO visualization_preferences (scope, scope_id, plugin_names, updated_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(scope, scope_id) DO UPDATE SET"
+            "   plugin_names = excluded.plugin_names, updated_at = excluded.updated_at",
+            (scope, scope_id, plugin_names, now),
+        )
+        await db.commit()
+
+    async def get_viz_selection(self, user_id: int, session_id: int) -> dict[str, Any] | None:
+        """Return the visualization selection for a user+session, or None."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT user_id, session_id, plugin_names, updated_at"
+            " FROM visualization_selections WHERE user_id = ? AND session_id = ?",
+            (user_id, session_id),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def set_viz_selection(self, user_id: int, session_id: int, plugin_names: str) -> None:
+        """Set or update the active visualization set for a user+session."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        await db.execute(
+            "INSERT INTO visualization_selections (user_id, session_id, plugin_names, updated_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(user_id, session_id) DO UPDATE SET"
+            "   plugin_names = excluded.plugin_names, updated_at = excluded.updated_at",
+            (user_id, session_id, plugin_names, now),
+        )
+        await db.commit()
 
     # ------------------------------------------------------------------
     # Sail active ranges (#309)
