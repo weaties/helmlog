@@ -5545,9 +5545,15 @@ class Storage:
         cur = await db.execute(
             f"SELECT n.id, n.user_id, n.type, n.source_thread_id, n.source_comment_id,"
             f" n.session_id, n.actor_id, n.message, n.created_at, n.read, n.dismissed,"
-            f" u.name AS actor_name, u.email AS actor_email"
+            f" u.name AS actor_name, u.email AS actor_email,"
+            f" r.name AS session_name,"
+            f" c.body AS comment_body,"
+            f" t.title AS thread_title"
             f" FROM notifications n"
             f" LEFT JOIN users u ON n.actor_id = u.id"
+            f" LEFT JOIN races r ON n.session_id = r.id"
+            f" LEFT JOIN comments c ON n.source_comment_id = c.id"
+            f" LEFT JOIN comment_threads t ON n.source_thread_id = t.id"
             f" {where}"
             f" ORDER BY n.created_at DESC LIMIT ?",
             (user_id, limit),
