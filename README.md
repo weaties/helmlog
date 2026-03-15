@@ -44,7 +44,7 @@ grafana-server.service (independent, starts at boot)
 
 ## Table of Contents
 
-1. [Daily use](#daily-use)
+1. [Daily use](#daily-use) — web UI overview, exports, background service, CLI reference
 2. [Web interfaces](#web-interfaces)
 3. [Race marking](#race-marking)
 4. [Sail tracking](#sail-tracking)
@@ -65,62 +65,61 @@ grafana-server.service (independent, starts at boot)
 
 ## Daily use
 
-> These commands assume the Pi is already set up. SSH in via Tailscale
-> (`ssh <pi-user>@<pi-hostname>`) and run from the project directory.
-> Replace `<pi-user>` and `<pi-hostname>` with the values you chose during
-> [SD card setup](#fresh-sd-card-setup) — e.g. `weaties@corvopi`.
+Everything happens through the web UI at `http://<pi-hostname>/` — open it on
+any phone, tablet, or laptop on your Tailscale network. The logger service
+starts automatically when the Pi boots, so there's nothing to launch manually.
 
-### Check what's in the database
+### Home page — race control
 
-```bash
-helmlog status
-```
+The home page is your race-day cockpit. From here you can:
 
-```
-Table                    Rows  Last seen
--------------------------------------------------------
-headings                 1823  2025-08-10T14:32:05.123+00:00
-speeds                   1821  2025-08-10T14:32:05.089+00:00
-winds                    1820  2025-08-10T14:32:04.997+00:00
-...
-```
+- **Start and end sessions** — race, practice, or debrief — with one tap
+- **Set the event name** — auto-fills on Monday (BallardCup) and Wednesday (CYC);
+  type your own on other days
+- **Record crew** — assign sailors to positions (Helm, Main, Pit, Bow, Tac, Guest)
+  with autocomplete from recent names
+- **Take notes** — add text notes, capture current instrument settings, or upload
+  photos/videos mid-race
+- **Monitor instruments** — live readout of BSP, TWS, TWA, HDG, COG, SOG, AWS, AWA
+- **Check system health** — warnings appear automatically if disk is full or CPU is hot
 
-### Start logging (manual / foreground)
+### History — browse past sessions
 
-```bash
-helmlog run
-```
+The history page shows all recorded sessions with search, filtering by type
+(race / practice / debrief), and date range selection. Each session card shows:
 
-Press `Ctrl-C` to stop. All buffered data is flushed before exit.
+- GPS track map (Leaflet)
+- Linked YouTube video with embedded player
+- Audio player for debrief recordings
+- Crew roster and sail selections
+- Download buttons for CSV, GPX, and JSON exports
 
-### Export to CSV, GPX, or JSON
+### Session detail — deep dive into a single session
 
-```bash
-helmlog export \
-  --start "2025-08-10T13:00:00" \
-  --end   "2025-08-10T15:30:00" \
-  --out   data/race1.csv
-```
+Click any session to open its dedicated detail page with:
 
-The format is inferred from the file extension:
+- **Track** — full GPS route on an interactive map
+- **Video** — embedded YouTube player synced to instrument timestamps
+- **Crew & sails** — who was on board and what sails were up
+- **Notes** — text, settings snapshots, and photos captured during the session
+- **Transcript** — audio transcription with speaker labels (if diarisation is enabled)
+- **Exports** — CSV, GPX, JSON download with optional GPS precision reduction
 
-| Extension | Format | Best for |
-|---|---|---|
-| `.csv` | Comma-separated values | Spreadsheets, Sailmon, custom analysis |
-| `.gpx` | GPX 1.1 XML track | Navigation apps, course replay tools |
-| `.json` | Structured JSON | Custom scripts, programmatic analysis |
+### Admin pages
 
-```bash
-# GPX — only seconds with GPS position produce a <trkpt>
-helmlog export --start "2025-08-10T13:00:00" --end "2025-08-10T15:30:00" \
-  --out data/race1.gpx
+Admins have access to additional pages under `/admin`:
 
-# JSON — numeric values are typed (null instead of empty string for missing data)
-helmlog export --start "2025-08-10T13:00:00" --end "2025-08-10T15:30:00" \
-  --out data/race1.json
-```
+- **Users** — manage accounts, generate magic-link invites, view active sessions
+- **Boats** — register boats with sail number, name, and class
+- **Cameras** — control Insta360 cameras, start/stop recording
+- **Event rules** — configure day-of-week auto-naming
+- **Settings** — adjust configuration without SSH
+- **Audit log** — full trail of every user action
 
-Timestamps are UTC ISO 8601. The output CSV has one row per second with columns:
+### Exports
+
+Exports are available directly from the web UI — on history cards and session
+detail pages. Each export produces one row per second with columns:
 
 | Column | Description |
 |---|---|
@@ -139,38 +138,47 @@ Timestamps are UTC ISO 8601. The output CSV has one row per second with columns:
 | `PRESSURE` | Surface pressure (hPa) from Open-Meteo |
 | `TIDE_HT` | Tide height above MLLW (metres) from NOAA CO-OPS |
 
+Three formats are supported:
+
+| Format | Best for |
+|---|---|
+| CSV | Spreadsheets, Sailmon, custom analysis |
+| GPX | Navigation apps, course replay tools |
+| JSON | Custom scripts, programmatic analysis |
+
 Weather and tide columns are hourly resolution — all seconds within the same
 hour share the same value. They are empty if the Pi had no internet or GPS
 lock when the session was logged.
 
-### Manage the background service
+### Background service
 
-The logger runs automatically as a systemd service when the Pi boots on the boat.
+The logger runs as a systemd service and starts automatically at boot. You
+should rarely need to touch it, but if you do:
 
 ```bash
-# Check status
-sudo systemctl status helmlog
+ssh <pi-user>@<pi-hostname>
 
-# View live logs
-sudo journalctl -fu helmlog
-
-# Stop / start / restart
-sudo systemctl stop    helmlog
-sudo systemctl start   helmlog
-sudo systemctl restart helmlog
+sudo systemctl status helmlog       # check status
+sudo journalctl -fu helmlog         # view live logs
+sudo systemctl restart helmlog      # restart after config changes
 ```
 
 The service depends on `signalk.service`, which in turn depends on
 `can-interface.service`. All three start automatically at boot.
 
-### CAN bus health check
+### CLI reference
+
+The CLI is available for initial setup and troubleshooting but is not needed
+for day-to-day use:
 
 ```bash
-# Should show frames streaming in — if blank, check the physical connection
-candump can0
-
-# Interface details (state should be ERROR-ACTIVE when bus is healthy)
-ip -details link show can0
+helmlog status          # database row counts
+helmlog run             # start logger in foreground (for debugging)
+helmlog list-devices    # list audio devices
+helmlog list-cameras    # show configured cameras
+helmlog add-user        # create a user account
+helmlog identity show   # display boat identity and fingerprint
+helmlog --help          # full subcommand list
 ```
 
 ---
