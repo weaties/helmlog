@@ -972,3 +972,50 @@ the opposite of performative broadcasting.
   broader "Just Enough Social" label as a design philosophy for all co-op communication
   features — build the minimum social surface that enables genuine collaboration, resist
   the pull toward full social platform features.
+
+---
+
+## IDX-019: In-app bug reports and feature requests → GitHub Issues
+
+- **Date captured:** 2026-03-14
+- **Origin:** Conversation about keeping user feedback in context with what they're seeing in the app
+- **Status:** `raw`
+- **Related:** GitHub Issues, `web.py`, `auth.py`
+
+**Description:**
+Add a lightweight affordance in the HelmLog web UI where any user can report a
+bug or request a feature. The submission creates a GitHub issue in the helmlog
+repo directly — no intermediate storage, no thread infrastructure, no triage
+queue to build. GitHub Issues *is* the triage system.
+
+**How it works:**
+- Small "Report issue" or "Feedback" button in the nav or page footer
+- Minimal form: category toggle (bug/feature), free-text description
+- On submit, the backend calls `gh issue create` (or the GitHub API) with:
+  - Title from the user's description (or a generated summary)
+  - Body pre-populated with context: current page URL, session/race ID if
+    applicable, user identity, browser/device info
+  - Labels: `bug` or `feature-request`, plus `from-app`
+  - The user sees a confirmation with a link to the created issue
+- Admins and developers triage in GitHub as usual — no parallel system to manage
+
+**Why this is better than thread-backed or custom feedback tables:**
+- Zero new infrastructure — GitHub Issues already exists, already has labels,
+  milestones, assignment, notifications, and search
+- Developers are already in GitHub — feedback lands where work is tracked
+- Users get a link back to their issue and can follow progress
+- No need to wait for IDX-013 thread infra to be built
+
+**Open questions:**
+- Authentication for GitHub API: use a bot token stored server-side, or the
+  GitHub App installation token? Bot token is simplest
+- Rate limiting: should the app throttle issue creation to prevent spam?
+  Probably yes — one issue per user per minute is reasonable
+- Should the created issue include a screenshot? Future enhancement — start
+  with text only
+
+**Notes:**
+- *2026-03-14:* Initial capture. The simplest viable approach: a form in the
+  app that creates a GitHub issue with contextual metadata. Avoids building any
+  custom feedback infrastructure. Can always add richer features (screenshots,
+  thread discussion, linking to IDX entries) later.
