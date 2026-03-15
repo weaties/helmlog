@@ -125,7 +125,7 @@ _MARK_REFERENCES: frozenset[str] = frozenset(
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 41
+_CURRENT_VERSION: int = 43
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -944,6 +944,62 @@ _MIGRATIONS: dict[int, str] = {
             spinnaker_id INTEGER REFERENCES sails(id)
         );
         CREATE INDEX IF NOT EXISTS idx_sail_changes_race_ts ON sail_changes(race_id, ts);
+    """,
+    42: """
+        -- Pluggable analysis framework (#283)
+        CREATE TABLE IF NOT EXISTS analysis_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+            plugin_name TEXT NOT NULL,
+            plugin_version TEXT NOT NULL,
+            data_hash TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(session_id, plugin_name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_analysis_cache_session
+            ON analysis_cache(session_id);
+
+        CREATE TABLE IF NOT EXISTS analysis_preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope TEXT NOT NULL,
+            scope_id TEXT,
+            model_name TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(scope, scope_id)
+        );
+    """,
+    43: """
+        -- Threaded comments Phase 2 — notifications (#284)
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            type TEXT NOT NULL,
+            source_thread_id INTEGER REFERENCES comment_threads(id) ON DELETE CASCADE,
+            source_comment_id INTEGER REFERENCES comments(id) ON DELETE SET NULL,
+            session_id INTEGER REFERENCES races(id) ON DELETE CASCADE,
+            actor_id INTEGER REFERENCES users(id),
+            message TEXT,
+            created_at TEXT NOT NULL,
+            read INTEGER NOT NULL DEFAULT 0,
+            dismissed INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_user
+            ON notifications(user_id, read);
+        CREATE INDEX IF NOT EXISTS idx_notifications_session
+            ON notifications(session_id);
+
+        CREATE TABLE IF NOT EXISTS notification_preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            scope TEXT NOT NULL,
+            type TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            frequency TEXT NOT NULL DEFAULT 'immediate',
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, scope, type, channel)
+        );
     """,
 }
 
@@ -5274,6 +5330,359 @@ class Storage:
         cur = await db.execute("DELETE FROM comment_threads WHERE id = ?", (thread_id,))
         await db.commit()
         return cur.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Analysis cache (#283)
+    # ------------------------------------------------------------------
+
+    async def get_analysis_cache(self, session_id: int, plugin_name: str) -> dict[str, Any] | None:
+        """Return the cached analysis result or None."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT plugin_version, data_hash, result_json, created_at"
+            " FROM analysis_cache WHERE session_id = ? AND plugin_name = ?",
+            (session_id, plugin_name),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def upsert_analysis_cache(
+        self,
+        session_id: int,
+        plugin_name: str,
+        plugin_version: str,
+        data_hash: str,
+        result_json: str,
+    ) -> None:
+        """Insert or replace a cached analysis result."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        await db.execute(
+            "INSERT INTO analysis_cache"
+            " (session_id, plugin_name, plugin_version, data_hash, result_json, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(session_id, plugin_name) DO UPDATE SET"
+            "   plugin_version = excluded.plugin_version,"
+            "   data_hash = excluded.data_hash,"
+            "   result_json = excluded.result_json,"
+            "   created_at = excluded.created_at",
+            (session_id, plugin_name, plugin_version, data_hash, result_json, now),
+        )
+        await db.commit()
+
+    async def invalidate_analysis_cache(self, session_id: int) -> None:
+        """Remove all cached analysis results for a session."""
+        db = self._conn()
+        await db.execute("DELETE FROM analysis_cache WHERE session_id = ?", (session_id,))
+        await db.commit()
+
+    # ------------------------------------------------------------------
+    # Analysis preferences (#283)
+    # ------------------------------------------------------------------
+
+    async def get_analysis_preference(
+        self, scope: str, scope_id: str | None
+    ) -> dict[str, Any] | None:
+        """Return the preference row for a scope, or None."""
+        db = self._conn()
+        if scope_id is None:
+            cur = await db.execute(
+                "SELECT scope, scope_id, model_name, updated_at"
+                " FROM analysis_preferences WHERE scope = ? AND scope_id IS NULL",
+                (scope,),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT scope, scope_id, model_name, updated_at"
+                " FROM analysis_preferences WHERE scope = ? AND scope_id = ?",
+                (scope, scope_id),
+            )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def set_analysis_preference(
+        self, scope: str, scope_id: str | None, model_name: str
+    ) -> None:
+        """Set or update the preferred analysis model at the given scope."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        await db.execute(
+            "INSERT INTO analysis_preferences (scope, scope_id, model_name, updated_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(scope, scope_id) DO UPDATE SET"
+            "   model_name = excluded.model_name, updated_at = excluded.updated_at",
+            (scope, scope_id, model_name, now),
+        )
+        await db.commit()
+
+    async def resolve_analysis_preference(
+        self, user_id: int, co_op_id: str | None = None
+    ) -> str | None:
+        """Walk platform → co_op → boat → user and return model_name."""
+        checks: list[tuple[str, str | None]] = [
+            ("user", str(user_id)),
+            ("boat", None),
+        ]
+        if co_op_id:
+            checks.append(("co_op", co_op_id))
+        checks.append(("platform", None))
+
+        for scope, sid in checks:
+            pref = await self.get_analysis_preference(scope, sid)
+            if pref is not None:
+                return pref["model_name"]  # type: ignore[no-any-return]
+        return None
+
+    # ------------------------------------------------------------------
+    # Sail active ranges (#309)
+    # ------------------------------------------------------------------
+
+    async def get_sail_active_ranges(
+        self,
+        *,
+        sail_id: int | None = None,
+        sail_type: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return sail active ranges from sail_changes.
+
+        Each row is (session_id, sail_id, sail_name, sail_type, start_ts, end_ts).
+        """
+        db = self._conn()
+        # Build query that joins sail_changes with sails and races
+        # We need to determine the active range for each sail in each session
+        conditions: list[str] = []
+        params: list[Any] = []
+
+        base = (
+            "SELECT sc.race_id AS session_id, s.id AS sail_id, s.name AS sail_name,"
+            " s.type AS sail_type, sc.ts AS start_ts, r.end_utc AS end_ts"
+            " FROM sail_changes sc"
+            " JOIN races r ON r.id = sc.race_id"
+            " JOIN sails s ON s.id IN (sc.main_id, sc.jib_id, sc.spinnaker_id)"
+            " WHERE r.end_utc IS NOT NULL"
+        )
+
+        if sail_id is not None:
+            conditions.append("s.id = ?")
+            params.append(sail_id)
+        if sail_type is not None:
+            conditions.append("s.type = ?")
+            params.append(sail_type)
+        if start_date is not None:
+            conditions.append("r.start_utc >= ?")
+            params.append(start_date)
+        if end_date is not None:
+            conditions.append("r.end_utc <= ?")
+            params.append(end_date)
+
+        if conditions:
+            base += " AND " + " AND ".join(conditions)
+
+        base += " ORDER BY sc.ts"
+        cur = await db.execute(base, params)
+        return [dict(row) for row in await cur.fetchall()]
+
+    # ------------------------------------------------------------------
+    # Notifications (#284)
+    # ------------------------------------------------------------------
+
+    async def create_notification(
+        self,
+        user_id: int,
+        type: str,
+        *,
+        source_thread_id: int | None = None,
+        source_comment_id: int | None = None,
+        session_id: int | None = None,
+        actor_id: int | None = None,
+        message: str | None = None,
+    ) -> int:
+        """Insert a notification. Returns the row id."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        cur = await db.execute(
+            "INSERT INTO notifications"
+            " (user_id, type, source_thread_id, source_comment_id,"
+            "  session_id, actor_id, message, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                user_id,
+                type,
+                source_thread_id,
+                source_comment_id,
+                session_id,
+                actor_id,
+                message,
+                now,
+            ),
+        )
+        await db.commit()
+        return cur.lastrowid or 0
+
+    async def get_notifications(
+        self,
+        user_id: int,
+        *,
+        unread_only: bool = False,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return notifications for a user."""
+        db = self._conn()
+        where = "WHERE n.user_id = ? AND n.dismissed = 0"
+        if unread_only:
+            where += " AND n.read = 0"
+        cur = await db.execute(
+            f"SELECT n.id, n.user_id, n.type, n.source_thread_id, n.source_comment_id,"
+            f" n.session_id, n.actor_id, n.message, n.created_at, n.read, n.dismissed,"
+            f" u.name AS actor_name, u.email AS actor_email,"
+            f" r.name AS session_name,"
+            f" c.body AS comment_body,"
+            f" t.title AS thread_title"
+            f" FROM notifications n"
+            f" LEFT JOIN users u ON n.actor_id = u.id"
+            f" LEFT JOIN races r ON n.session_id = r.id"
+            f" LEFT JOIN comments c ON n.source_comment_id = c.id"
+            f" LEFT JOIN comment_threads t ON n.source_thread_id = t.id"
+            f" {where}"
+            f" ORDER BY n.created_at DESC LIMIT ?",
+            (user_id, limit),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def get_notification_count(self, user_id: int) -> dict[str, int]:
+        """Return unread and mention counts."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT"
+            " SUM(CASE WHEN read = 0 AND dismissed = 0 THEN 1 ELSE 0 END) AS unread,"
+            " SUM(CASE WHEN read = 0 AND dismissed = 0 AND type = 'mention' THEN 1 ELSE 0 END)"
+            "   AS mentions"
+            " FROM notifications WHERE user_id = ?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return {"unread": 0, "mentions": 0}
+        return {"unread": int(row["unread"] or 0), "mentions": int(row["mentions"] or 0)}
+
+    async def mark_notification_read(self, notification_id: int, user_id: int) -> bool:
+        """Mark a notification as read. Returns True if updated."""
+        db = self._conn()
+        cur = await db.execute(
+            "UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?",
+            (notification_id, user_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+    async def mark_all_notifications_read(self, user_id: int) -> int:
+        """Mark all notifications as read for a user. Returns count updated."""
+        db = self._conn()
+        cur = await db.execute(
+            "UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0",
+            (user_id,),
+        )
+        await db.commit()
+        return cur.rowcount
+
+    async def dismiss_notification(self, notification_id: int, user_id: int) -> bool:
+        """Dismiss a notification. Returns True if updated."""
+        db = self._conn()
+        cur = await db.execute(
+            "UPDATE notifications SET dismissed = 1 WHERE id = ? AND user_id = ?",
+            (notification_id, user_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+    async def get_notification_preferences(self, user_id: int) -> list[dict[str, Any]]:
+        """Return all notification preferences for a user."""
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT id, user_id, scope, type, channel, enabled, frequency, updated_at"
+            " FROM notification_preferences WHERE user_id = ?",
+            (user_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def set_notification_preference(
+        self,
+        user_id: int,
+        scope: str,
+        type: str,
+        channel: str,
+        *,
+        enabled: bool = True,
+        frequency: str = "immediate",
+    ) -> None:
+        """Set or update a notification preference."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        await db.execute(
+            "INSERT INTO notification_preferences"
+            " (user_id, scope, type, channel, enabled, frequency, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(user_id, scope, type, channel) DO UPDATE SET"
+            "   enabled = excluded.enabled, frequency = excluded.frequency,"
+            "   updated_at = excluded.updated_at",
+            (user_id, scope, type, channel, int(enabled), frequency, now),
+        )
+        await db.commit()
+
+    async def get_users_for_notification(
+        self, session_id: int, notif_type: str
+    ) -> list[dict[str, Any]]:
+        """Return users who should receive a notification for this session.
+
+        Returns all users by default (platform channel is always on).
+        Users who have explicitly disabled this type are excluded.
+        """
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT u.id, u.email, u.name FROM users u"
+            " WHERE u.id NOT IN ("
+            "   SELECT np.user_id FROM notification_preferences np"
+            "   WHERE np.type = ? AND np.channel = 'platform' AND np.enabled = 0"
+            " )",
+            (notif_type,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def cascade_crew_redaction_to_notifications(self, user_id: int) -> int:
+        """Nullify actor and scrub message for a redacted user's notifications."""
+        db = self._conn()
+        cur = await db.execute(
+            "UPDATE notifications SET actor_id = NULL, message = NULL WHERE actor_id = ?",
+            (user_id,),
+        )
+        await db.commit()
+        return cur.rowcount
+
+    async def resolve_user_names(self, names: list[str]) -> dict[str, int]:
+        """Resolve display names to user IDs for @mention resolution."""
+        if not names:
+            return {}
+        db = self._conn()
+        placeholders = ",".join("?" * len(names))
+        cur = await db.execute(
+            f"SELECT id, name FROM users WHERE name IN ({placeholders})",
+            names,
+        )
+        return {str(row["name"]): int(row["id"]) for row in await cur.fetchall()}
 
     # ------------------------------------------------------------------
     # Helpers

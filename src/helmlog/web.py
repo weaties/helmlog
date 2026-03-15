@@ -3975,6 +3975,10 @@ def create_app(
         await _audit(
             request, "thread.create", detail=f"thread={thread_id} session={session_id}", user=user
         )
+        # Notify (#284)
+        from helmlog.notifications import notify_new_thread  # noqa: PLC0415
+
+        await notify_new_thread(storage, thread_id, session_id, user["id"])
         return JSONResponse({"id": thread_id}, status_code=201)
 
     @app.get("/api/sessions/{session_id}/threads")
@@ -4015,6 +4019,29 @@ def create_app(
         await _audit(
             request, "comment.create", detail=f"comment={comment_id} thread={thread_id}", user=user
         )
+        # Notifications (#284): parse mentions + notify
+        from helmlog.notifications import (  # noqa: PLC0415
+            notify_mention,
+            notify_reply,
+            parse_mentions,
+        )
+
+        session_id = thread["session_id"]
+        all_users = await storage.list_users()
+        known_names = [u["name"] for u in all_users if u.get("name")]
+        mentioned_names = parse_mentions(text, known_names=known_names)
+        if mentioned_names:
+            name_map = await storage.resolve_user_names(mentioned_names)
+            if name_map:
+                await notify_mention(
+                    storage,
+                    comment_id,
+                    thread_id,
+                    session_id,
+                    user["id"],
+                    list(name_map.values()),
+                )
+        await notify_reply(storage, comment_id, thread_id, session_id, user["id"])
         return JSONResponse({"id": comment_id}, status_code=201)
 
     @app.put("/api/comments/{comment_id}")
@@ -4071,6 +4098,10 @@ def create_app(
         summary: str | None = body.get("resolution_summary")
         await storage.resolve_comment_thread(thread_id, user["id"], summary)
         await _audit(request, "thread.resolve", detail=f"thread={thread_id}", user=user)
+        # Notify (#284)
+        from helmlog.notifications import notify_resolved  # noqa: PLC0415
+
+        await notify_resolved(storage, thread_id, thread["session_id"], user["id"])
         return JSONResponse({"ok": True})
 
     @app.post("/api/threads/{thread_id}/unresolve")
@@ -4132,6 +4163,8 @@ def create_app(
         if target_user_id != user["id"] and user.get("role") != "admin":
             raise HTTPException(status_code=403, detail="Only admin can redact other users")
         count = await storage.redact_comment_author(target_user_id)
+        # Cascade to notifications (#284)
+        await storage.cascade_crew_redaction_to_notifications(target_user_id)
         await _audit(
             request, "comment.redact", detail=f"user={target_user_id} count={count}", user=user
         )
@@ -5635,5 +5668,440 @@ def create_app(
             user=_user,
         )
         return JSONResponse(data)
+
+    # ------------------------------------------------------------------
+    # /api/analysis — Pluggable analysis framework (#283)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/analysis/models")
+    async def api_analysis_models(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """List available analysis plugins."""
+        from helmlog.analysis.discovery import discover_plugins  # noqa: PLC0415
+
+        plugins = discover_plugins()
+        result = []
+        for _name, plugin in plugins.items():
+            meta = plugin.meta()
+            result.append(
+                {
+                    "name": meta.name,
+                    "display_name": meta.display_name,
+                    "description": meta.description,
+                    "version": meta.version,
+                }
+            )
+        return JSONResponse(result)
+
+    @app.post("/api/analysis/run/{session_id}")
+    async def api_analysis_run(
+        request: Request,
+        session_id: int,
+        model: str | None = None,
+        user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Run an analysis plugin on a session."""
+        from helmlog.analysis.cache import AnalysisCache, _compute_data_hash  # noqa: PLC0415
+        from helmlog.analysis.discovery import discover_plugins, load_session_data  # noqa: PLC0415
+        from helmlog.analysis.preferences import resolve_preference  # noqa: PLC0415
+        from helmlog.analysis.protocol import AnalysisContext  # noqa: PLC0415
+
+        # Determine which plugin to use
+        plugin_name = model
+        if not plugin_name:
+            plugin_name = await resolve_preference(storage, user["id"])
+        if not plugin_name:
+            # Default to first available plugin
+            plugins = discover_plugins()
+            if not plugins:
+                raise HTTPException(404, "No analysis plugins available")
+            plugin_name = next(iter(plugins))
+
+        plugins = discover_plugins()
+        plugin = plugins.get(plugin_name)
+        if plugin is None:
+            raise HTTPException(404, f"Plugin {plugin_name!r} not found")
+
+        session_data = await load_session_data(storage, session_id)
+        if session_data is None:
+            raise HTTPException(404, "Session not found or not completed")
+
+        # Check co-op data status
+        db = storage._conn()
+        race_cur = await db.execute(
+            "SELECT source, peer_fingerprint FROM races WHERE id = ?", (session_id,)
+        )
+        race_row = await race_cur.fetchone()
+        is_co_op = bool(race_row and race_row["peer_fingerprint"])
+
+        ctx = AnalysisContext(
+            user_id=user["id"],
+            is_co_op_data=is_co_op,
+        )
+
+        # Check cache
+        cache = AnalysisCache(storage)
+        data_hash = _compute_data_hash(
+            {
+                "speeds": len(session_data.speeds),
+                "winds": len(session_data.winds),
+                "session_id": session_id,
+            }
+        )
+        cached = await cache.get(session_id, plugin_name, data_hash=data_hash)
+        if cached is not None:
+            if is_co_op:
+                cached.pop("raw", None)
+            return JSONResponse(cached)
+
+        result = await plugin.analyze(session_data, ctx)
+        result_dict = result.to_dict(include_raw=True)
+
+        await cache.put(session_id, plugin_name, result.plugin_version, data_hash, result_dict)
+
+        if is_co_op:
+            await _audit(
+                request,
+                "analysis.run_coop",
+                detail=f"session={session_id} plugin={plugin_name}",
+                user=user,
+            )
+            result_dict.pop("raw", None)
+        else:
+            await _audit(
+                request,
+                "analysis.run",
+                detail=f"session={session_id} plugin={plugin_name}",
+                user=user,
+            )
+
+        return JSONResponse(result_dict)
+
+    @app.get("/api/analysis/results/{session_id}")
+    async def api_analysis_results(
+        session_id: int,
+        model: str | None = None,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return cached analysis result for a session."""
+        from helmlog.analysis.discovery import discover_plugins  # noqa: PLC0415
+        from helmlog.analysis.preferences import resolve_preference  # noqa: PLC0415
+
+        plugin_name = model
+        if not plugin_name:
+            plugin_name = await resolve_preference(storage, user["id"])
+        if not plugin_name:
+            plugins = discover_plugins()
+            if not plugins:
+                raise HTTPException(404, "No analysis plugins available")
+            plugin_name = next(iter(plugins))
+
+        cached = await storage.get_analysis_cache(session_id, plugin_name)
+        if cached is None:
+            raise HTTPException(404, "No cached result")
+
+        import json as _json  # noqa: PLC0415
+
+        result = _json.loads(cached["result_json"])
+
+        # Strip raw from co-op data
+        db = storage._conn()
+        race_cur = await db.execute(
+            "SELECT peer_fingerprint FROM races WHERE id = ?", (session_id,)
+        )
+        race_row = await race_cur.fetchone()
+        if race_row and race_row["peer_fingerprint"]:
+            result.pop("raw", None)
+
+        return JSONResponse(result)
+
+    @app.get("/api/analysis/preferences")
+    async def api_analysis_preferences(
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return the resolved analysis preference for the current user."""
+        from helmlog.analysis.preferences import resolve_preference  # noqa: PLC0415
+
+        model = await resolve_preference(storage, user["id"])
+        return JSONResponse({"model_name": model})
+
+    @app.put("/api/analysis/preferences")
+    async def api_set_analysis_preference(
+        request: Request,
+        user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Set analysis preference at a scope."""
+        from helmlog.analysis.preferences import set_preference  # noqa: PLC0415
+
+        body = await request.json()
+        scope: str = body.get("scope", "user")
+        scope_id: str | None = body.get("scope_id")
+        model_name: str = body.get("model_name", "")
+        if not model_name:
+            raise HTTPException(422, "model_name is required")
+
+        # Only admin can set platform/co_op/boat scope
+        if scope != "user" and user.get("role") != "admin":
+            raise HTTPException(403, "Only admin can set non-user preferences")
+
+        if scope == "user":
+            scope_id = str(user["id"])
+
+        await set_preference(storage, scope, scope_id, model_name)
+        await _audit(
+            request, "analysis.preference", detail=f"scope={scope} model={model_name}", user=user
+        )
+        return JSONResponse({"ok": True})
+
+    # ------------------------------------------------------------------
+    # /api/sails/performance — Cross-session VMG (#309)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/sails/performance")
+    async def api_sails_performance(
+        sail_type: str | None = None,
+        sail_id: int | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Aggregate VMG across all sessions by sail."""
+        from collections import defaultdict  # noqa: PLC0415
+
+        from helmlog.analysis.plugins.sail_vmg import (  # noqa: PLC0415, E501
+            compute_downwind_vmg,
+            compute_upwind_vmg,
+            wind_band_for,
+            wind_band_label,
+        )
+        from helmlog.polar import _compute_twa  # noqa: PLC0415
+
+        ranges = await storage.get_sail_active_ranges(
+            sail_id=sail_id,
+            sail_type=sail_type,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        # Group ranges by session to batch-load instrument data
+        sessions_sails: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        for r in ranges:
+            sessions_sails[r["session_id"]].append(r)
+
+        # sail_id → wind_band → direction → [vmg values]
+        SailStats = dict[str, dict[str, list[float]]]
+        sail_vmgs: dict[int, SailStats] = defaultdict(
+            lambda: defaultdict(lambda: defaultdict(list))
+        )
+        sail_info: dict[int, dict[str, str]] = {}
+
+        from datetime import UTC, datetime  # noqa: PLC0415
+
+        for sid, sail_ranges in sessions_sails.items():
+            db = storage._conn()
+            cur = await db.execute("SELECT start_utc, end_utc FROM races WHERE id = ?", (sid,))
+            row = await cur.fetchone()
+            if not row or not row["end_utc"]:
+                continue
+
+            try:
+                start = datetime.fromisoformat(str(row["start_utc"])).replace(tzinfo=UTC)
+                end = datetime.fromisoformat(str(row["end_utc"])).replace(tzinfo=UTC)
+            except ValueError:
+                continue
+
+            speeds = await storage.query_range("speeds", start, end, race_id=sid)
+            winds = await storage.query_range("winds", start, end, race_id=sid)
+            headings = await storage.query_range("headings", start, end, race_id=sid)
+
+            spd_by_s: dict[str, dict[str, Any]] = {}
+            for s in speeds:
+                spd_by_s.setdefault(str(s["ts"])[:19], s)
+            hdg_by_s: dict[str, dict[str, Any]] = {}
+            for h in headings:
+                hdg_by_s.setdefault(str(h["ts"])[:19], h)
+            tw_by_s: dict[str, dict[str, Any]] = {}
+            for w in winds:
+                ref = int(w.get("reference", -1))
+                if ref not in (0, 4):
+                    continue
+                tw_by_s.setdefault(str(w["ts"])[:19], w)
+
+            for sr in sail_ranges:
+                s_id = sr["sail_id"]
+                sail_info[s_id] = {"name": sr["sail_name"], "type": sr["sail_type"]}
+
+                for sk, spd_row in spd_by_s.items():
+                    wind_row = tw_by_s.get(sk)
+                    if wind_row is None:
+                        continue
+                    bsp = float(spd_row["speed_kts"])
+                    if bsp <= 0:
+                        continue
+                    tws = float(wind_row["wind_speed_kts"])
+                    ref = int(wind_row.get("reference", -1))
+                    wa = float(wind_row["wind_angle_deg"])
+                    hdg_row = hdg_by_s.get(sk)
+                    heading = float(hdg_row["heading_deg"]) if hdg_row else None
+                    twa = _compute_twa(wa, ref, heading)
+                    if twa is None:
+                        continue
+
+                    band = wind_band_for(tws)
+                    if band is None:
+                        continue
+                    bl = wind_band_label(band[0], band[1])
+
+                    if twa < 90:
+                        vmg = compute_upwind_vmg(bsp, twa)
+                        sail_vmgs[s_id][bl]["upwind"].append(vmg)
+                    else:
+                        vmg = compute_downwind_vmg(bsp, twa)
+                        sail_vmgs[s_id][bl]["downwind"].append(vmg)
+
+        # Build response
+        sails_out: list[dict[str, Any]] = []
+        for s_id, bands in sail_vmgs.items():
+            info = sail_info.get(s_id, {"name": "", "type": ""})
+            wind_bands_out: dict[str, Any] = {}
+            for bl_label, dirs in bands.items():
+                wb: dict[str, Any] = {}
+                for direction in ("upwind", "downwind"):
+                    vals = dirs.get(direction, [])
+                    if vals:
+                        n = len(vals)
+                        sorted_v = sorted(vals)
+                        wb[f"{direction}_vmg"] = {
+                            "mean": round(sum(vals) / n, 4),
+                            "median": round(sorted_v[n // 2], 4),
+                            "n": n,
+                        }
+                    else:
+                        wb[f"{direction}_vmg"] = {"mean": 0, "median": 0, "n": 0}
+                wind_bands_out[bl_label] = wb
+            sails_out.append(
+                {
+                    "sail_id": s_id,
+                    "sail_name": info["name"],
+                    "sail_type": info["type"],
+                    "wind_bands": wind_bands_out,
+                }
+            )
+
+        return JSONResponse({"sails": sails_out})
+
+    # ------------------------------------------------------------------
+    # /api/users/names — lightweight user list for @mention autocomplete
+    # ------------------------------------------------------------------
+
+    @app.get("/api/users/names")
+    async def api_user_names(
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return list of {id, name} for @mention autocomplete."""
+        users = await storage.list_users()
+        return JSONResponse(
+            [
+                {"id": u["id"], "name": u["name"] or u["email"]}
+                for u in users
+                if u.get("name") or u.get("email")
+            ]
+        )
+
+    # ------------------------------------------------------------------
+    # /api/notifications — Notification system (#284)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/notifications")
+    async def api_notifications(
+        unread_only: bool = False,
+        limit: int = 50,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return notifications for the current user."""
+        notifs = await storage.get_notifications(user["id"], unread_only=unread_only, limit=limit)
+        return JSONResponse(notifs)
+
+    @app.get("/api/notifications/count")
+    async def api_notification_count(
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return unread + mention count for nav badge."""
+        counts = await storage.get_notification_count(user["id"])
+        return JSONResponse(counts)
+
+    @app.post("/api/notifications/{notification_id}/read")
+    async def api_mark_notification_read(
+        notification_id: int,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Mark one notification as read."""
+        ok = await storage.mark_notification_read(notification_id, user["id"])
+        if not ok:
+            raise HTTPException(404, "Notification not found")
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/notifications/read-all")
+    async def api_mark_all_read(
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Mark all notifications as read."""
+        count = await storage.mark_all_notifications_read(user["id"])
+        return JSONResponse({"marked": count})
+
+    @app.delete("/api/notifications/{notification_id}")
+    async def api_dismiss_notification(
+        notification_id: int,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> Response:
+        """Dismiss a notification."""
+        ok = await storage.dismiss_notification(notification_id, user["id"])
+        if not ok:
+            raise HTTPException(404, "Notification not found")
+        return Response(status_code=204)
+
+    @app.get("/api/notifications/preferences")
+    async def api_notification_preferences(
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Return notification preferences for the current user."""
+        prefs = await storage.get_notification_preferences(user["id"])
+        return JSONResponse(prefs)
+
+    @app.put("/api/notifications/preferences")
+    async def api_set_notification_preference(
+        request: Request,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Update a notification preference."""
+        body = await request.json()
+        scope: str = body.get("scope", "session")
+        ntype: str = body.get("type", "")
+        channel: str = body.get("channel", "platform")
+        enabled: bool = body.get("enabled", True)
+        frequency: str = body.get("frequency", "immediate")
+        if not ntype:
+            raise HTTPException(422, "type is required")
+        await storage.set_notification_preference(
+            user["id"],
+            scope,
+            ntype,
+            channel,
+            enabled=enabled,
+            frequency=frequency,
+        )
+        return JSONResponse({"ok": True})
+
+    @app.get("/attention", response_class=HTMLResponse)
+    async def attention_page(
+        request: Request,
+        user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> HTMLResponse:
+        """Notification dashboard page."""
+        return _templates.TemplateResponse(
+            "attention.html",
+            {"request": request, "active_page": "/attention", "git_info": _GIT_INFO},
+        )
 
     return app

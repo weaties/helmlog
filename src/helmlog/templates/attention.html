@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}HelmLog — Notifications{% endblock %}
+{% block extra_css %}
+<style>
+h1{font-size:1.3rem;font-weight:700;color:#7eb8f7;margin-bottom:4px}
+.card{background:#131f35;border-radius:12px;padding:16px;margin-bottom:16px}
+.notif-list{list-style:none;padding:0;margin:0}
+.notif-item{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid #1e3a5f;font-size:.85rem}
+.notif-item:last-child{border-bottom:none}
+.notif-item.unread{background:#0d1a2e;border-radius:6px;padding:10px;margin:0 -10px 4px;border-bottom:none}
+.notif-dot{width:8px;height:8px;border-radius:50%;background:#3b82f6;flex-shrink:0;margin-top:6px}
+.notif-dot.read{background:transparent}
+.notif-body{flex:1;min-width:0}
+.notif-link{text-decoration:none;color:inherit;display:block}
+.notif-link:hover .notif-header{text-decoration:underline}
+.notif-header{color:#e0e8f0}
+.notif-actor{color:#7eb8f7;font-weight:600}
+.notif-msg{color:#c4cdd8}
+.notif-meta{display:flex;gap:8px;align-items:center;margin-top:2px;flex-wrap:wrap}
+.notif-time{color:#6b7280;font-size:.78rem}
+.notif-session{color:#8892a4;font-size:.78rem}
+.notif-thread{color:#f97316;font-size:.78rem}
+.notif-type{font-size:.72rem;padding:2px 6px;border-radius:3px;font-weight:600}
+.notif-type.mention{background:#1e3a5f;color:#60a5fa}
+.notif-type.reply{background:#1e3a2f;color:#4ade80}
+.notif-type.new_thread{background:#2e2a1f;color:#fbbf24}
+.notif-type.resolved{background:#1e2a3f;color:#a78bfa}
+.notif-snippet{color:#8892a4;font-size:.78rem;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:500px}
+.notif-actions{display:flex;gap:6px;flex-shrink:0;align-items:flex-start}
+.ubtn{cursor:pointer;background:none;border:1px solid #2563eb;color:#7eb8f7;border-radius:4px;padding:4px 10px;font-size:.8rem;white-space:nowrap}
+.ubtn-sm{padding:2px 8px;font-size:.75rem}
+.btn{padding:8px 16px;border:none;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;background:#2563eb;color:#fff;margin-bottom:12px}
+.empty{color:#6b7280;font-size:.9rem;padding:20px 0;text-align:center}
+.session-group{margin-bottom:16px}
+.session-group-header{font-size:.9rem;color:#8892a4;margin:0 0 6px}
+.session-group-header a{color:#7eb8f7;text-decoration:none}
+.session-group-header a:hover{text-decoration:underline}
+</style>
+{% endblock %}
+{% block content %}
+<h1>Notifications</h1>
+<div class="card">
+<button class="btn" id="mark-all-btn" onclick="markAllRead()">Mark All Read</button>
+<div id="notif-container"><div class="empty">Loading…</div></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function esc(s){if(!s)return '';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+
+function relTime(iso){
+  if(!iso)return '';
+  // Handle both with and without trailing Z
+  const raw=iso.endsWith('Z')?iso:iso+'Z';
+  const d=new Date(raw);
+  if(isNaN(d.getTime()))return '';
+  const now=new Date();
+  const s=Math.floor((now-d)/1000);
+  if(s<0)return 'just now';
+  if(s<60)return 'just now';
+  if(s<3600)return Math.floor(s/60)+'m ago';
+  if(s<86400)return Math.floor(s/3600)+'h ago';
+  const days=Math.floor(s/86400);
+  if(days===1)return '1 day ago';
+  return days+'d ago';
+}
+
+function snippet(text,max){
+  if(!text)return '';
+  if(text.length<=max)return text;
+  return text.substring(0,max)+'\u2026';
+}
+
+function notifUrl(n){
+  if(n.session_id && n.source_thread_id){
+    return '/session/'+n.session_id+'#thread-'+n.source_thread_id;
+  }
+  if(n.session_id){
+    return '/session/'+n.session_id;
+  }
+  return null;
+}
+
+async function loadNotifications(){
+  const resp=await fetch('/api/notifications?limit=100');
+  const notifs=await resp.json();
+  const container=document.getElementById('notif-container');
+
+  if(!notifs.length){
+    container.innerHTML='<div class="empty">No notifications</div>';
+    return;
+  }
+
+  // Group by session_id
+  const groups={};const groupOrder=[];
+  for(const n of notifs){
+    const sid=n.session_id||'general';
+    if(!groups[sid]){groups[sid]=[];groupOrder.push(sid);}
+    groups[sid].push(n);
+  }
+
+  let html='';
+  for(const sid of groupOrder){
+    const items=groups[sid];
+    html+='<div class="session-group">';
+    if(sid!=='general'){
+      const sessionName=items[0].session_name||('Session #'+sid);
+      html+='<h3 class="session-group-header"><a href="/session/'+sid+'">'+esc(sessionName)+'</a></h3>';
+    }
+    html+='<ul class="notif-list">';
+    for(const n of items){
+      const unread=!n.read;
+      const url=notifUrl(n);
+      html+='<li class="notif-item'+(unread?' unread':'')+'">';
+      html+='<span class="notif-dot'+(unread?'':' read')+'"></span>';
+      html+='<div class="notif-body">';
+
+      // Clickable link wrapping the content
+      if(url){
+        html+='<a class="notif-link" href="'+url+'" onclick="markReadNav(event,'+n.id+',\''+url+'\')">';
+      }
+      html+='<div class="notif-header">';
+      html+='<span class="notif-actor">'+esc(n.actor_name||'Someone')+'</span> ';
+      html+='<span class="notif-msg">'+esc(n.message||'')+'</span> ';
+      html+='<span class="notif-type '+n.type+'">'+n.type.replace('_',' ')+'</span>';
+      html+='</div>';
+
+      // Meta line: time + thread title
+      html+='<div class="notif-meta">';
+      html+='<span class="notif-time">'+relTime(n.created_at)+'</span>';
+      if(n.thread_title){
+        html+='<span class="notif-thread">'+esc(n.thread_title)+'</span>';
+      }
+      html+='</div>';
+
+      // Comment snippet
+      if(n.comment_body){
+        html+='<div class="notif-snippet">\u201c'+esc(snippet(n.comment_body,120))+'\u201d</div>';
+      }
+
+      if(url) html+='</a>';
+      html+='</div>';
+
+      // Actions
+      html+='<div class="notif-actions">';
+      if(unread) html+='<button class="ubtn ubtn-sm" onclick="event.stopPropagation();markRead('+n.id+')">Read</button>';
+      html+='<button class="ubtn ubtn-sm" onclick="event.stopPropagation();dismiss('+n.id+')">Dismiss</button>';
+      html+='</div>';
+      html+='</li>';
+    }
+    html+='</ul></div>';
+  }
+  container.innerHTML=html;
+}
+
+async function markRead(id){
+  await fetch('/api/notifications/'+id+'/read',{method:'POST'});
+  loadNotifications();
+}
+
+async function markReadNav(e,id,url){
+  e.preventDefault();
+  await fetch('/api/notifications/'+id+'/read',{method:'POST'});
+  window.location.href=url;
+}
+
+async function markAllRead(){
+  await fetch('/api/notifications/read-all',{method:'POST'});
+  loadNotifications();
+}
+
+async function dismiss(id){
+  await fetch('/api/notifications/'+id,{method:'DELETE'});
+  loadNotifications();
+}
+
+loadNotifications();
+</script>
+{% endblock %}
