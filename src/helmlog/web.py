@@ -6001,11 +6001,13 @@ def create_app(
     ) -> JSONResponse:
         """Return list of {id, name} for @mention autocomplete."""
         users = await storage.list_users()
-        return JSONResponse([
-            {"id": u["id"], "name": u["name"] or u["email"]}
-            for u in users
-            if u.get("name") or u.get("email")
-        ])
+        return JSONResponse(
+            [
+                {"id": u["id"], "name": u["name"] or u["email"]}
+                for u in users
+                if u.get("name") or u.get("email")
+            ]
+        )
 
     # ------------------------------------------------------------------
     # /api/notifications — Notification system (#284)
