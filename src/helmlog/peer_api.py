@@ -489,6 +489,213 @@ async def peer_session_wind_field(
 
 
 # ---------------------------------------------------------------------------
+# Session matching endpoints (#281)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{co_op_id}/session-matches")
+@_limiter.limit("30/minute")
+async def peer_session_matches(
+    request: Request,
+    co_op_id: str,
+) -> JSONResponse:
+    """List session match proposals for this co-op."""
+    peer = await _authenticate_peer(request, co_op_id)
+    storage = _get_storage(request)
+
+    from helmlog.session_matching import get_match_proposals
+
+    matches = await get_match_proposals(storage, co_op_id)
+
+    await _audit_peer(
+        request,
+        "coop.peer.session_matches.list",
+        peer,
+        co_op_id,
+        resource=f"count={len(matches)}",
+    )
+    return JSONResponse({"matches": matches})
+
+
+@router.post("/{co_op_id}/session-matches/propose")
+@_limiter.limit("10/minute")
+async def peer_propose_match(
+    request: Request,
+    co_op_id: str,
+) -> JSONResponse:
+    """Propose a session match based on centroid and time range.
+
+    The receiving boat finds its best local session match and creates
+    a match proposal linking the two sessions.
+    """
+    peer = await _authenticate_peer(request, co_op_id)
+    storage = _get_storage(request)
+
+    body = await request.json()
+    centroid_lat = body.get("centroid_lat", 0.0)
+    centroid_lon = body.get("centroid_lon", 0.0)
+    start_utc = body.get("start_utc", "")
+    end_utc = body.get("end_utc", "")
+    peer_session_id = body.get("local_session_id", 0)
+
+    if not start_utc or not end_utc:
+        raise HTTPException(status_code=400, detail="start_utc and end_utc required")
+
+    from helmlog.session_matching import find_best_local_match, propose_match
+
+    local_id = await find_best_local_match(
+        storage,
+        co_op_id,
+        centroid_lat,
+        centroid_lon,
+        start_utc,
+        end_utc,
+    )
+
+    if local_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No matching local session found",
+        )
+
+    fp = peer.get("fingerprint", "")
+    match_id = await propose_match(
+        storage,
+        local_session_id=local_id,
+        peer_fingerprint=fp,
+        peer_session_id=peer_session_id,
+        centroid_lat=centroid_lat,
+        centroid_lon=centroid_lon,
+        start_utc=start_utc,
+        end_utc=end_utc,
+    )
+
+    await _audit_peer(
+        request,
+        "coop.peer.session_matches.propose",
+        peer,
+        co_op_id,
+        resource=f"match={match_id}",
+    )
+    return JSONResponse(
+        {
+            "match_group_id": match_id,
+            "matched_session_id": local_id,
+            "status": "candidate",
+        }
+    )
+
+
+@router.post("/{co_op_id}/session-matches/{match_id}/confirm")
+@_limiter.limit("10/minute")
+async def peer_confirm_match(
+    request: Request,
+    co_op_id: str,
+    match_id: str,
+) -> JSONResponse:
+    """Confirm a session match proposal."""
+    peer = await _authenticate_peer(request, co_op_id)
+    storage = _get_storage(request)
+
+    from helmlog.session_matching import confirm_match
+
+    fp = peer.get("fingerprint", "")
+    ok = await confirm_match(storage, match_id, fp)
+
+    if not ok:
+        raise HTTPException(status_code=404, detail="Match not found or cannot be confirmed")
+
+    # Check if now confirmed
+    db = storage._conn()
+    cur = await db.execute(
+        "SELECT status FROM session_match_proposals WHERE match_group_id = ?",
+        (match_id,),
+    )
+    row = await cur.fetchone()
+    status = dict(row)["status"] if row else "candidate"
+
+    await _audit_peer(
+        request,
+        "coop.peer.session_matches.confirm",
+        peer,
+        co_op_id,
+        resource=f"match={match_id}",
+    )
+    return JSONResponse({"match_group_id": match_id, "status": status})
+
+
+@router.post("/{co_op_id}/session-matches/{match_id}/reject")
+@_limiter.limit("10/minute")
+async def peer_reject_match(
+    request: Request,
+    co_op_id: str,
+    match_id: str,
+) -> JSONResponse:
+    """Reject a session match proposal."""
+    peer = await _authenticate_peer(request, co_op_id)
+    storage = _get_storage(request)
+
+    from helmlog.session_matching import reject_match
+
+    fp = peer.get("fingerprint", "")
+    ok = await reject_match(storage, match_id, fp)
+
+    if not ok:
+        raise HTTPException(status_code=404, detail="Match not found or cannot be rejected")
+
+    await _audit_peer(
+        request,
+        "coop.peer.session_matches.reject",
+        peer,
+        co_op_id,
+        resource=f"match={match_id}",
+    )
+    return JSONResponse({"match_group_id": match_id, "status": "rejected"})
+
+
+@router.put("/{co_op_id}/session-matches/{match_id}/name")
+@_limiter.limit("10/minute")
+async def peer_set_match_name(
+    request: Request,
+    co_op_id: str,
+    match_id: str,
+) -> JSONResponse:
+    """Propose or update the shared name for a confirmed match."""
+    peer = await _authenticate_peer(request, co_op_id)
+    storage = _get_storage(request)
+
+    body = await request.json()
+    shared_name = body.get("shared_name", "")
+    if not shared_name:
+        raise HTTPException(status_code=400, detail="shared_name required")
+
+    from helmlog.session_matching import set_shared_name
+
+    fp = peer.get("fingerprint", "")
+    ok = await set_shared_name(storage, match_id, shared_name, fp)
+
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail="Match not found or not confirmed",
+        )
+
+    await _audit_peer(
+        request,
+        "coop.peer.session_matches.name",
+        peer,
+        co_op_id,
+        resource=f"match={match_id}",
+    )
+    return JSONResponse(
+        {
+            "match_group_id": match_id,
+            "shared_name": shared_name,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
 

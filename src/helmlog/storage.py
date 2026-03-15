@@ -125,7 +125,7 @@ _MARK_REFERENCES: frozenset[str] = frozenset(
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 43
+_CURRENT_VERSION: int = 44
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -999,6 +999,46 @@ _MIGRATIONS: dict[int, str] = {
             frequency TEXT NOT NULL DEFAULT 'immediate',
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, scope, type, channel)
+        );
+    """,
+    44: """
+        -- Co-op session matching (#281)
+        ALTER TABLE races ADD COLUMN shared_name TEXT;
+        ALTER TABLE races ADD COLUMN match_group_id TEXT;
+        ALTER TABLE races ADD COLUMN match_confirmed INTEGER DEFAULT 0;
+
+        CREATE TABLE IF NOT EXISTS session_match_proposals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            match_group_id TEXT NOT NULL,
+            proposer_fingerprint TEXT NOT NULL,
+            local_session_id INTEGER REFERENCES races(id) ON DELETE CASCADE,
+            peer_session_id INTEGER,
+            centroid_lat REAL,
+            centroid_lon REAL,
+            start_utc TEXT,
+            end_utc TEXT,
+            status TEXT NOT NULL DEFAULT 'candidate',
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_smp_match_group
+            ON session_match_proposals(match_group_id);
+        CREATE INDEX IF NOT EXISTS idx_smp_status
+            ON session_match_proposals(status);
+
+        CREATE TABLE IF NOT EXISTS session_match_confirmations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            match_group_id TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            confirmed_at TEXT NOT NULL,
+            UNIQUE(match_group_id, fingerprint)
+        );
+
+        CREATE TABLE IF NOT EXISTS session_match_names (
+            match_group_id TEXT PRIMARY KEY,
+            shared_name TEXT NOT NULL,
+            proposed_by TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         );
     """,
 }

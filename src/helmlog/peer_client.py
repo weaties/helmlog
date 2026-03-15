@@ -280,3 +280,161 @@ async def fetch_all_peer_sessions(
 async def _is_online(ip: str, port: int) -> bool:
     """Quick check if a peer is reachable."""
     return await probe_peer(ip, port) is not None
+
+
+# ---------------------------------------------------------------------------
+# Session matching (#281)
+# ---------------------------------------------------------------------------
+
+
+async def fetch_session_matches(
+    peer_ip: str,
+    co_op_id: str,
+    private_key: Ed25519PrivateKey,
+    fingerprint: str,
+    *,
+    port: int = 80,
+) -> list[dict[str, Any]]:
+    """Fetch session match proposals from a remote peer."""
+    path = f"/co-op/{co_op_id}/session-matches"
+    url = f"http://{peer_ip}:{port}{path}"
+    headers = sign_request(private_key, fingerprint, "GET", path)
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 200:
+                data: dict[str, Any] = resp.json()
+                return list(data.get("matches", []))
+            logger.warning(
+                "Peer {} returned {} for session-matches: {}",
+                peer_ip,
+                resp.status_code,
+                resp.text[:200],
+            )
+    except Exception as exc:
+        logger.warning("Failed to fetch session-matches from {}: {}", peer_ip, exc)
+    return []
+
+
+async def propose_session_match(
+    peer_ip: str,
+    co_op_id: str,
+    private_key: Ed25519PrivateKey,
+    fingerprint: str,
+    *,
+    local_session_id: int,
+    centroid_lat: float,
+    centroid_lon: float,
+    start_utc: str,
+    end_utc: str,
+    port: int = 80,
+) -> dict[str, Any] | None:
+    """Propose a session match to a remote peer. Returns response dict or None."""
+    path = f"/co-op/{co_op_id}/session-matches/propose"
+    url = f"http://{peer_ip}:{port}{path}"
+    headers = sign_request(private_key, fingerprint, "POST", path)
+
+    body = {
+        "local_session_id": local_session_id,
+        "centroid_lat": centroid_lat,
+        "centroid_lon": centroid_lon,
+        "start_utc": start_utc,
+        "end_utc": end_utc,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(url, json=body, headers=headers)
+            if resp.status_code == 200:
+                result: dict[str, Any] = resp.json()
+                return result
+            logger.warning(
+                "Peer {} returned {} for propose match: {}",
+                peer_ip,
+                resp.status_code,
+                resp.text[:200],
+            )
+    except Exception as exc:
+        logger.warning("Failed to propose match to {}: {}", peer_ip, exc)
+    return None
+
+
+async def confirm_session_match(
+    peer_ip: str,
+    co_op_id: str,
+    match_id: str,
+    private_key: Ed25519PrivateKey,
+    fingerprint: str,
+    *,
+    port: int = 80,
+) -> dict[str, Any] | None:
+    """Confirm a session match on a remote peer."""
+    path = f"/co-op/{co_op_id}/session-matches/{match_id}/confirm"
+    url = f"http://{peer_ip}:{port}{path}"
+    headers = sign_request(private_key, fingerprint, "POST", path)
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(url, headers=headers)
+            if resp.status_code == 200:
+                result: dict[str, Any] = resp.json()
+                return result
+    except Exception as exc:
+        logger.warning("Failed to confirm match on {}: {}", peer_ip, exc)
+    return None
+
+
+async def reject_session_match(
+    peer_ip: str,
+    co_op_id: str,
+    match_id: str,
+    private_key: Ed25519PrivateKey,
+    fingerprint: str,
+    *,
+    port: int = 80,
+) -> dict[str, Any] | None:
+    """Reject a session match on a remote peer."""
+    path = f"/co-op/{co_op_id}/session-matches/{match_id}/reject"
+    url = f"http://{peer_ip}:{port}{path}"
+    headers = sign_request(private_key, fingerprint, "POST", path)
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(url, headers=headers)
+            if resp.status_code == 200:
+                result: dict[str, Any] = resp.json()
+                return result
+    except Exception as exc:
+        logger.warning("Failed to reject match on {}: {}", peer_ip, exc)
+    return None
+
+
+async def set_match_name(
+    peer_ip: str,
+    co_op_id: str,
+    match_id: str,
+    shared_name: str,
+    private_key: Ed25519PrivateKey,
+    fingerprint: str,
+    *,
+    port: int = 80,
+) -> dict[str, Any] | None:
+    """Set or update the shared name for a match on a remote peer."""
+    path = f"/co-op/{co_op_id}/session-matches/{match_id}/name"
+    url = f"http://{peer_ip}:{port}{path}"
+    headers = sign_request(private_key, fingerprint, "PUT", path)
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.put(
+                url,
+                json={"shared_name": shared_name},
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                result: dict[str, Any] = resp.json()
+                return result
+    except Exception as exc:
+        logger.warning("Failed to set match name on {}: {}", peer_ip, exc)
+    return None
