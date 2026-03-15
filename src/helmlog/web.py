@@ -3945,6 +3945,142 @@ def create_app(
         return JSONResponse({"deleted": count})
 
     # ------------------------------------------------------------------
+    # /api/tuning — transcript extraction (#276)
+    # ------------------------------------------------------------------
+
+    from helmlog.tuning_extraction import (  # noqa: E501, PLC0415
+        accept_item as _te_accept,
+    )
+    from helmlog.tuning_extraction import (
+        compare_runs as _te_compare,
+    )
+    from helmlog.tuning_extraction import (
+        create_extraction_run as _te_create_run,
+    )
+    from helmlog.tuning_extraction import (
+        delete_run as _te_delete_run,
+    )
+    from helmlog.tuning_extraction import (
+        dismiss_item as _te_dismiss,
+    )
+    from helmlog.tuning_extraction import (
+        get_run_with_items as _te_get_run,
+    )
+    from helmlog.tuning_extraction import (
+        run_extraction as _te_run,
+    )
+
+    @app.post("/api/tuning/extract/{transcript_id}", status_code=201)
+    async def api_tuning_extract(
+        request: Request,
+        transcript_id: int,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Create and run a tuning extraction on a transcript."""
+        body = await request.json()
+        method: str = body.get("method", "regex")
+        run_id = await _te_create_run(storage, transcript_id, method)
+        items = await _te_run(storage, run_id)
+        await _audit(
+            request, "tuning.extract", detail=f"run={run_id} items={len(items)}", user=_user
+        )
+        run = await _te_get_run(storage, run_id)
+        return JSONResponse(
+            {"run_id": run_id, "status": run.status if run else "error", "item_count": len(items)},
+            status_code=201,
+        )
+
+    @app.get("/api/tuning/runs")
+    async def api_tuning_runs(
+        transcript_id: int | None = Query(None),
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """List extraction runs, optionally filtered by transcript_id."""
+        db = storage._conn()
+        if transcript_id is not None:
+            cur = await db.execute(
+                "SELECT id, transcript_id, method, created_at, status, item_count, accepted_count"
+                " FROM extraction_runs WHERE transcript_id = ? ORDER BY created_at DESC",
+                (transcript_id,),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT id, transcript_id, method, created_at, status, item_count, accepted_count"
+                " FROM extraction_runs ORDER BY created_at DESC"
+            )
+        rows = await cur.fetchall()
+        return JSONResponse([dict(r) for r in rows])
+
+    @app.get("/api/tuning/runs/{run_id}")
+    async def api_tuning_run_detail(
+        run_id: int,
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Get an extraction run with all its items."""
+        from helmlog.tuning_extraction import _item_to_dict
+
+        run = await _te_get_run(storage, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return JSONResponse(
+            {
+                "id": run.id,
+                "transcript_id": run.transcript_id,
+                "method": run.method,
+                "created_at": run.created_at,
+                "status": run.status,
+                "item_count": run.item_count,
+                "accepted_count": run.accepted_count,
+                "items": [_item_to_dict(i) for i in run.items],
+            }
+        )
+
+    @app.post("/api/tuning/items/{item_id}/accept")
+    async def api_tuning_accept_item(
+        request: Request,
+        item_id: int,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Accept an extraction item — adds to boat settings timeline."""
+        user_id: int = _user.get("id", 0)
+        await _te_accept(storage, item_id, user_id)
+        await _audit(request, "tuning.accept", detail=f"item={item_id}", user=_user)
+        return JSONResponse({"status": "accepted"})
+
+    @app.post("/api/tuning/items/{item_id}/dismiss")
+    async def api_tuning_dismiss_item(
+        request: Request,
+        item_id: int,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Dismiss an extraction item — excluded from timeline."""
+        user_id: int = _user.get("id", 0)
+        await _te_dismiss(storage, item_id, user_id)
+        await _audit(request, "tuning.dismiss", detail=f"item={item_id}", user=_user)
+        return JSONResponse({"status": "dismissed"})
+
+    @app.delete("/api/tuning/runs/{run_id}")
+    async def api_tuning_delete_run(
+        request: Request,
+        run_id: int,
+        _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+    ) -> JSONResponse:
+        """Delete an extraction run and its items."""
+        await _te_delete_run(storage, run_id)
+        await _audit(request, "tuning.delete_run", detail=f"run={run_id}", user=_user)
+        return JSONResponse({"status": "deleted"})
+
+    @app.get("/api/tuning/compare")
+    async def api_tuning_compare(
+        run1: int = Query(...),
+        run2: int | None = Query(None),
+        _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    ) -> JSONResponse:
+        """Compare one or two extraction runs side by side."""
+        result = await _te_compare(storage, run1, run2)
+        return JSONResponse(result)
+
+    # ------------------------------------------------------------------
     # /api/sessions/{id}/threads  &  /api/threads  &  /api/comments (#282)
     # ------------------------------------------------------------------
 

@@ -125,7 +125,7 @@ _MARK_REFERENCES: frozenset[str] = frozenset(
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 43
+_CURRENT_VERSION: int = 44
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -1000,6 +1000,36 @@ _MIGRATIONS: dict[int, str] = {
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, scope, type, channel)
         );
+    """,
+    44: """
+        -- Tuning extraction from transcripts (#276)
+        CREATE TABLE IF NOT EXISTS extraction_runs (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            transcript_id  INTEGER NOT NULL REFERENCES transcripts(id),
+            method         TEXT NOT NULL,
+            created_at     TEXT NOT NULL,
+            status         TEXT NOT NULL DEFAULT 'created',
+            item_count     INTEGER NOT NULL DEFAULT 0,
+            accepted_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_extraction_runs_transcript
+            ON extraction_runs(transcript_id);
+
+        CREATE TABLE IF NOT EXISTS extraction_items (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            extraction_run_id INTEGER NOT NULL REFERENCES extraction_runs(id) ON DELETE CASCADE,
+            parameter_name    TEXT NOT NULL,
+            extracted_value   REAL NOT NULL,
+            segment_start     REAL NOT NULL,
+            segment_end       REAL NOT NULL,
+            segment_text      TEXT NOT NULL,
+            confidence        REAL NOT NULL DEFAULT 1.0,
+            status            TEXT NOT NULL DEFAULT 'pending',
+            reviewed_at       TEXT,
+            reviewed_by       INTEGER REFERENCES users(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_extraction_items_run
+            ON extraction_items(extraction_run_id);
     """,
 }
 
