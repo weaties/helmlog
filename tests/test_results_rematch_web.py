@@ -152,6 +152,8 @@ async def test_link_imported_invalidates_session_summary_cache(
     pre = await admin_client.get(f"/api/sessions/{local_id}/summary")
     assert pre.status_code == 200
     assert pre.json()["results"] == []
+    pre_etag = pre.headers.get("etag")
+    assert pre_etag is not None
 
     cur = await db.execute(
         "SELECT COUNT(*) AS n FROM web_cache WHERE race_id = ? AND key_family = ?",
@@ -173,10 +175,23 @@ async def test_link_imported_invalidates_session_summary_cache(
     )
     assert (await cur.fetchone())["n"] == 0
 
-    # Re-fetch — fresh compute now sees the linked results.
+    # Re-fetch — fresh compute now sees the linked results AND the ETag flips
+    # so a browser holding the pre-link 200 won't get a 304 with stale data.
     post = await admin_client.get(f"/api/sessions/{local_id}/summary")
     assert post.status_code == 200
     assert len(post.json()["results"]) == 1
+    post_etag = post.headers.get("etag")
+    assert post_etag is not None
+    assert post_etag != pre_etag
+
+    # Sanity: a conditional GET with the OLD ETag must NOT return 304 — the
+    # server must recognise the link change and serve the fresh payload.
+    cond = await admin_client.get(
+        f"/api/sessions/{local_id}/summary",
+        headers={"If-None-Match": pre_etag},
+    )
+    assert cond.status_code == 200
+    assert len(cond.json()["results"]) == 1
 
 
 @pytest.mark.asyncio

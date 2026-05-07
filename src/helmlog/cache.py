@@ -47,6 +47,8 @@ def compute_race_data_hash(
     start_utc: datetime,
     end_utc: datetime | None,
     row_count: int,
+    linked_imported_id: int | None = None,
+    linked_imported_results: int = 0,
 ) -> str:
     """Stable 16-char hex digest of the race's cache-relevant inputs.
 
@@ -54,12 +56,19 @@ def compute_race_data_hash(
     race row. No TTL is needed: any mutation to the underlying race flows
     through the storage invalidation hook, which drops all entries for the
     race id.
+
+    ``linked_imported_id`` and ``linked_imported_results`` fold the
+    imported-results link into the hash so ETag revalidation flips when
+    a session's results are linked, unlinked, or rewritten — otherwise
+    browsers that cached an empty-results response keep getting 304s.
     """
     payload = {
         "race_id": race_id,
         "start_utc": start_utc.isoformat(),
         "end_utc": end_utc.isoformat() if end_utc is not None else None,
         "row_count": row_count,
+        "linked_imported_id": linked_imported_id,
+        "linked_imported_results": linked_imported_results,
     }
     raw = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
@@ -102,10 +111,36 @@ async def resolve_race_data_hash(storage: Storage, race_id: int) -> str | None:
         win_row = await win_cur.fetchone()
         row_count = int(win_row["cnt"]) if win_row else 0
 
+    # Imported-results link: which (if any) imported race points here, and
+    # how many results it carries. Folded into the hash so ETag flips on
+    # link/unlink even though the live race row itself hasn't changed.
+    link_cur = await db.execute(
+        "SELECT id FROM races"
+        " WHERE local_session_id = ? AND source IS NOT NULL AND source != 'live'"
+        " ORDER BY COALESCE(start_utc, date) LIMIT 1",
+        (race_id,),
+    )
+    link_row = await link_cur.fetchone()
+    linked_imported_id: int | None = None
+    linked_imported_results = 0
+    if link_row is not None:
+        linked_imported_id = int(link_row["id"])
+        rr_cur = await db.execute(
+            "SELECT COUNT(*) AS cnt FROM race_results WHERE race_id = ?",
+            (linked_imported_id,),
+        )
+        rr_row = await rr_cur.fetchone()
+        linked_imported_results = int(rr_row["cnt"]) if rr_row else 0
+
     start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
     end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00")) if end_iso else None
     return compute_race_data_hash(
-        race_id=race_id, start_utc=start_dt, end_utc=end_dt, row_count=row_count
+        race_id=race_id,
+        start_utc=start_dt,
+        end_utc=end_dt,
+        row_count=row_count,
+        linked_imported_id=linked_imported_id,
+        linked_imported_results=linked_imported_results,
     )
 
 
