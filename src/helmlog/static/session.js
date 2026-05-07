@@ -2304,7 +2304,19 @@ async function loadVideos() {
   body.innerHTML += _videoAddForm();
 }
 
-// Convert an elapsed-from-start track time (mm:ss) and a video position (mm:ss)
+// The track-scrubber readout (the "00:00 / 00:00" label next to the
+// scrubber) measures elapsed from _replayStart, which is the prestart
+// window cutoff (start_utc − 20 min) — not start_utc itself. Use that
+// same anchor here so what the user types matches what they read off
+// the page. Falls back to start_utc if the replay payload hasn't
+// landed yet (cache miss / pre-load).
+function _trackTimeAnchor() {
+  if (typeof _replayStart !== 'undefined' && _replayStart) return _replayStart;
+  const startUtc = _session && _session.start_utc;
+  return startUtc ? new Date(startUtc) : null;
+}
+
+// Convert a track-scrubber time (mm:ss) and a video position (mm:ss)
 // into the sync_utc + sync_offset_s pair the API expects.
 function _resolveSyncTimes(videoPosStr, trackPosStr) {
   const videoPosS = parseVideoPosition(videoPosStr);
@@ -2314,15 +2326,15 @@ function _resolveSyncTimes(videoPosStr, trackPosStr) {
   }
   const trackPosS = parseVideoPosition(trackPosStr);
   if (trackPosS === null || trackPosS < 0) {
-    alert('Track position must be mm:ss or seconds (elapsed from session start)');
+    alert('Track position must be mm:ss or seconds (matches the scrubber readout)');
     return null;
   }
-  const startUtc = _session && _session.start_utc;
-  if (!startUtc) {
+  const anchor = _trackTimeAnchor();
+  if (!anchor) {
     alert('Session has no start time — cannot resolve track position');
     return null;
   }
-  const syncUtc = new Date(new Date(startUtc).getTime() + trackPosS * 1000).toISOString();
+  const syncUtc = new Date(anchor.getTime() + trackPosS * 1000).toISOString();
   return {syncUtc, syncOffsetS: videoPosS};
 }
 
@@ -2342,15 +2354,16 @@ function _videoAddForm() {
 }
 
 // Convert a current video row's stored sync into the (videoPos, trackPos)
-// pair the editor presents. trackPos is elapsed seconds from session start;
-// it can be negative when the video starts before the session, so format
-// with a leading "-" instead of dropping the sign.
+// pair the editor presents. trackPos is elapsed seconds from the same
+// anchor the scrubber readout uses (_replayStart, falling back to
+// start_utc); it can be negative if the video starts before the
+// replay window, so keep the sign instead of clamping.
 function _currentSyncDisplay(v) {
   const offsetS = Number(v.sync_offset_s || 0);
   let trackS = 0;
-  const startUtc = _session && _session.start_utc;
-  if (startUtc && v.sync_utc) {
-    trackS = (new Date(v.sync_utc).getTime() - new Date(startUtc).getTime()) / 1000;
+  const anchor = _trackTimeAnchor();
+  if (anchor && v.sync_utc) {
+    trackS = (new Date(v.sync_utc).getTime() - anchor.getTime()) / 1000;
   }
   const fmt = (s) => {
     const sign = s < 0 ? '-' : '';
@@ -2372,10 +2385,28 @@ function _videoEditSyncForm(v) {
     + '</div>';
 }
 
+// _replayStart is loaded asynchronously via _loadReplayData and may not
+// be set when loadVideos first renders the form HTML. Re-derive the
+// prefill at toggle time so the user sees the values measured against
+// the same anchor the scrubber uses by the time they're looking.
 function toggleEditSync(videoId) {
   const el = document.getElementById('video-edit-sync-' + videoId);
   if (!el) return;
-  el.style.display = el.style.display === 'none' ? '' : 'none';
+  if (el.style.display === 'none') {
+    const v = _videoSync && _videoSync.allVideos
+      ? _videoSync.allVideos.find(x => x.id === videoId)
+      : null;
+    if (v) {
+      const cur = _currentSyncDisplay(v);
+      const videoEl = document.getElementById('edit-sync-video-' + videoId);
+      const trackEl = document.getElementById('edit-sync-track-' + videoId);
+      if (videoEl) videoEl.value = cur.videoPos;
+      if (trackEl) trackEl.value = cur.trackPos;
+    }
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
+  }
 }
 
 async function submitEditSync(videoId) {
