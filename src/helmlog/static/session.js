@@ -2341,12 +2341,31 @@ function _videoAddForm() {
     + '<button onclick="document.getElementById(\'video-add-form\').style.display=\'\'" style="font-size:.78rem;color:var(--accent);background:none;border:none;cursor:pointer;padding:4px 0;margin-top:4px">+ Add Video</button>';
 }
 
+// Convert a current video row's stored sync into the (videoPos, trackPos)
+// pair the editor presents. trackPos is elapsed seconds from session start;
+// it can be negative when the video starts before the session, so format
+// with a leading "-" instead of dropping the sign.
+function _currentSyncDisplay(v) {
+  const offsetS = Number(v.sync_offset_s || 0);
+  let trackS = 0;
+  const startUtc = _session && _session.start_utc;
+  if (startUtc && v.sync_utc) {
+    trackS = (new Date(v.sync_utc).getTime() - new Date(startUtc).getTime()) / 1000;
+  }
+  const fmt = (s) => {
+    const sign = s < 0 ? '-' : '';
+    return sign + fmtDuration(Math.round(Math.abs(s)));
+  };
+  return {videoPos: fmt(offsetS), trackPos: fmt(trackS)};
+}
+
 function _videoEditSyncForm(v) {
+  const cur = _currentSyncDisplay(v);
   return '<div id="video-edit-sync-' + v.id + '" style="display:none;margin:4px 0 10px 16px;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:4px">'
     + '<div style="font-size:.72rem;color:var(--text-secondary);margin-bottom:4px">Pick the same moment (e.g. the gun) in the video and on the track scrubber:</div>'
     + '<div style="display:flex;gap:4px;margin-bottom:4px">'
-    +   '<input id="edit-sync-video-' + v.id + '" class="field" placeholder="Video pos (mm:ss)" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
-    +   '<input id="edit-sync-track-' + v.id + '" class="field" placeholder="Track pos (mm:ss)" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
+    +   '<input id="edit-sync-video-' + v.id + '" class="field" placeholder="Video pos (mm:ss)" value="' + esc(cur.videoPos) + '" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
+    +   '<input id="edit-sync-track-' + v.id + '" class="field" placeholder="Track pos (mm:ss)" value="' + esc(cur.trackPos) + '" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
     + '</div>'
     + '<button class="btn-sm" style="background:var(--accent-strong);color:var(--bg-primary);border:none;border-radius:4px;padding:4px 10px;font-size:.78rem;cursor:pointer" onclick="submitEditSync(' + v.id + ')">Save sync</button>'
     + ' <button onclick="toggleEditSync(' + v.id + ')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:.78rem">Cancel</button>'
