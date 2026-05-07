@@ -2293,8 +2293,10 @@ async function loadVideos() {
       const lbl = v.label ? '<b>' + esc(v.label) + '</b> — ' : '';
       const ttl = esc(v.title || v.youtube_url).substring(0, 60);
       const link = '<a href="' + esc(v.youtube_url) + '" target="_blank" style="color:var(--accent)">' + ttl + '</a>';
-      const del = '<button onclick="deleteVideo(' + v.id + ')" style="color:var(--danger);background:none;border:none;cursor:pointer;font-size:.8rem;margin-left:8px">&#10005;</button>';
-      return '<div style="margin-bottom:4px">' + lbl + link + del + '</div>';
+      const editSync = '<button onclick="toggleEditSync(' + v.id + ')" style="color:var(--accent);background:none;border:none;cursor:pointer;font-size:.78rem;margin-left:8px" title="Edit sync">&#8635; sync</button>';
+      const del = '<button onclick="deleteVideo(' + v.id + ')" style="color:var(--danger);background:none;border:none;cursor:pointer;font-size:.8rem;margin-left:4px">&#10005;</button>';
+      return '<div style="margin-bottom:4px">' + lbl + link + editSync + del + '</div>'
+        + _videoEditSyncForm(v);
     }).join('');
   } else {
     body.innerHTML = '<span style="color:var(--text-secondary)">No videos linked</span>';
@@ -2302,30 +2304,91 @@ async function loadVideos() {
   body.innerHTML += _videoAddForm();
 }
 
+// Convert an elapsed-from-start track time (mm:ss) and a video position (mm:ss)
+// into the sync_utc + sync_offset_s pair the API expects.
+function _resolveSyncTimes(videoPosStr, trackPosStr) {
+  const videoPosS = parseVideoPosition(videoPosStr);
+  if (videoPosS === null || videoPosS < 0) {
+    alert('Video position must be mm:ss or seconds');
+    return null;
+  }
+  const trackPosS = parseVideoPosition(trackPosStr);
+  if (trackPosS === null || trackPosS < 0) {
+    alert('Track position must be mm:ss or seconds (elapsed from session start)');
+    return null;
+  }
+  const startUtc = _session && _session.start_utc;
+  if (!startUtc) {
+    alert('Session has no start time — cannot resolve track position');
+    return null;
+  }
+  const syncUtc = new Date(new Date(startUtc).getTime() + trackPosS * 1000).toISOString();
+  return {syncUtc, syncOffsetS: videoPosS};
+}
+
 function _videoAddForm() {
-  const startUtc = _session.start_utc || '';
-  const defaultSync = startUtc ? new Date(startUtc).toISOString().substring(0, 19) : '';
   return '<div id="video-add-form" style="display:none;margin-top:8px">'
     + '<input id="video-url" class="field" placeholder="YouTube URL" style="width:100%;margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
     + '<input id="video-label" class="field" placeholder="Label (e.g. Bow cam)" style="width:100%;margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
-    + '<div style="font-size:.72rem;color:var(--text-secondary);margin-bottom:2px">Sync calibration (optional):</div>'
-    + '<input id="video-sync-utc" class="field" type="datetime-local" step="1" value="' + defaultSync + '" style="width:100%;margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
-    + '<input id="video-sync-pos" class="field" placeholder="Video position (mm:ss)" style="width:100%;margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
+    + '<div style="font-size:.72rem;color:var(--text-secondary);margin-bottom:2px">Sync calibration: pick the same moment in the video and on the track scrubber.</div>'
+    + '<div style="display:flex;gap:4px;margin-bottom:4px">'
+    +   '<input id="video-sync-video-pos" class="field" placeholder="Video pos (mm:ss)" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
+    +   '<input id="video-sync-track-pos" class="field" placeholder="Track pos (mm:ss)" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
+    + '</div>'
     + '<button class="btn-export" style="background:var(--accent-strong);color:var(--bg-primary);border-color:var(--accent-strong)" onclick="submitAddVideo()">Add Video</button>'
     + ' <button onclick="document.getElementById(\'video-add-form\').style.display=\'none\'" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:.82rem">Cancel</button>'
     + '</div>'
     + '<button onclick="document.getElementById(\'video-add-form\').style.display=\'\'" style="font-size:.78rem;color:var(--accent);background:none;border:none;cursor:pointer;padding:4px 0;margin-top:4px">+ Add Video</button>';
 }
 
+function _videoEditSyncForm(v) {
+  return '<div id="video-edit-sync-' + v.id + '" style="display:none;margin:4px 0 10px 16px;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:4px">'
+    + '<div style="font-size:.72rem;color:var(--text-secondary);margin-bottom:4px">Pick the same moment (e.g. the gun) in the video and on the track scrubber:</div>'
+    + '<div style="display:flex;gap:4px;margin-bottom:4px">'
+    +   '<input id="edit-sync-video-' + v.id + '" class="field" placeholder="Video pos (mm:ss)" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
+    +   '<input id="edit-sync-track-' + v.id + '" class="field" placeholder="Track pos (mm:ss)" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
+    + '</div>'
+    + '<button class="btn-sm" style="background:var(--accent-strong);color:var(--bg-primary);border:none;border-radius:4px;padding:4px 10px;font-size:.78rem;cursor:pointer" onclick="submitEditSync(' + v.id + ')">Save sync</button>'
+    + ' <button onclick="toggleEditSync(' + v.id + ')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:.78rem">Cancel</button>'
+    + '</div>';
+}
+
+function toggleEditSync(videoId) {
+  const el = document.getElementById('video-edit-sync-' + videoId);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+async function submitEditSync(videoId) {
+  const videoPosVal = document.getElementById('edit-sync-video-' + videoId).value.trim();
+  const trackPosVal = document.getElementById('edit-sync-track-' + videoId).value.trim();
+  const sync = _resolveSyncTimes(videoPosVal, trackPosVal);
+  if (!sync) return;
+  const resp = await fetch('/api/videos/' + videoId, {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({sync_utc: sync.syncUtc, sync_offset_s: sync.syncOffsetS})
+  });
+  if (!resp.ok) { alert('Failed: ' + resp.status); return; }
+  location.reload();
+}
+
 async function submitAddVideo() {
   const url = document.getElementById('video-url').value.trim();
   const label = document.getElementById('video-label').value.trim();
-  const syncUtcVal = document.getElementById('video-sync-utc').value;
-  const syncPosVal = document.getElementById('video-sync-pos').value.trim();
+  const videoPosVal = document.getElementById('video-sync-video-pos').value.trim();
+  const trackPosVal = document.getElementById('video-sync-track-pos').value.trim();
   if (!url) { alert('YouTube URL is required'); return; }
-  const syncUtc = syncUtcVal ? (syncUtcVal.includes('Z') ? syncUtcVal : syncUtcVal + 'Z') : new Date().toISOString();
-  const syncOffsetS = syncPosVal ? parseVideoPosition(syncPosVal) : 0;
-  if (syncOffsetS === null) { alert('Video position must be mm:ss or seconds'); return; }
+  let syncUtc;
+  let syncOffsetS = 0;
+  if (videoPosVal || trackPosVal) {
+    const sync = _resolveSyncTimes(videoPosVal, trackPosVal);
+    if (!sync) return;
+    syncUtc = sync.syncUtc;
+    syncOffsetS = sync.syncOffsetS;
+  } else {
+    // No calibration entered: anchor at session start, video offset 0.
+    syncUtc = _session.start_utc || new Date().toISOString();
+  }
   const resp = await fetch('/api/sessions/' + SESSION_ID + '/videos', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({youtube_url: url, label, sync_utc: syncUtc, sync_offset_s: syncOffsetS})
