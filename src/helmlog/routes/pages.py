@@ -205,6 +205,28 @@ async def maneuvers_browser_page(request: Request) -> Response:
     )
 
 
+@router.get(
+    "/maneuvers/compare",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def maneuver_best_vs_median_page(request: Request) -> Response:
+    """Best vs median maneuver picker for coaching review (#741).
+
+    Filter form → /api/analysis/maneuver-compare → links to /compare and
+    /maneuvers/overlay so the existing video-grid and track-overlay pages
+    do the heavy rendering.
+    """
+    get_storage(request)
+    user: dict[str, Any] | None = getattr(request.state, "user", None)
+    user_role = user.get("role", "viewer") if user else "viewer"
+    return templates.TemplateResponse(
+        request,
+        "maneuver_compare.html",
+        tpl_ctx(request, "/maneuvers", user_role=user_role),
+    )
+
+
 @router.get("/maneuvers/overlay", response_class=HTMLResponse, include_in_schema=False)
 async def maneuvers_overlay_page(request: Request) -> Response:
     """Time-aligned multi-maneuver overlay chart (#619).
