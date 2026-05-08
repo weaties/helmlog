@@ -206,7 +206,29 @@ async def maneuvers_browser_page(request: Request) -> Response:
 
 
 @router.get(
-    "/maneuvers/compare",
+    "/analysis",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def analysis_hub_page(request: Request) -> Response:
+    """Coach-facing landing page listing cross-session analysis tools (#741).
+
+    Distinct from /admin/analysis — that surface manages the AnalysisPlugin
+    framework (install, default, co-op catalog). This page is the entry
+    point for actually *running* coach analyses.
+    """
+    get_storage(request)
+    user: dict[str, Any] | None = getattr(request.state, "user", None)
+    user_role = user.get("role", "viewer") if user else "viewer"
+    return templates.TemplateResponse(
+        request,
+        "analysis_hub.html",
+        tpl_ctx(request, "/analysis", user_role=user_role),
+    )
+
+
+@router.get(
+    "/analysis/maneuver-compare",
     response_class=HTMLResponse,
     include_in_schema=False,
 )
@@ -223,7 +245,7 @@ async def maneuver_best_vs_median_page(request: Request) -> Response:
     return templates.TemplateResponse(
         request,
         "maneuver_compare.html",
-        tpl_ctx(request, "/maneuvers", user_role=user_role),
+        tpl_ctx(request, "/analysis", user_role=user_role),
     )
 
 

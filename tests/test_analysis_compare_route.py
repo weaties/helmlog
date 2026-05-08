@@ -261,8 +261,8 @@ async def test_compare_post_start_excludes_pre_gun(
 
 @pytest.mark.asyncio
 async def test_compare_page_renders(client: httpx.AsyncClient) -> None:
-    """The /maneuvers/compare page renders the filter form."""
-    resp = await client.get("/maneuvers/compare")
+    """The /analysis/maneuver-compare page renders the filter form."""
+    resp = await client.get("/analysis/maneuver-compare")
     assert resp.status_code == 200
     body = resp.text
     assert "Best vs Median Maneuvers" in body
@@ -275,3 +275,15 @@ async def test_compare_page_renders(client: httpx.AsyncClient) -> None:
     # Direction + post-start filters are present.
     assert 'id="mc-direction"' in body
     assert 'id="mc-post-start"' in body
+
+
+@pytest.mark.asyncio
+async def test_analysis_hub_page_renders(client: httpx.AsyncClient) -> None:
+    """The /analysis hub lists the available coach analyses."""
+    resp = await client.get("/analysis")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "Analysis" in body
+    # Both tools should be linked.
+    assert 'href="/analysis/maneuver-compare"' in body
+    assert 'href="/maneuvers"' in body
