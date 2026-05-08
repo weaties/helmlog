@@ -82,23 +82,36 @@ def _uv_bin() -> str:
     """Return the full path to the uv binary.
 
     Under systemd, ~/.local/bin is not in PATH, so we resolve it explicitly.
+    The systemd unit overrides HOME (e.g. ``HOME=/var/cache/helmlog``) so
+    ``Path.home()`` does not point at the deploy user's home — we must check
+    the repo owner's home dir explicitly.
     """
     found = shutil.which("uv")
     if found:
         return found
-    # Common install location on Pi (installed by setup.sh for the deploy user)
-    home_local = Path.home() / ".local" / "bin" / "uv"
-    if home_local.exists():
-        return str(home_local)
-    # helmlog service account fallback
-    svc_local = Path("/home/helmlog/.local/bin/uv")
-    if svc_local.exists():
-        return str(svc_local)
-    # Search common home dirs on the Pi
-    for user_dir in Path("/home").iterdir():
+    candidates = [
+        Path.home() / ".local" / "bin" / "uv",
+        Path(f"/home/{_repo_owner()}/.local/bin/uv"),
+        Path("/home/helmlog/.local/bin/uv"),
+    ]
+    for candidate in candidates:
+        try:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+        except PermissionError:
+            continue
+    # Last-ditch search across /home — skip dirs we can't read.
+    try:
+        user_dirs = list(Path("/home").iterdir())
+    except (PermissionError, OSError):
+        user_dirs = []
+    for user_dir in user_dirs:
         candidate = user_dir / ".local" / "bin" / "uv"
-        if candidate.exists():
-            return str(candidate)
+        try:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+        except PermissionError:
+            continue
     return "uv"  # last resort — let it fail with a clear error
 
 
