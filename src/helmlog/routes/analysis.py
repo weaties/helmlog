@@ -555,14 +555,19 @@ async def api_maneuver_compare(
     metric: str = Query("distance_loss_m"),
     tws_min: float | None = Query(None, ge=0),
     tws_max: float | None = Query(None, ge=0),
+    direction: str | None = Query(None),
+    post_start: bool = Query(False),
     n: int = Query(3, ge=1, le=10),
     user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
 ) -> JSONResponse:
     """Coaching tool: 3 best + 3 median maneuvers across all sessions (#741).
 
-    Filters all stored maneuvers by ``type`` and entry-TWS range, ranks the
-    pool by ``metric`` (smaller is better), and returns the best ``n`` plus
-    the ``n`` closest to the median for side-by-side video/track review.
+    Filters all stored maneuvers by ``type``, entry-TWS range, tack/gybe
+    ``direction`` (PS|SP), and an optional pre-start cut (``post_start=1``
+    drops maneuvers that happened before the session's race gun, computed
+    the same way as ``GET /api/maneuvers``). Ranks the pool by ``metric``
+    (smaller is better) and returns the best ``n`` plus the ``n`` closest
+    to the median for side-by-side video/track review.
     """
     if maneuver_type not in _COMPARE_TYPES:
         raise HTTPException(422, f"type must be one of {sorted(_COMPARE_TYPES)}")
@@ -570,6 +575,8 @@ async def api_maneuver_compare(
         raise HTTPException(422, f"metric must be one of {sorted(_COMPARE_METRICS)}")
     if tws_min is not None and tws_max is not None and tws_min > tws_max:
         raise HTTPException(422, "tws_min must be <= tws_max")
+    if direction is not None and direction not in ("PS", "SP"):
+        raise HTTPException(422, "direction must be PS or SP")
 
     storage = get_storage(request)
 
@@ -577,16 +584,25 @@ async def api_maneuver_compare(
         assemble_compare_set,
         filter_pool,
         list_maneuver_pairs,
+        load_gun_times,
     )
     from helmlog.analysis.maneuvers import enrich_maneuvers_for_ids  # noqa: PLC0415
 
     pairs = await list_maneuver_pairs(storage, maneuver_type=maneuver_type)
     enriched, video_sync = await enrich_maneuvers_for_ids(storage, pairs)
+
+    gun_by_session: dict[int, str] | None = None
+    if post_start:
+        session_ids = sorted({sid for sid, _ in pairs})
+        gun_by_session = await load_gun_times(storage, session_ids)
+
     pool = filter_pool(
         enriched,
         maneuver_type=maneuver_type,
         tws_min=tws_min,
         tws_max=tws_max,
+        direction=direction,
+        gun_by_session=gun_by_session,
     )
     result = assemble_compare_set(pool, metric=metric, n=n)
 
@@ -595,7 +611,8 @@ async def api_maneuver_compare(
         "analysis.maneuver_compare",
         detail=(
             f"type={maneuver_type} metric={metric}"
-            f" tws=[{tws_min},{tws_max}] pool={result['pool_size']}"
+            f" tws=[{tws_min},{tws_max}] dir={direction}"
+            f" post_start={int(post_start)} pool={result['pool_size']}"
         ),
         user=user,
     )
@@ -606,6 +623,8 @@ async def api_maneuver_compare(
                 "metric": metric,
                 "tws_min": tws_min,
                 "tws_max": tws_max,
+                "direction": direction,
+                "post_start": post_start,
                 "n": n,
             },
             **result,

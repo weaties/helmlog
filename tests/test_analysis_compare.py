@@ -11,6 +11,7 @@ from helmlog.analysis.compare import (
     assemble_compare_set,
     filter_pool,
     list_maneuver_pairs,
+    load_gun_times,
     pick_best,
     pick_median,
 )
@@ -153,6 +154,117 @@ class TestPickMedian:
         # Remaining values 3..7, median = 5; closest 3 are 4, 5, 6.
         ids = sorted(m["id"] for m in result)
         assert ids == [4, 5, 6]
+
+
+class TestDirectionFilter:
+    """Tack/gybe direction follows the convention in routes/sessions.py:
+    ``is_ps = turn_angle_deg < 0`` (PS = negative turn, SP = non-negative)."""
+
+    def test_filter_ps_keeps_negative_turn(self) -> None:
+        items = [
+            _m(mid=1, metric_value=2.0, extra={"turn_angle_deg": -90.0}),
+            _m(mid=2, metric_value=2.0, extra={"turn_angle_deg": 90.0}),
+            _m(mid=3, metric_value=2.0, extra={"turn_angle_deg": -45.0}),
+        ]
+        result = filter_pool(items, direction="PS")
+        assert {m["id"] for m in result} == {1, 3}
+
+    def test_filter_sp_keeps_non_negative_turn(self) -> None:
+        items = [
+            _m(mid=1, metric_value=2.0, extra={"turn_angle_deg": -90.0}),
+            _m(mid=2, metric_value=2.0, extra={"turn_angle_deg": 90.0}),
+            _m(mid=3, metric_value=2.0, extra={"turn_angle_deg": 0.0}),
+        ]
+        result = filter_pool(items, direction="SP")
+        assert {m["id"] for m in result} == {2, 3}
+
+    def test_no_direction_filter_keeps_all(self) -> None:
+        items = [
+            _m(mid=1, metric_value=2.0, extra={"turn_angle_deg": -90.0}),
+            _m(mid=2, metric_value=2.0, extra={"turn_angle_deg": 90.0}),
+        ]
+        result = filter_pool(items)
+        assert len(result) == 2
+
+    def test_drops_items_missing_turn_angle_when_direction_set(self) -> None:
+        items = [
+            _m(mid=1, metric_value=2.0, extra={"turn_angle_deg": None}),
+            _m(mid=2, metric_value=2.0, extra={"turn_angle_deg": -90.0}),
+        ]
+        result = filter_pool(items, direction="PS")
+        assert {m["id"] for m in result} == {2}
+
+
+class TestPostStartFilter:
+    """post_start drops maneuvers whose ts < the session's gun_utc."""
+
+    def test_drops_pre_gun_maneuvers(self) -> None:
+        items = [
+            _m(
+                mid=1,
+                metric_value=2.0,
+                extra={
+                    "session_id": 100,
+                    "ts": "2026-04-01T11:55:00+00:00",  # before gun
+                },
+            ),
+            _m(
+                mid=2,
+                metric_value=2.0,
+                extra={
+                    "session_id": 100,
+                    "ts": "2026-04-01T12:05:00+00:00",  # after gun
+                },
+            ),
+        ]
+        gun_by_session = {100: "2026-04-01T12:00:00+00:00"}
+        result = filter_pool(items, gun_by_session=gun_by_session)
+        assert {m["id"] for m in result} == {2}
+
+    def test_keeps_maneuvers_at_or_after_gun(self) -> None:
+        items = [
+            _m(
+                mid=1,
+                metric_value=2.0,
+                extra={
+                    "session_id": 100,
+                    "ts": "2026-04-01T12:00:00+00:00",  # exactly at gun
+                },
+            ),
+        ]
+        gun_by_session = {100: "2026-04-01T12:00:00+00:00"}
+        result = filter_pool(items, gun_by_session=gun_by_session)
+        assert {m["id"] for m in result} == {1}
+
+    def test_keeps_maneuver_when_session_has_no_gun(self) -> None:
+        items = [
+            _m(
+                mid=1,
+                metric_value=2.0,
+                extra={
+                    "session_id": 200,
+                    "ts": "2026-04-01T11:55:00+00:00",
+                },
+            ),
+        ]
+        # Session 200 not in the gun map → no post-start filter applies.
+        gun_by_session: dict[int, str] = {100: "2026-04-01T12:00:00+00:00"}
+        result = filter_pool(items, gun_by_session=gun_by_session)
+        assert {m["id"] for m in result} == {1}
+
+    def test_no_gun_dict_disables_post_start(self) -> None:
+        items = [
+            _m(
+                mid=1,
+                metric_value=2.0,
+                extra={
+                    "session_id": 100,
+                    "ts": "2026-04-01T11:55:00+00:00",
+                },
+            ),
+        ]
+        result = filter_pool(items)
+        assert len(result) == 1
 
 
 class TestFilterPool:
@@ -368,6 +480,27 @@ class TestListManeuverPairs:
     async def test_empty_db_returns_empty(self, storage: Storage) -> None:
         pairs = await list_maneuver_pairs(storage)
         assert pairs == []
+
+
+class TestLoadGunTimes:
+    @pytest.mark.asyncio
+    async def test_falls_back_to_start_utc(self, storage: Storage) -> None:
+        """When there's no Vakaros race_start event, gun = race.start_utc."""
+        await _seed_session_with_maneuvers(storage, session_id=1, name="s1", maneuvers=[])
+        gun_map = await load_gun_times(storage, [1])
+        # The seed function uses _TS + 1h as start; just check it's populated.
+        assert 1 in gun_map
+        assert gun_map[1].startswith("2026-04-01T13:")  # _TS + 1h
+
+    @pytest.mark.asyncio
+    async def test_unknown_session_id_skipped(self, storage: Storage) -> None:
+        gun_map = await load_gun_times(storage, [999])
+        assert gun_map == {}
+
+    @pytest.mark.asyncio
+    async def test_empty_session_list(self, storage: Storage) -> None:
+        gun_map = await load_gun_times(storage, [])
+        assert gun_map == {}
 
 
 if __name__ == "__main__":

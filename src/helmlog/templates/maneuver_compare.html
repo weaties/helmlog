@@ -53,6 +53,17 @@
     <label>TWS max (kt)
       <input id="mc-tws-max" type="number" step="0.5" min="0" placeholder="e.g. 12" style="max-width:100px"/>
     </label>
+    <label>Direction
+      <select id="mc-direction">
+        <option value="">Either</option>
+        <option value="PS">P→S</option>
+        <option value="SP">S→P</option>
+      </select>
+    </label>
+    <label style="flex-direction:row;align-items:center;gap:6px">
+      <input type="checkbox" id="mc-post-start"/>
+      Post-start only
+    </label>
     <label>Per group
       <input id="mc-n" type="number" min="1" max="6" value="3" style="max-width:70px"/>
     </label>
@@ -127,6 +138,9 @@ async function mcSubmit(e){
   const tmax = document.getElementById('mc-tws-max').value;
   if (tmin) params.set('tws_min', tmin);
   if (tmax) params.set('tws_max', tmax);
+  const dir = document.getElementById('mc-direction').value;
+  if (dir) params.set('direction', dir);
+  if (document.getElementById('mc-post-start').checked) params.set('post_start', '1');
   params.set('n', document.getElementById('mc-n').value || '3');
 
   // Persist filters in the URL for shareable permalinks.
@@ -199,6 +213,8 @@ function _render(data){
   const m = _qs('metric'); if (m) document.getElementById('mc-metric').value = m;
   const tmin = _qs('tws_min'); if (tmin) document.getElementById('mc-tws-min').value = tmin;
   const tmax = _qs('tws_max'); if (tmax) document.getElementById('mc-tws-max').value = tmax;
+  const dir = _qs('direction'); if (dir) document.getElementById('mc-direction').value = dir;
+  if (_qs('post_start')) document.getElementById('mc-post-start').checked = true;
   const n = _qs('n'); if (n) document.getElementById('mc-n').value = n;
   if (t) document.getElementById('mc-form').dispatchEvent(new Event('submit', {cancelable:true}));
 })();

@@ -180,6 +180,86 @@ async def test_compare_empty_pool_returns_zero_counts(
 
 
 @pytest.mark.asyncio
+async def test_compare_rejects_unknown_direction(
+    client: httpx.AsyncClient,
+) -> None:
+    resp = await client.get(
+        "/api/analysis/maneuver-compare",
+        params={"type": "tack", "metric": "loss_kts", "direction": "leftways"},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_compare_post_start_excludes_pre_gun(
+    client: httpx.AsyncClient, storage: Storage
+) -> None:
+    """Two tacks in one session — one before the race start_utc, one after.
+    With post_start=1 only the post-gun tack survives.
+    """
+    db = storage._conn()
+    start = _BASE_TS
+    end = start + timedelta(minutes=30)
+    await db.execute(
+        "INSERT INTO races"
+        " (id, name, event, race_num, date, session_type, start_utc, end_utc)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            1,
+            "race1",
+            "evt",
+            1,
+            start.date().isoformat(),
+            "race",
+            start.isoformat(),
+            end.isoformat(),
+        ),
+    )
+    # Two maneuver rows: one 5min before start_utc, one 5min after.
+    await db.execute(
+        "INSERT INTO maneuvers"
+        " (session_id, type, ts, end_ts, duration_sec, loss_kts,"
+        "  vmg_loss_kts, tws_bin, twa_bin, details)"
+        " VALUES (?, ?, ?, ?, 10.0, 1.0, NULL, 12, 40, NULL)",
+        (
+            1,
+            "tack",
+            (start - timedelta(minutes=5)).isoformat(),
+            (start - timedelta(minutes=4)).isoformat(),
+        ),
+    )
+    await db.execute(
+        "INSERT INTO maneuvers"
+        " (session_id, type, ts, end_ts, duration_sec, loss_kts,"
+        "  vmg_loss_kts, tws_bin, twa_bin, details)"
+        " VALUES (?, ?, ?, ?, 10.0, 2.0, NULL, 12, 40, NULL)",
+        (
+            1,
+            "tack",
+            (start + timedelta(minutes=5)).isoformat(),
+            (start + timedelta(minutes=6)).isoformat(),
+        ),
+    )
+    await db.commit()
+
+    # Without post_start: both maneuvers in pool.
+    resp = await client.get(
+        "/api/analysis/maneuver-compare",
+        params={"type": "tack", "metric": "loss_kts"},
+    )
+    assert resp.json()["pool_size"] == 2
+
+    # With post_start=1: only the post-gun tack.
+    resp = await client.get(
+        "/api/analysis/maneuver-compare",
+        params={"type": "tack", "metric": "loss_kts", "post_start": "1"},
+    )
+    data = resp.json()
+    assert data["pool_size"] == 1
+    assert data["filters"]["post_start"] is True
+
+
+@pytest.mark.asyncio
 async def test_compare_page_renders(client: httpx.AsyncClient) -> None:
     """The /maneuvers/compare page renders the filter form."""
     resp = await client.get("/maneuvers/compare")
@@ -192,3 +272,6 @@ async def test_compare_page_renders(client: httpx.AsyncClient) -> None:
     assert 'value="gybe"' in body
     assert 'value="weather_rounding"' in body
     assert 'value="leeward_rounding"' in body
+    # Direction + post-start filters are present.
+    assert 'id="mc-direction"' in body
+    assert 'id="mc-post-start"' in body

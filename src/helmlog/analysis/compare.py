@@ -50,12 +50,22 @@ def filter_pool(
     maneuver_type: str | None = None,
     tws_min: float | None = None,
     tws_max: float | None = None,
+    direction: str | None = None,
+    gun_by_session: dict[int, str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Filter an enriched-maneuver pool by type and entry-TWS range.
+    """Filter an enriched-maneuver pool by type, entry-TWS, direction, and
+    pre/post-start cut-off.
 
     TWS range is inclusive on both ends. Items missing ``entry_tws`` are
-    dropped only when a TWS range is supplied — when no range is set, they
-    pass through (the caller didn't ask to filter on wind).
+    dropped only when a TWS range is supplied.
+
+    ``direction`` follows the convention in ``routes/sessions.py``:
+    ``is_ps = turn_angle_deg < 0`` (so PS matches negative turn, SP matches
+    non-negative). Items without a turn angle are dropped when set.
+
+    ``gun_by_session`` enables the post-start cut: ``{session_id: gun_iso}``;
+    items whose ``ts`` is before their session's gun are dropped. Sessions
+    not in the dict pass through (no gun = no cut).
     """
     out = []
     for m in items:
@@ -69,8 +79,58 @@ def filter_pool(
                 continue
             if tws_max is not None and tws > tws_max:
                 continue
+        if direction is not None:
+            ang = m.get("turn_angle_deg")
+            if ang is None:
+                continue
+            is_ps = ang < 0
+            if direction == "PS" and not is_ps:
+                continue
+            if direction == "SP" and is_ps:
+                continue
+        if gun_by_session:
+            sid = m.get("session_id")
+            gun = gun_by_session.get(sid) if isinstance(sid, int) else None
+            if gun and str(m.get("ts") or "") < gun:
+                continue
         out.append(m)
     return out
+
+
+async def load_gun_times(
+    storage: Storage,
+    session_ids: list[int],
+) -> dict[int, str]:
+    """Compute each session's effective race gun (latest Vakaros race_start
+    event inside the session window, falling back to ``start_utc``).
+
+    Mirrors the query used by ``GET /api/maneuvers`` in routes/sessions.py
+    so the post-start filter on this endpoint and the existing maneuvers
+    browser cut at the same instant.
+    """
+    if not session_ids:
+        return {}
+    db = storage._read_conn()
+    placeholders = ",".join("?" * len(session_ids))
+    cursor = await db.execute(
+        f"""
+        SELECT r.id AS session_id,
+               COALESCE(
+                 (SELECT MAX(vre.ts)
+                    FROM vakaros_race_events vre
+                   WHERE vre.session_id = r.vakaros_session_id
+                     AND vre.event_type = 'race_start'
+                     AND vre.ts BETWEEN r.start_utc
+                                    AND COALESCE(r.end_utc, r.start_utc)),
+                 r.start_utc
+               ) AS gun_utc
+          FROM races r
+         WHERE r.id IN ({placeholders})
+        """,
+        session_ids,
+    )
+    rows = await cursor.fetchall()
+    return {int(r[0]): str(r[1]) for r in rows if r[1] is not None}
 
 
 def pick_best(
