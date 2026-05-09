@@ -25,8 +25,9 @@
   <h1>New pre-race briefing</h1>
   <p class="briefing-help">
     Pan and zoom the map until the area you'll be racing is in view. The current
-    map viewport defines the briefing's bbox. Pick the date and racing window
-    (local time at the venue), then generate.
+    map viewport defines the briefing's bbox (allowed: 0.05° &ndash; 3°, roughly
+    5&nbsp;km up to a few hundred km wide). Pick the date and racing window
+    (local time at the venue), then generate. Larger bboxes produce larger GIFs.
   </p>
 
   <form id="briefing-form" class="briefing-form" method="post" action="/briefings/run">

@@ -104,10 +104,19 @@ async def briefings_new_form(
     return templates.TemplateResponse(request, "briefings_new.html", ctx)
 
 
-# Hard limits to keep one-off briefings cheap. A bbox much wider than ~1°
-# would explode the Open-Meteo grid request and the GIF render time.
-_MAX_BBOX_SPAN_DEG = 1.0
+# Hard limits on the bbox span. The lower bound keeps the grid from
+# collapsing to a single cell; the upper bound caps Open-Meteo grid size,
+# OSM tile fetch count, and resulting GIF size. 3° at mid-latitudes
+# covers ~330 × 220 km — ample for regional/distance racing while
+# keeping tile fetch under 25 tiles and grid points under ~150.
+_MAX_BBOX_SPAN_DEG = 3.0
 _MIN_BBOX_SPAN_DEG = 0.05
+# Number of grid cells we aim for across the longer axis of the bbox.
+# 12 keeps each cell at roughly 5–25 km depending on bbox size — fine
+# enough to show local pressure variation, coarse enough that
+# ``fetch_minutely_15_grid`` stays well under any quota.
+_GRID_CELLS_LONGEST = 12
+_MIN_GRID_STEP_DEG = 0.02  # ~2.2 km — never finer than this.
 
 
 @router.post("/briefings/run", include_in_schema=False)
@@ -171,9 +180,10 @@ async def briefings_run(  # noqa: PLR0913
     # --- Build ephemeral venue ---
     center_lat = (lo_lat + hi_lat) / 2
     center_lon = (lo_lon + hi_lon) / 2
-    # Aim for ~7 grid points across the longer axis; floor to a sensible step.
+    # Aim for ~12 grid cells across the longer axis; floor to the
+    # minimum step so a small bbox still gets a usable grid.
     longest = max(span_lat, span_lon)
-    step = max(0.02, round(longest / 7, 3))
+    step = max(_MIN_GRID_STEP_DEG, round(longest / _GRID_CELLS_LONGEST, 3))
     digest = hashlib.sha1(
         f"{lo_lat:.4f},{lo_lon:.4f},{hi_lat:.4f},{hi_lon:.4f}:{venue_tz}".encode()
     ).hexdigest()[:10]
