@@ -1065,8 +1065,8 @@ def render_animated_gif(
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
     import numpy as np
-    from matplotlib.animation import FuncAnimation, PillowWriter
     from matplotlib.patches import Polygon as MplPolygon
+    from PIL import Image
 
     if not briefing.hourly_forecast:
         return False
@@ -1345,10 +1345,50 @@ def render_animated_gif(
 
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    anim = FuncAnimation(fig, update, frames=len(frames), blit=False)
-    writer = PillowWriter(fps=_GIF_FRAME_FPS)
-    anim.save(str(output_path), writer=writer)
+
+    # Render frames manually so we control the GIF palette. matplotlib's
+    # default PillowWriter quantizes each frame independently, which
+    # makes the static colorbar (and other unchanged pixels) shimmer
+    # frame-to-frame as similar colours round to different palette
+    # entries. We render every frame to RGB, build a single shared
+    # palette from a sampling of those frames, then quantize each frame
+    # against that master palette so static elements stay rock-stable.
+    rendered: list[Image.Image] = []
+    for i in range(len(frames)):
+        update(i)
+        fig.canvas.draw()
+        w, h = fig.canvas.get_width_height()
+        buf = np.asarray(fig.canvas.buffer_rgba())  # type: ignore[attr-defined]
+        rendered.append(Image.fromarray(buf, "RGBA").convert("RGB"))
+        _ = w, h
     plt.close(fig)
+
+    if not rendered:
+        return False
+
+    # Build the master palette from ~8 evenly-spaced frames so it covers
+    # the full wind range, not just the start-of-window state.
+    n_samples = min(8, len(rendered))
+    step = max(1, len(rendered) // n_samples)
+    sample_frames = rendered[::step]
+    sw, sh = sample_frames[0].size
+    sheet = Image.new("RGB", (sw, sh * len(sample_frames)))
+    for i, f in enumerate(sample_frames):
+        sheet.paste(f, (0, i * sh))
+    master = sheet.quantize(colors=255, method=Image.Quantize.MEDIANCUT)
+
+    quantized = [
+        f.quantize(palette=master, dither=Image.Dither.FLOYDSTEINBERG) for f in rendered
+    ]
+    quantized[0].save(
+        str(output_path),
+        save_all=True,
+        append_images=quantized[1:],
+        duration=int(1000 / _GIF_FRAME_FPS),
+        loop=0,
+        optimize=True,
+        disposal=2,
+    )
     return output_path.exists() and output_path.stat().st_size > 0
 
 
