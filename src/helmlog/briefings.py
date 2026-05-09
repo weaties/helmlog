@@ -1151,30 +1151,50 @@ def render_animated_gif(
                     MplPolygon(xy, closed=True, facecolor="#dccfa6", edgecolor="#8a7d4a", lw=0.6)
                 )
 
-    # Heatmap setup. We render one rectangle per grid cell (axis-aligned)
-    # and update its facecolor each frame. Same colormap (0–25 kt) for
-    # the whole animation so frames are comparable.
-    speed_min = 0.0
-    speed_max = 25.0
+    # Heatmap setup. The colour scale is locked to the actual data range
+    # for this briefing (computed once, applied to every frame) so the
+    # same wind speed always maps to the same colour across the animation.
+    # We use a single imshow with bilinear interpolation so the gradient
+    # between adjacent grid cells is smooth, not stepped per cell.
     cmap = plt.get_cmap("RdYlBu_r")
     half = max(0.001, venue.grid_step_deg / 2)
-    cell_patches: list[Any] = []
-    for lat, lon, _samples in grid_cells:
-        rect = MplPolygon(
-            [
-                (lon - half, lat - half),
-                (lon + half, lat - half),
-                (lon + half, lat + half),
-                (lon - half, lat + half),
-            ],
-            closed=True,
-            facecolor=cmap(0.0),
-            edgecolor="none",
-            alpha=0.32,  # let the basemap show through
-            zorder=0.5,
-        )
-        ax.add_patch(rect)
-        cell_patches.append(rect)
+
+    # Range derived from observed cell samples. Pad +1 kt so colours don't
+    # saturate at the brightest cell, and floor the span so a glassy day
+    # still has visible gradient.
+    all_speeds = [s.wind_speed_kts for _lat, _lon, samples in grid_cells for s in samples]
+    speed_min = 0.0
+    observed_max = max(all_speeds) if all_speeds else 12.0
+    speed_max = max(observed_max + 1.0, 8.0)
+
+    unique_lats = sorted({lat for lat, _lon, _s in grid_cells})
+    unique_lons = sorted({lon for _lat, lon, _s in grid_cells})
+    n_lat = len(unique_lats)
+    n_lon = len(unique_lons)
+    lat_index = {lat: i for i, lat in enumerate(unique_lats)}
+    lon_index = {lon: j for j, lon in enumerate(unique_lons)}
+    cell_lookup: list[list[list[Any] | None]] = [[None] * n_lon for _ in range(n_lat)]
+    for lat, lon, samples in grid_cells:
+        cell_lookup[lat_index[lat]][lon_index[lon]] = samples
+    heatmap_extent = (
+        min(unique_lons) - half,
+        max(unique_lons) + half,
+        min(unique_lats) - half,
+        max(unique_lats) + half,
+    )
+    heatmap_arr = np.zeros((n_lat, n_lon), dtype=float)
+    heatmap_im = ax.imshow(
+        heatmap_arr,
+        extent=heatmap_extent,
+        origin="lower",
+        aspect="auto",
+        cmap=cmap,
+        vmin=speed_min,
+        vmax=speed_max,
+        alpha=0.45,
+        interpolation="bilinear",
+        zorder=0.5,
+    )
 
     # Static colorbar legend.
     from matplotlib.colors import Normalize as _Normalize
@@ -1185,7 +1205,7 @@ def render_animated_gif(
     )
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, fraction=0.025, pad=0.02)
-    cbar.set_label("wind (kt)", fontsize=9)
+    cbar.set_label(f"wind (kt) — scale 0–{speed_max:.0f}", fontsize=9)
     cbar.ax.tick_params(labelsize=8)
 
     # Per-frame wind barbs (matching the session-page track overlay style
@@ -1254,11 +1274,19 @@ def render_animated_gif(
     def update(frame_idx: int) -> tuple[Any, ...]:
         t = frames[frame_idx]
 
-        # Heatmap (continuous gradient, 0–25 kt).
-        for (_lat, _lon, samples), patch in zip(grid_cells, cell_patches, strict=True):
-            speed, _g, _d = _interp_at(samples, t)
-            norm = max(0.0, min(1.0, (speed - speed_min) / (speed_max - speed_min)))
-            patch.set_facecolor(cmap(norm))
+        # Heatmap — fill the (n_lat, n_lon) array with this frame's wind
+        # speeds. imshow's bilinear interpolation gives a smooth gradient
+        # between cell centres rather than a hard step.
+        for i in range(n_lat):
+            row = cell_lookup[i]
+            for j in range(n_lon):
+                samples = row[j]
+                if samples is None:
+                    heatmap_arr[i, j] = 0.0
+                    continue
+                speed, _g, _d = _interp_at(samples, t)
+                heatmap_arr[i, j] = speed
+        heatmap_im.set_data(heatmap_arr)
 
         # Wind barbs — rebuild segment + pennant lists for this frame.
         all_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
@@ -1313,7 +1341,7 @@ def render_animated_gif(
             f"wind  {v_speed:.1f} kt @ {int(round(v_dir))}°  gust {v_gust:.0f}\n"
             f"curr  {cur_str}"
         )
-        return (*cell_patches, barb_lines, barb_pennants, current_arrow, badge)
+        return (heatmap_im, barb_lines, barb_pennants, current_arrow, badge)
 
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
