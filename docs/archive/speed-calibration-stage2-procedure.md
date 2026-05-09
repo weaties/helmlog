@@ -10,8 +10,8 @@ related: speed-calibration-2026-04-18.md
 
 The 2026-04-18 calibration ([speed-calibration-2026-04-18.md](speed-calibration-2026-04-18.md))
 ran reciprocal-heading legs **at constant RPM under power, near-zero wind, flat
-heel** and concluded the paddlewheel was reading 8% high → set H5000
-correction to 89.34%. That was the right test for the average paddlewheel
+heel** and concluded the paddlewheel was reading 8% high → set the Triton²
+boat-speed correction to 89.34%. That was the right test for the average paddlewheel
 over-read at flat-deck conditions, and the data confirms it worked: post-cal
 drift/BSP ratio dropped from 18.3% → 15.3% across 42k samples.
 
@@ -52,10 +52,12 @@ For each pair:
 - `factor_stbd = true_STW / BSP_stbd`
 - New per-tack cal = current_global_cal × factor_<tack>
 
-If the H5000 supports per-tack STW calibration (Calibration → Boat Speed →
-Port/Stbd separate values), apply factors there. If it supports only one
-global value, leave the global at 89% and add a HelmLog-side tack-aware
-correction (see "Software fallback" below).
+Corvo's instrument system is B&G Triton² (display-only — no race processor),
+so the cal must be applied in HelmLog software. Triton² supports only a
+single global boat-speed correction percentage; it has no per-tack STW cal,
+no heel-compensation table, and no leeway model. Leave the Triton² global at
+89.34% and add a HelmLog-side tack-aware correction (see
+"Software-side per-tack correction" below).
 
 ## Conditions required
 
@@ -164,14 +166,14 @@ After applying per-tack cals:
 
 ## Caveats
 
-- The procedure assumes the H5000's *averaging* of paddlewheel data is
-  symmetric — i.e., that any internal H5000 cal (heel correction tables,
-  damping) is the same on each tack. If the H5000 has heel-compensation
-  on STW *enabled* with a coefficient that differs from this boat, the
-  measured asymmetry will include that contribution and will *not*
-  represent paddlewheel-only error. Verify H5000 STW heel compensation
-  setting before running the test; if enabled, either disable for the
-  test or note its value.
+- Triton² has no heel-compensation table or per-tack cal on STW — only a
+  single global cal multiplier and basic damping. That actually simplifies
+  this test: the measured port/stbd asymmetry reflects paddlewheel-vs-flow
+  physics + hull/heel asymmetry directly, with no instrument-side heel
+  correction confounding the result. If we ever upgrade to a processor
+  (H5000 / Nemesis³), revisit this caveat — those systems do apply heel
+  tables that need to be either matched on each tack or disabled for the
+  test.
 - Heel-induced compass deviation will affect the COG−HDG diagnostic in
   the same data; that's a separate calibration (compass swing at race
   heel) and won't bias the per-tack STW result, since the cal math uses
@@ -188,24 +190,23 @@ Next light-air practice day (8–12 kt forecast, flat water). Avoid:
 - Building-tide windows (Phase B vs Phase A current strength differs)
 - Days with crew changes from a normal race configuration
 
-## Software fallback (if H5000 has no per-tack cal)
+## Software-side per-tack correction
 
-If the H5000 supports only one global STW cal value, the per-tack
-correction can be applied at read-time in HelmLog by:
+Triton² has no per-tack STW cal, so the per-tack correction must be
+applied at read-time in HelmLog:
 
-1. Adding `speed_correction_port` and `speed_correction_starboard`
+1. Add `speed_correction_port` and `speed_correction_starboard`
    parameters to `boat_settings.py`.
-2. Wiring them into the same code path that should be applying
+2. Wire them into the same code path that should be applying
    `leeway_coefficient` (currently unread — see separate finding).
 3. The current calc in `current.py` reads `heel_deg` from `attitudes`,
    selects the per-tack scale, and applies it to STW before forming the
    water vector.
 
-This software approach has the advantage that the on-boat H5000 displays
-remain on a single global cal (no per-tack difference shown to the helm),
-but HelmLog's stored/exported data and the post-race analysis correctly
-reflect per-tack reality. Whether to apply the cal in the H5000 vs in
-software is a separable decision once the per-tack factors are known.
+The on-boat Triton² displays continue to show STW under the single
+global 89.34% cal (no per-tack difference shown to the helm), while
+HelmLog's stored/exported data and the post-race analysis reflect
+per-tack reality.
 
 ## Cross-references
 
