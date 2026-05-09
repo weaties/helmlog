@@ -107,6 +107,19 @@ function _fmtMetric(v, unit){
   return Number(v).toFixed(unit === 'm' ? 1 : 1) + ' ' + unit;
 }
 
+function _sessionDeepLink(m){
+  // Build /session/{id}/{slug}?t=<offset-seconds> so the session page
+  // seeks to the maneuver moment on load (uses the existing ?t= mechanism
+  // already wired up in session.js _applyDeepLink).
+  if (!m.session_id || !m.session_start_utc || !m.ts) return null;
+  const start = Date.parse(m.session_start_utc);
+  const at = Date.parse(m.ts);
+  if (isNaN(start) || isNaN(at)) return null;
+  const offsetSec = Math.max(0, Math.floor((at - start) / 1000));
+  const slug = m.session_slug ? '/' + encodeURIComponent(m.session_slug) : '';
+  return '/session/' + m.session_id + slug + '?t=' + offsetSec;
+}
+
 function _renderCard(m, metric){
   const unit = _METRIC_UNITS[metric] || '';
   const date = (m.session_start_utc || '').slice(0,10);
@@ -115,6 +128,10 @@ function _renderCard(m, metric){
   const yt = m.youtube_url
     ? '<a class="mc-yt" href="' + _esc(m.youtube_url) + '" target="_blank" rel="noopener">▶ YouTube</a>'
     : '<span style="color:var(--text-secondary);opacity:.5">no video</span>';
+  const deepLink = _sessionDeepLink(m);
+  const sessionLink = deepLink
+    ? '<a class="mc-yt" href="' + _esc(deepLink) + '" target="_blank" rel="noopener">View in session →</a>'
+    : '';
   return ''
     + '<div class="mc-card">'
     + '<div class="mc-date">' + _esc(date) + ' · ' + _esc(m.session_name || '') + '</div>'
@@ -124,7 +141,10 @@ function _renderCard(m, metric){
     +   '<br/>entry BSP ' + (m.entry_bsp == null ? '—' : Number(m.entry_bsp).toFixed(1) + ' kt')
     +   ' · exit BSP ' + (m.exit_bsp == null ? '—' : Number(m.exit_bsp).toFixed(1) + ' kt')
     + '</div>'
-    + '<div style="margin-top:6px">' + yt + '</div>'
+    + '<div style="margin-top:6px;display:flex;gap:10px;flex-wrap:wrap">'
+    +   yt
+    +   (sessionLink ? sessionLink : '')
+    + '</div>'
     + '</div>';
 }
 
@@ -198,8 +218,8 @@ function _render(data){
 
   results.innerHTML = ''
     + '<div class="mc-actions">'
-    +   '<a href="' + compareHref + '">Open side-by-side videos</a>'
-    +   '<a href="' + overlayHref + '" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border)">Open track overlay</a>'
+    +   '<a href="' + compareHref + '" target="_blank" rel="noopener">Open side-by-side videos</a>'
+    +   '<a href="' + overlayHref + '" target="_blank" rel="noopener" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border)">Open track overlay</a>'
     + '</div>'
     + '<div class="mc-section-title">Best ' + data.best.length + ' (lowest ' + _METRIC_LABELS[metric] + ')</div>'
     + '<div class="mc-grid">' + data.best.map(m => _renderCard(m, metric)).join('') + '</div>'

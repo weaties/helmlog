@@ -133,6 +133,12 @@ async def test_compare_returns_best_and_median_disjoint(
     # Best 3 should be the 3 lowest loss values.
     best_losses = sorted(m["loss_kts"] for m in data["best"])
     assert best_losses == [1.0, 2.0, 3.0]
+    # Each cell carries the fields the UI deep-link needs to build
+    # /session/{id}/{slug}?t=<offset>: session_id, session_start_utc, ts.
+    for m in data["best"]:
+        assert m.get("session_id") is not None
+        assert m.get("session_start_utc") is not None
+        assert m.get("ts") is not None
 
 
 @pytest.mark.asyncio
