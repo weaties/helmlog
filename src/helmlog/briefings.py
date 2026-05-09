@@ -180,6 +180,25 @@ def ticks_for_date(venue: VenueConfig, local_date: date) -> list[BriefingTick]:
     ]
 
 
+def force_tick(venue: VenueConfig, local_date: date, lead_hours: int = 0) -> BriefingTick:
+    """Build a tick for any local_date, bypassing the day-of-week filter.
+
+    Used by the ``helmlog briefing run`` CLI to fire an ad-hoc briefing
+    on demand (e.g. for a non-race-day venue test). Production scheduling
+    still goes through ``ticks_for_date`` / ``next_tick``, which respect
+    the venue's configured race days.
+    """
+    start_utc, end_utc = _local_window_to_utc(venue, local_date)
+    return BriefingTick(
+        venue_id=venue.venue_id,
+        local_date=local_date,
+        lead_hours=lead_hours,
+        trigger_utc=datetime.now(UTC),
+        window_start_utc=start_utc,
+        window_end_utc=end_utc,
+    )
+
+
 def next_tick(venue: VenueConfig, now_utc: datetime) -> BriefingTick | None:
     """Return the next tick at or after ``now_utc`` for this venue.
 

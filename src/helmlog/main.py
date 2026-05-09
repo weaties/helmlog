@@ -633,6 +633,87 @@ async def _export(start_iso: str, end_iso: str, out: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _briefing_run(
+    venue_id: str, date_iso: str | None, lead_hours: int, chart_dir: str | None
+) -> None:
+    """Force-run a single briefing tick for `venue_id` on the given date.
+
+    Defaults to today in the venue's local timezone. Bypasses the
+    day-of-week filter so it works on non-race days; the persisted row
+    still upserts on (venue_id, local_date, lead_hours), so re-running
+    overwrites cleanly.
+    """
+    from datetime import date as _date
+    from pathlib import Path
+    from zoneinfo import ZoneInfo
+
+    from helmlog.briefings import (
+        force_tick,
+        get_venue,
+        render_animated_gif,
+        run_briefing_tick,
+    )
+    from helmlog.external import ExternalFetcher
+    from helmlog.storage import Storage, StorageConfig
+
+    venue = get_venue(venue_id)
+    if venue is None:
+        logger.error("Unknown venue: {!r}", venue_id)
+        sys.exit(1)
+
+    if date_iso:
+        try:
+            local_date = _date.fromisoformat(date_iso)
+        except ValueError as exc:
+            logger.error("Invalid --date {!r}: {}", date_iso, exc)
+            sys.exit(1)
+    else:
+        local_date = datetime.now(ZoneInfo(venue.venue_tz)).date()
+
+    tick = force_tick(venue, local_date, lead_hours=lead_hours)
+    out_dir = Path(chart_dir or os.environ.get("BRIEFING_CHART_DIR", "data/briefings"))
+
+    storage = Storage(StorageConfig())
+    await storage.connect()
+    try:
+        async with ExternalFetcher() as fetcher:
+            briefing = await run_briefing_tick(
+                storage=storage,
+                venue=venue,
+                tick=tick,
+                fetch_forecast=fetcher.fetch_minutely_15_forecast,
+                fetch_tide=fetcher.fetch_tide_predictions,
+                fetch_currents=fetcher.fetch_current_predictions,
+                chart_renderer=render_animated_gif,
+                chart_dir=out_dir,
+            )
+        bid = await storage.get_briefing(
+            venue_id=venue.venue_id, local_date=local_date, lead_hours=lead_hours
+        )
+        # The briefing row id (separate from the dataclass) is needed for
+        # the URL — fetch via the id index.
+        ids = await storage.list_briefing_ids_for_date(
+            venue_id=venue.venue_id, local_date=local_date
+        )
+        row_id = ids.get((venue.venue_id, local_date.isoformat(), lead_hours))
+    finally:
+        await storage.close()
+
+    print(f"venue={venue.venue_id} date={local_date.isoformat()} lead={lead_hours}h")
+    print(f"state={briefing.state} race_id={briefing.race_id}")
+    print(f"forecast samples: {len(briefing.hourly_forecast)}")
+    print(f"tide+current samples: {len(briefing.hourly_tide)}")
+    if briefing.error:
+        print(f"error: {briefing.error}")
+    if briefing.tide_unavailable_reason:
+        print(f"tide note: {briefing.tide_unavailable_reason}")
+    if briefing.chart_path:
+        print(f"chart: {briefing.chart_path}")
+    if row_id is not None:
+        print(f"url: http://localhost:3002/briefings/{row_id}")
+    _ = bid  # the dataclass is unused beyond the diagnostics above
+
+
 async def _status() -> None:
     """Print row counts and last-seen timestamps for each data table."""
     from helmlog.storage import Storage, StorageConfig
@@ -1820,6 +1901,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
     coop_sub.add_parser("status", help="Show co-op membership status")
 
+    brief = sub.add_parser("briefing", help="Manage pre-race briefings (#700)")
+    brief_sub = brief.add_subparsers(dest="briefing_command", required=True)
+    brief_run = brief_sub.add_parser(
+        "run",
+        help="Force-run a briefing tick (bypasses day-of-week filter; defaults to today)",
+    )
+    brief_run.add_argument("--venue", default="shilshole", help="Venue id (default: shilshole)")
+    brief_run.add_argument(
+        "--date",
+        default=None,
+        help="Local race date (YYYY-MM-DD); defaults to today in the venue tz",
+    )
+    brief_run.add_argument(
+        "--lead", type=int, default=0, help="Lead hours (default 0 = snapshot for the window now)"
+    )
+    brief_run.add_argument(
+        "--chart-dir",
+        default=None,
+        help="Where to write the GIF (default: $BRIEFING_CHART_DIR or data/briefings)",
+    )
+
     coop_invite = coop_sub.add_parser("invite", help="Invite a boat to the co-op")
     coop_invite.add_argument(
         "boat_card",
@@ -1891,6 +1993,10 @@ def main() -> None:
                         )
                     case "show":
                         asyncio.run(_identity_show())
+            case "briefing":
+                match args.briefing_command:
+                    case "run":
+                        asyncio.run(_briefing_run(args.venue, args.date, args.lead, args.chart_dir))
             case "co-op":
                 match args.coop_command:
                     case "create":
