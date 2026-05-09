@@ -301,12 +301,23 @@ async def api_session_link_imported(
     if not await cur.fetchone():
         raise HTTPException(404, "Session not found")
 
+    # Collect ids whose cached session_summary depends on the link before
+    # mutating: the live session itself, the new imported race, and any
+    # imported race already pointing here (whose link is about to be cleared).
+    # Without this, /history keeps serving the pre-link results: [] blob.
+    invalidation_ids: set[int] = {session_id}
+    cur = await db.execute("SELECT id FROM races WHERE local_session_id = ?", (session_id,))
+    for row in await cur.fetchall():
+        invalidation_ids.add(row[0])
+
     if imported_race_id == 0:
         await db.execute(
             "UPDATE races SET local_session_id = NULL WHERE local_session_id = ?",
             (session_id,),
         )
         await db.commit()
+        for rid in invalidation_ids:
+            await storage._invalidate_race_cache(rid)
         await audit(
             request,
             "results_session_unlink",
@@ -320,6 +331,7 @@ async def api_session_link_imported(
     )
     if not await cur.fetchone():
         raise HTTPException(404, "Imported race not found")
+    invalidation_ids.add(imported_race_id)
 
     # Clear any previous link on this session so we don't end up pointing
     # multiple imported rows at the same local session.
@@ -332,6 +344,9 @@ async def api_session_link_imported(
         (session_id, imported_race_id),
     )
     await db.commit()
+
+    for rid in invalidation_ids:
+        await storage._invalidate_race_cache(rid)
 
     await audit(
         request,

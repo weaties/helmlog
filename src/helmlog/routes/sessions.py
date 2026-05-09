@@ -311,24 +311,52 @@ async def api_session_track(
     )
 
 
+#: Window of GPS rows to include before the race's start_utc on the
+#: session track. The helm's prestart maneuvers (line pings, traffic
+#: management, hold patterns) live in this window. Positions inside it
+#: that are *unscoped* (race_id IS NULL — captured before start_race
+#: was called) get included; positions tagged to a different race do
+#: not, so back-to-back starts don't bleed into each other.
+_PRESTART_WINDOW_S: int = 1200  # 20 minutes
+
+
 async def _compute_session_track(storage: Storage, session_id: int) -> dict[str, Any]:
     """Build the GeoJSON FeatureCollection for a session's GPS track.
+
+    Includes a prestart prefix (last :data:`_PRESTART_WINDOW_S` seconds
+    before ``start_utc``) so the session map shows the helm's pre-gun
+    maneuvers, not just the race itself.
 
     Called by the HTTP endpoint and by the warm-on-complete hook in
     ``cache.warm_race_cache`` (#611). Raises ``HTTPException(404)`` when
     the race doesn't exist — the HTTP path surfaces that; the warmer
     catches and logs it.
     """
+    from datetime import UTC, datetime, timedelta
+
     db = storage._conn()
     cur = await db.execute("SELECT start_utc, end_utc FROM races WHERE id = ?", (session_id,))
     row = await cur.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Race not found")
     start_utc = row["start_utc"]
-    end_utc = row["end_utc"] or start_utc
+    # Active race (end_utc IS NULL): bound the upper window at "now" so live
+    # positions written after the gun appear on the map. Falling back to
+    # start_utc here would collapse the window and freeze the track at the
+    # gun (the bug behind this regression).
+    end_utc = row["end_utc"] or datetime.now(UTC).isoformat()
+
+    # Prestart cutoff: start_utc shifted back by the configured window.
+    try:
+        start_dt = datetime.fromisoformat(start_utc)
+        prestart_cutoff = (start_dt - timedelta(seconds=_PRESTART_WINDOW_S)).isoformat()
+    except ValueError:
+        prestart_cutoff = start_utc  # bad timestamp — degrade to no prestart
 
     # Prefer race_id filter (exact match for synthesized sessions);
-    # fall back to time-range query for real instrument data.
+    # fall back to time-range query for real instrument data. In both
+    # branches we include unscoped positions in the prestart window so
+    # the helm's pre-gun maneuvers show up.
     rid_cur = await db.execute(
         "SELECT COUNT(*) as cnt FROM positions WHERE race_id = ?", (session_id,)
     )
@@ -337,14 +365,17 @@ async def _compute_session_track(storage: Storage, session_id: int) -> dict[str,
 
     if has_race_id:
         pos_cur = await db.execute(
-            "SELECT latitude_deg, longitude_deg, ts FROM positions WHERE race_id = ? ORDER BY ts",
-            (session_id,),
+            "SELECT latitude_deg, longitude_deg, ts FROM positions"
+            " WHERE race_id = ?"
+            "    OR (race_id IS NULL AND ts >= ? AND ts < ?)"
+            " ORDER BY ts",
+            (session_id, prestart_cutoff, start_utc),
         )
     else:
         pos_cur = await db.execute(
             "SELECT latitude_deg, longitude_deg, ts FROM positions"
             " WHERE ts >= ? AND ts <= ? ORDER BY ts",
-            (start_utc, end_utc),
+            (prestart_cutoff, end_utc),
         )
     positions = await pos_cur.fetchall()
     if not positions:
@@ -425,7 +456,9 @@ async def _compute_session_summary(storage: Storage, session_id: int) -> dict[st
     if race is None:
         raise HTTPException(status_code=404, detail="Race not found")
     start_utc = race["start_utc"]
-    end_utc = race["end_utc"] or start_utc
+    # Active race: use "now" so the post-gun positions and wind samples are
+    # included in the summary. Falling back to start_utc would clip them.
+    end_utc = race["end_utc"] or datetime.now(UTC).isoformat()
 
     rid_cur = await db.execute(
         "SELECT COUNT(*) as cnt FROM positions WHERE race_id = ?", (session_id,)
@@ -615,6 +648,93 @@ async def api_session_vakaros_overlay(
             }
         )
     return JSONResponse({"matched": True, **overlay})
+
+
+@router.get("/api/sessions/{session_id}/race-start-overlay")
+@limiter.limit("30/minute")
+async def api_session_race_start_overlay(
+    request: Request,
+    session_id: int,
+    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+) -> JSONResponse:
+    """Return HelmLog start-line ping history + computed line for the session.
+
+    Used by the session detail page to draw HelmLog's own start-line markers
+    (boat + pin) and a time-synced bias indicator that updates as the user
+    scrubs the replay. Distinct from the Vakaros overlay so both can coexist
+    on the same map.
+    """
+    import math
+
+    storage = get_storage(request)
+    db = storage._conn()
+    cur = await db.execute("SELECT id FROM races WHERE id = ?", (session_id,))
+    if await cur.fetchone() is None:
+        raise HTTPException(status_code=404, detail="Race not found")
+
+    pings = await storage.list_start_line_pings(race_id=session_id)
+    line_row = await storage.get_latest_start_line(race_id=session_id)
+
+    line_payload: dict[str, Any] | None = None
+    if line_row and all(
+        line_row.get(k) is not None
+        for k in ("boat_end_lat", "boat_end_lon", "pin_end_lat", "pin_end_lon")
+    ):
+        boat_lat = line_row["boat_end_lat"]
+        boat_lon = line_row["boat_end_lon"]
+        pin_lat = line_row["pin_end_lat"]
+        pin_lon = line_row["pin_end_lon"]
+        # Bearing from boat-end to pin-end (matches race_start.line_metrics).
+        phi1 = math.radians(boat_lat)
+        phi2 = math.radians(pin_lat)
+        dlam = math.radians(pin_lon - boat_lon)
+        bearing = (
+            math.degrees(
+                math.atan2(
+                    math.sin(dlam) * math.cos(phi2),
+                    math.cos(phi1) * math.sin(phi2)
+                    - math.sin(phi1) * math.cos(phi2) * math.cos(dlam),
+                )
+            )
+            + 360.0
+        ) % 360.0
+        # Length via haversine.
+        dphi = math.radians(pin_lat - boat_lat)
+        a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+        length_m = 2 * 6_371_008.8 * math.asin(math.sqrt(a))
+        line_payload = {
+            "boat": [boat_lat, boat_lon],
+            "pin": [pin_lat, pin_lon],
+            "length_m": length_m,
+            "bearing_deg": bearing,
+            "boat_end_carried_over_from_race_id": (
+                line_row.get("boat_end_race_id")
+                if line_row.get("boat_end_race_id") not in (None, session_id)
+                else None
+            ),
+            "pin_end_carried_over_from_race_id": (
+                line_row.get("pin_end_race_id")
+                if line_row.get("pin_end_race_id") not in (None, session_id)
+                else None
+            ),
+        }
+
+    return JSONResponse(
+        {
+            "session_id": session_id,
+            "pings": [
+                {
+                    "id": p["id"],
+                    "end_kind": p["end_kind"],
+                    "lat": p["latitude_deg"],
+                    "lon": p["longitude_deg"],
+                    "ts": p["captured_at"],
+                }
+                for p in pings
+            ],
+            "line": line_payload,
+        }
+    )
 
 
 @router.get("/api/sessions/{session_id}/course-overlay")
@@ -1107,12 +1227,12 @@ async def api_session_replay(
     async def _compute() -> dict[str, Any]:
         return await _compute_session_replay(storage, session_id)
 
-    # v2: payload schema changed (heel, trim added in #645). The cache hash
-    # tracks source-data changes but not payload-shape changes, so bump the
-    # family suffix whenever fields are added/removed to force a recompute
-    # rather than serving a stale blob that lacks the new keys.
+    # v3: payload schema changed (prestart_start_utc + samples extended
+    # backwards into the prestart window so the scrubber can range over
+    # pre-gun data). Bump the family suffix to force recompute on the
+    # cached blobs that lack the new field.
     return await cached_json_response(
-        request, race_id=session_id, key_family="session_replay_v2", compute=_compute
+        request, race_id=session_id, key_family="session_replay_v3", compute=_compute
     )
 
 
@@ -1123,7 +1243,23 @@ async def _compute_session_replay(storage: Storage, session_id: int) -> dict[str
     if row is None:
         raise HTTPException(status_code=404, detail="Race not found")
     start_utc = row["start_utc"]
-    end_utc = row["end_utc"] or row["start_utc"]
+    # Active race (end_utc IS NULL): use "now" as the upper bound so the
+    # scrubber range and the instrument-sample queries cover everything up
+    # to the current moment. Falling back to start_utc would collapse the
+    # window to the prestart prefix only.
+    end_utc = row["end_utc"] or datetime.now(UTC).isoformat()
+
+    # Replay scrubber spans the prestart prefix too — same window the track
+    # is extended by (#707 / prestart-scrub). Instrument series queries use
+    # this lower bound so the HUD has data when the scrubber drops below
+    # the gun. The race_gun marker still points at start_utc.
+    try:
+        _start_dt_for_prestart = datetime.fromisoformat(start_utc)
+        prestart_start_utc = (
+            _start_dt_for_prestart - timedelta(seconds=_PRESTART_WINDOW_S)
+        ).isoformat()
+    except ValueError:
+        prestart_start_utc = start_utc
 
     # Effective race gun: for Vakaros-matched races, prefer the latest
     # race_start event inside the race window. Races that were recalled
@@ -1229,10 +1365,12 @@ async def _compute_session_replay(storage: Storage, session_id: int) -> dict[str
         )
 
     # Thin instrument series for HUD. 1 Hz dedup by truncated timestamp key.
+    # Lower bound is prestart_start_utc so the scrubber has gauges in the
+    # pre-gun window.
     async def _series(table: str, fields: list[str]) -> dict[str, dict[str, Any]]:
         cols = ", ".join(["ts", *fields])
         q = f"SELECT {cols} FROM {table} WHERE ts >= ? AND ts <= ? ORDER BY ts"
-        qcur = await db.execute(q, (start_utc, end_utc))
+        qcur = await db.execute(q, (prestart_start_utc, end_utc))
         rows = await qcur.fetchall()
         out: dict[str, dict[str, Any]] = {}
         for r in rows:
@@ -1249,7 +1387,7 @@ async def _compute_session_replay(storage: Storage, session_id: int) -> dict[str
             "SELECT ts, wind_speed_kts, wind_angle_deg, reference FROM winds "
             f"WHERE ts >= ? AND ts <= ? AND {where} ORDER BY ts"
         )
-        qcur = await db.execute(q, (start_utc, end_utc))
+        qcur = await db.execute(q, (prestart_start_utc, end_utc))
         rows = await qcur.fetchall()
         out: dict[str, dict[str, Any]] = {}
         for r in rows:
@@ -1317,7 +1455,14 @@ async def _compute_session_replay(storage: Storage, session_id: int) -> dict[str
         hdg_v = float(hd["heading_deg"]) if hd else None
         heel_v = float(at["heel_deg"]) if at and at["heel_deg"] is not None else None
         trim_v = float(at["trim_deg"]) if at and at["trim_deg"] is not None else None
-        sd = compute_set_drift(sog=sog_v, cog=cog_v, stw=stw_v, hdg=hdg_v)
+        sd = compute_set_drift(
+            sog=sog_v,
+            cog=cog_v,
+            stw=stw_v,
+            hdg=hdg_v,
+            heel_deg=heel_v,
+            leeway_k=storage._leeway_k,
+        )
         set_v: float | None = sd[0] if sd is not None else None
         drift_v: float | None = sd[1] if sd is not None else None
         samples.append(
@@ -1349,6 +1494,14 @@ async def _compute_session_replay(storage: Storage, session_id: int) -> dict[str
         # time label, and YT sync.
         "start_utc": (start_utc if ("Z" in start_utc or "+" in start_utc) else start_utc + "Z"),
         "end_utc": end_utc if ("Z" in end_utc or "+" in end_utc) else end_utc + "Z",
+        # Lower bound for the scrubber: start_utc minus the prestart window.
+        # The scrubber uses this as its "0"; race_gun_utc still flags the
+        # actual race start moment.
+        "prestart_start_utc": (
+            prestart_start_utc
+            if ("Z" in prestart_start_utc or "+" in prestart_start_utc)
+            else prestart_start_utc + "Z"
+        ),
         # Effective race gun (prefers the latest Vakaros race_start
         # event inside the race window). Frontend uses this to filter
         # pre-gun "roundings" out of the replay laylines.

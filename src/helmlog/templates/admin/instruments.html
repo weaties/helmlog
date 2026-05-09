@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}HelmLog — Instrument Smoothing{% endblock %}
+{% block extra_css %}
+<style>
+h1{font-size:1.3rem;font-weight:700;color:var(--accent);margin-bottom:12px}
+.card{background:var(--bg-secondary);border-radius:12px;padding:16px;margin-bottom:16px}
+.row{display:grid;grid-template-columns:140px 1fr 70px 80px;gap:12px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}
+.row:last-child{border-bottom:none}
+.label{font-size:.85rem;color:var(--text-primary)}
+.label .desc{font-size:.7rem;color:var(--text-secondary);display:block;margin-top:1px}
+input[type=range]{width:100%}
+.value{font-family:monospace;font-size:.85rem;color:var(--text-primary);text-align:right}
+.value .unit{color:var(--text-secondary);font-size:.7rem;margin-left:2px}
+.default{font-size:.7rem;color:var(--text-secondary);text-align:right}
+.default a{color:var(--accent);text-decoration:none;cursor:pointer}
+.actions{margin-top:14px;display:flex;gap:8px;align-items:center}
+button{background:var(--accent-strong);color:var(--bg-primary);border:none;border-radius:4px;padding:6px 14px;font-size:.85rem;cursor:pointer}
+button:disabled{opacity:.5;cursor:not-allowed}
+.status{font-size:.78rem;color:var(--text-secondary)}
+.status.ok{color:var(--success)}
+.status.err{color:var(--danger)}
+.help{font-size:.78rem;color:var(--text-secondary);margin:8px 0 16px}
+</style>
+{% endblock %}
+{% block content %}
+<h1>Instrument Smoothing</h1>
+<div class="card">
+  <p class="help">
+    Time constants (tau, in seconds) for the live wind / speed gauges.
+    Higher = smoother but laggier. Changes take effect immediately —
+    no restart needed. The historical record in SQLite is unaffected;
+    only the live broadcast is smoothed.
+  </p>
+  <div id="smoothing-rows">Loading…</div>
+  <div class="actions">
+    <button id="smoothing-save-btn" disabled>Save</button>
+    <button id="smoothing-reset-btn" type="button" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border)">Reset all to defaults</button>
+    <span id="smoothing-status" class="status"></span>
+  </div>
+</div>
+
+<script>
+const _channels = [
+  ['tws_kts',     'TWS',       'True wind speed'],
+  ['twa_deg',     'TWA',       'True wind angle (boat-relative)'],
+  ['twd_deg',     'TWD',       'True wind direction (compass)'],
+  ['aws_kts',     'AWS',       'Apparent wind speed'],
+  ['awa_deg',     'AWA',       'Apparent wind angle'],
+  ['bsp_kts',     'STW',       'Boat speed through water'],
+  ['sog_kts',     'SOG',       'Speed over ground'],
+  ['heading_deg', 'HDG',       'Magnetic heading'],
+  ['cog_deg',     'COG',       'Course over ground'],
+];
+let _initial = {};
+let _dirty = {};
+
+function _render(state) {
+  const root = document.getElementById('smoothing-rows');
+  root.innerHTML = _channels.map(([key, label, desc]) => {
+    const cur = state[key] || {tau_s: 5, default: 5};
+    const isDirty = _dirty[key] != null;
+    const tau = isDirty ? _dirty[key] : cur.tau_s;
+    return `
+      <div class="row" data-channel="${key}">
+        <div class="label">${label}<span class="desc">${desc}</span></div>
+        <input type="range" min="0.5" max="30" step="0.5" value="${tau}" data-channel="${key}">
+        <div class="value"><span data-tau-display="${key}">${Number(tau).toFixed(1)}</span><span class="unit">s</span></div>
+        <div class="default"><a data-reset="${key}">${cur.default.toFixed(1)}s</a></div>
+      </div>`;
+  }).join('');
+  // Wire input + reset handlers
+  root.querySelectorAll('input[type=range]').forEach(inp => {
+    inp.addEventListener('input', e => {
+      const k = e.target.dataset.channel;
+      const v = Number(e.target.value);
+      _dirty[k] = v;
+      document.querySelector(`[data-tau-display="${k}"]`).textContent = v.toFixed(1);
+      _setDirtyState();
+    });
+  });
+  root.querySelectorAll('[data-reset]').forEach(a => {
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      const k = e.target.dataset.reset;
+      const def = state[k].default;
+      _dirty[k] = def;
+      _render(_initial);
+      _setDirtyState();
+    });
+  });
+}
+
+function _setDirtyState() {
+  const anyDirty = Object.keys(_dirty).some(k => _dirty[k] !== _initial[k].tau_s);
+  document.getElementById('smoothing-save-btn').disabled = !anyDirty;
+}
+
+function _setStatus(msg, kind) {
+  const el = document.getElementById('smoothing-status');
+  el.textContent = msg;
+  el.className = 'status' + (kind ? ' ' + kind : '');
+}
+
+async function _load() {
+  const r = await fetch('/api/admin/instrument-smoothing');
+  if (!r.ok) { _setStatus('Failed to load', 'err'); return; }
+  _initial = await r.json();
+  _dirty = {};
+  _render(_initial);
+  _setDirtyState();
+  _setStatus('');
+}
+
+async function _save() {
+  const body = {};
+  Object.keys(_dirty).forEach(k => {
+    if (_dirty[k] !== _initial[k].tau_s) body[k] = _dirty[k];
+  });
+  if (!Object.keys(body).length) return;
+  _setStatus('Saving…');
+  const r = await fetch('/api/admin/instrument-smoothing', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    _setStatus('Save failed: ' + t, 'err');
+    return;
+  }
+  _setStatus('Saved', 'ok');
+  await _load();
+}
+
+async function _resetAll() {
+  const body = {};
+  _channels.forEach(([k]) => { body[k] = _initial[k].default; });
+  const r = await fetch('/api/admin/instrument-smoothing', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  if (r.ok) { _setStatus('Reset to defaults', 'ok'); await _load(); }
+  else { _setStatus('Reset failed', 'err'); }
+}
+
+document.getElementById('smoothing-save-btn').addEventListener('click', _save);
+document.getElementById('smoothing-reset-btn').addEventListener('click', _resetAll);
+_load();
+</script>
+{% endblock %}

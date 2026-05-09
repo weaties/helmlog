@@ -18,6 +18,7 @@
   <div id="nav-links" class="nav-links">
     <a href="/"{% if active_page == "/" %} class="active"{% endif %}>Home</a>
     <a href="/control" class="admin-link{% if active_page == "/control" %} active{% endif %}">Control</a>
+    <a href="/race-start"{% if active_page == "/race-start" %} class="active"{% endif %}>Start</a>
     <a href="/history"{% if active_page == "/history" %} class="active"{% endif %}>History</a>
     <a href="/maneuvers"{% if active_page == "/maneuvers" %} class="active"{% endif %}>Maneuvers</a>
     <a href="/sails"{% if active_page == "/sails" %} class="active"{% endif %}>Sails</a>
@@ -30,6 +31,7 @@
     <a href="/admin/cameras" class="admin-link{% if active_page == "/admin/cameras" %} active{% endif %}">Cameras</a>
     <a href="/admin/aruco" class="admin-link{% if active_page == "/admin/aruco" %} active{% endif %}">ArUco</a>
     <a href="/admin/devices" class="admin-link{% if active_page == "/admin/devices" %} active{% endif %}">Devices</a>
+    <a href="/admin/instruments" class="admin-link{% if active_page == "/admin/instruments" %} active{% endif %}">Instruments</a>
     <a href="/admin/network" class="admin-link{% if active_page == "/admin/network" %} active{% endif %}">Network</a>
     <a href="/admin/events" class="admin-link{% if active_page == "/admin/events" %} active{% endif %}">Events</a>
     <a href="/admin/settings" class="admin-link{% if active_page == "/admin/settings" %} active{% endif %}">Settings</a>
@@ -47,6 +49,7 @@
 </div>
 {% endblock %}
 <script src="/static/shared.js?v={{ git_sha }}"></script>
+<script src="/static/race_start_widget.js?v={{ git_sha }}"></script>
 <script>initNav();(async()=>{try{const r=await fetch('/api/notifications/count');if(r.ok){const d=await r.json();const b=document.getElementById('notif-badge');if(d.unread>0){b.textContent=d.unread;b.style.display='inline';}}}catch(e){}})();</script>
 {% block scripts %}{% endblock %}
 </body>

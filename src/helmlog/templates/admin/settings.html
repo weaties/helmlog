@@ -56,11 +56,11 @@
 <div class="card">
   <div class="label">Color Scheme — Boat Default</div>
   <div id="cs-status" class="status"></div>
-  <p style="font-size:.82rem;color:var(--text-secondary);margin-bottom:12px">Applies to all crew who haven't set a personal override. Select a preset or create a custom scheme below.</p>
+  <p style="font-size:.82rem;color:var(--text-secondary);margin-bottom:12px">Applies to all crew who haven't set a personal override. Click a preset or custom scheme to make it the boat default.</p>
 
   <div class="cs-grid" id="preset-grid">
     {% for p in preset_schemes %}
-    <div class="cs-preset{% if boat_default == p.id %} selected{% endif %}" id="preset-{{ p.id }}" onclick="selectScheme('{{ p.id }}')">
+    <div class="cs-preset{% if boat_default == p.id %} selected{% endif %}" id="preset-{{ p.id }}" onclick="setDefault('{{ p.id }}')">
       <div class="cs-swatch" id="swatch-{{ p.id }}"></div>
       <div>{{ p.name }}</div>
     </div>
@@ -79,7 +79,7 @@
       </div>
       <span style="flex:1;font-size:.85rem">{{ cs.name }}</span>
       <button class="btn{% if boat_default == 'custom:' ~ cs.id|string %} btn-primary{% endif %}"
-              onclick="selectScheme('custom:{{ cs.id }}')" style="padding:4px 10px;font-size:.78rem">
+              onclick="setDefault('custom:{{ cs.id }}')" style="padding:4px 10px;font-size:.78rem">
         {% if boat_default == 'custom:' ~ cs.id|string %}Default ✓{% else %}Set default{% endif %}
       </button>
       <button class="btn btn-reset" onclick="deleteCustom({{ cs.id }})">Delete</button>
@@ -94,7 +94,6 @@
     </span>
   </div>
   <div class="btn-row">
-    <button class="btn btn-primary" onclick="saveDefault()">Save Default</button>
     <button class="btn btn-reset" onclick="clearDefault()">Clear (use system default)</button>
   </div>
 </div>
@@ -138,27 +137,18 @@ const PRESET_COLORS = {
   'daylight_amber': {bg:'#FFFDE7', text:'#3E2723', accent:'#FF8F00'},
 };
 
-let selectedScheme = '{{ boat_default }}';
-
 // Populate swatch backgrounds
 Object.entries(PRESET_COLORS).forEach(([id, c]) => {
   const sw = document.getElementById('swatch-'+id);
   if (sw) sw.style.background = `linear-gradient(135deg, ${c.bg} 50%, ${c.text} 50%)`;
 });
 
-function selectScheme(id) {
-  selectedScheme = id;
-  document.querySelectorAll('.cs-preset').forEach(el => el.classList.remove('selected'));
-  const el = document.getElementById('preset-'+id);
-  if (el) el.classList.add('selected');
-}
-
-async function saveDefault() {
+async function setDefault(id) {
   const r = await fetch('/api/color-schemes/default', {
     method:'PUT', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({scheme_id: selectedScheme})
+    body: JSON.stringify({scheme_id: id})
   });
-  if (r.ok) { showCsStatus('Default saved — reload to see the change','ok'); setTimeout(()=>location.reload(),1200); }
+  if (r.ok) { showCsStatus('Default saved — reloading…','ok'); setTimeout(()=>location.reload(),600); }
   else { const d = await r.json().catch(()=>({})); showCsStatus(d.detail||'Save failed','err'); }
 }
 

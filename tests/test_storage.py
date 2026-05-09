@@ -1137,8 +1137,8 @@ class TestRaceVideos:
     async def test_list_ordered_by_created_at(self, storage: Storage) -> None:
         """Videos are returned in insertion order."""
         race_id = await self._make_race(storage)
-        id1 = await self._add_video(storage, race_id, label="Bow cam")
-        id2 = await self._add_video(storage, race_id, label="Cockpit cam")
+        id1 = await self._add_video(storage, race_id, video_id="aaaaaaaaaaa", label="Bow cam")
+        id2 = await self._add_video(storage, race_id, video_id="bbbbbbbbbbb", label="Cockpit cam")
         rows = await storage.list_race_videos(race_id)
         assert [r["id"] for r in rows] == [id1, id2]
 
@@ -1181,6 +1181,32 @@ class TestRaceVideos:
         await db.execute("DELETE FROM races WHERE id = ?", (race_id,))
         await db.commit()
         assert await storage.list_race_videos(race_id) == []
+
+    async def test_add_race_video_is_idempotent_on_race_id_video_id(self, storage: Storage) -> None:
+        """Re-adding the same (race_id, video_id) updates the existing row.
+
+        Prevents duplicate-link rows on double-submit. The second call
+        returns the same row id and the new sync values overwrite the old.
+        """
+        race_id = await self._make_race(storage)
+        first_id = await self._add_video(storage, race_id, sync_offset_s=0.0, label="Bow cam")
+        second_id = await self._add_video(
+            storage, race_id, sync_offset_s=243.0, label="Bow cam (resynced)"
+        )
+        assert second_id == first_id
+        rows = await storage.list_race_videos(race_id)
+        assert len(rows) == 1
+        assert rows[0]["sync_offset_s"] == 243.0
+        assert rows[0]["label"] == "Bow cam (resynced)"
+
+    async def test_add_race_video_distinct_video_ids_coexist(self, storage: Storage) -> None:
+        """Different video_ids on the same race remain as separate rows."""
+        race_id = await self._make_race(storage)
+        a = await self._add_video(storage, race_id, video_id="aaaaaaaaaaa", label="A")
+        b = await self._add_video(storage, race_id, video_id="bbbbbbbbbbb", label="B")
+        assert a != b
+        rows = await storage.list_race_videos(race_id)
+        assert {r["video_id"] for r in rows} == {"aaaaaaaaaaa", "bbbbbbbbbbb"}
 
 
 # ---------------------------------------------------------------------------

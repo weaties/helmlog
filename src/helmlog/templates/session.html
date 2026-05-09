@@ -112,10 +112,12 @@
 #video-course-overlay{top:6px;right:6px}
 #video-maneuver-overlay{bottom:6px;left:6px}
 /* Live-race strip-down (#664) — while a race is in progress and this page
-   is served at /, collapse to: photo, track, instruments, boat setup, notes.
-   Everything else is forcibly hidden even if its loader calls display=''. */
+   is served at /, collapse to: photo, track + replay (scrubber + overlays
+   + gauges), wind field, instruments, boat setup, notes. Heavy debrief
+   cards (video, polar, results, audio, etc.) stay hidden. The replay
+   surfaces are kept so a shore observer can scrub and toggle wind /
+   current overlays during the race. */
 body.live-race #video-container,
-body.live-race #wind-field-card,
 body.live-race #polar-card,
 body.live-race #videos-card,
 body.live-race #analysis-card,
@@ -130,15 +132,7 @@ body.live-race #sharing-card,
 body.live-race #match-card,
 body.live-race #exports-card,
 body.live-race #danger-zone,
-body.live-race #track-layers-wrap,
-body.live-race #replay-toggle-row,
-body.live-race #replay-gauges-wrap,
 body.live-race #session-tags-row{display:none!important}
-body.live-race .live-inst-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:6px;font-family:monospace}
-body.live-race .live-inst-item{background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:6px 8px}
-body.live-race .live-inst-label{font-size:.65rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-secondary)}
-body.live-race .live-inst-value{font-size:1.1rem;color:var(--text-primary)}
-body.live-race .live-inst-unit{font-size:.7rem;color:var(--text-secondary);margin-left:2px}
 </style>
 {% endblock %}
 
@@ -303,6 +297,15 @@ body.live-race .live-inst-unit{font-size:.7rem;color:var(--text-secondary);margi
           <span><span style="color:var(--text-secondary);font-size:.7rem">DRIFT</span> <span id="hud-drift" style="font-size:1.1rem;color:var(--text-primary)">—</span></span>
         </div>
       </div>
+      <div class="replay-gauge" data-gauge="distance" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:8px 10px">
+        <div style="font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-secondary);margin-bottom:2px">Distance</div>
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:1px 10px;font-family:monospace;align-items:baseline">
+          <span style="color:var(--text-secondary);font-size:.7rem" title="Cumulative track length since the gun">SAILED</span>
+          <span><span id="hud-dist-sailed" style="font-size:1.1rem;color:var(--text-primary)">—</span> <span style="color:var(--text-secondary);font-size:.7rem">nm</span></span>
+          <span style="color:var(--text-secondary);font-size:.7rem" title="Straight-line distance: start → roundings → boat (start → boat if no roundings yet)">COURSE</span>
+          <span><span id="hud-dist-line" style="font-size:1.1rem;color:var(--text-primary)">—</span> <span style="color:var(--text-secondary);font-size:.7rem">nm</span></span>
+        </div>
+      </div>
     </div>
     </div>
   </div>
@@ -332,25 +335,6 @@ body.live-race .live-inst-unit{font-size:.7rem;color:var(--text-secondary);margi
   </div>
   <div id="track-hint" style="font-size:.72rem;color:var(--text-secondary);margin-top:4px"></div>
   <div id="vakaros-line-info" style="display:none;font-size:.78rem;color:var(--text-secondary);margin-top:6px;font-family:monospace"></div>
-</div>
-
-<div id="live-instruments-card" class="card" style="display:none">
-  <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
-    <span>Instruments</span>
-    <span id="live-inst-time" style="font-family:monospace;font-size:.72rem;color:var(--text-secondary);text-transform:none;letter-spacing:normal">--:--:-- UTC</span>
-  </div>
-  <div class="live-inst-grid">
-    <div class="live-inst-item"><div class="live-inst-label">BSP</div><div><span class="live-inst-value" id="liv-bsp">&mdash;</span><span class="live-inst-unit">kts</span></div></div>
-    <div class="live-inst-item"><div class="live-inst-label">TWS</div><div><span class="live-inst-value" id="liv-tws">&mdash;</span><span class="live-inst-unit">kts</span></div></div>
-    <div class="live-inst-item"><div class="live-inst-label">TWA</div><div><span class="live-inst-value" id="liv-twa">&mdash;</span><span class="live-inst-unit">&deg;</span></div></div>
-    <div class="live-inst-item"><div class="live-inst-label">HDG</div><div><span class="live-inst-value" id="liv-hdg">&mdash;</span><span class="live-inst-unit">&deg;</span></div></div>
-    <div class="live-inst-item"><div class="live-inst-label">COG</div><div><span class="live-inst-value" id="liv-cog">&mdash;</span><span class="live-inst-unit">&deg;</span></div></div>
-    <div class="live-inst-item"><div class="live-inst-label">SOG</div><div><span class="live-inst-value" id="liv-sog">&mdash;</span><span class="live-inst-unit">kts</span></div></div>
-    <div class="live-inst-item"><div class="live-inst-label">AWS</div><div><span class="live-inst-value" id="liv-aws">&mdash;</span><span class="live-inst-unit">kts</span></div></div>
-    <div class="live-inst-item"><div class="live-inst-label">AWA</div><div><span class="live-inst-value" id="liv-awa">&mdash;</span><span class="live-inst-unit">&deg;</span></div></div>
-    <div class="live-inst-item"><div class="live-inst-label">TWD</div><div><span class="live-inst-value" id="liv-twd">&mdash;</span><span class="live-inst-unit">&deg;</span></div></div>
-    <div class="live-inst-item"><div class="live-inst-label">RDR</div><div><span class="live-inst-value" id="liv-rdr">&mdash;</span><span class="live-inst-unit">&deg;</span></div></div>
-  </div>
 </div>
 
 <div id="wind-field-card" class="card" style="display:none">
