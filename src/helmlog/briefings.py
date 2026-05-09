@@ -868,6 +868,105 @@ def _interp_current(
     return None, None
 
 
+# TWS speed→color bands. Mirrors `_twsColor` in src/helmlog/static/session.js
+# (with the project's CSS theme variables resolved to literal hex). Keeping
+# the briefing GIF consistent with the live session-page wind overlay so
+# crews see the same color story in both places.
+_TWS_BANDS: tuple[tuple[float, str], ...] = (
+    (0.0, "#6b7280"),  # < 6 kt — text-muted
+    (6.0, "#7eb8f7"),  # 6–7 — accent
+    (8.0, "#2563eb"),  # 8–11 — accent-strong
+    (12.0, "#7c3aed"),  # 12–13 — violet
+    (14.0, "#fbbf24"),  # 14–15 — warning
+    (16.0, "#f87171"),  # 16–19 — danger
+    (20.0, "#991b1b"),  # 20+ — dark red
+)
+
+
+def _tws_color(tws: float) -> str:
+    color = _TWS_BANDS[0][1]
+    for threshold, hexc in _TWS_BANDS:
+        if tws >= threshold:
+            color = hexc
+    return color
+
+
+def _barb_features(tws_kts: float) -> tuple[int, int, int]:
+    """Return (pennants, fulls, halves) for a wind speed.
+
+    Speeds round to the nearest 5 kt before counting (standard met
+    convention; matches ``_renderWindBarbSvg`` in session.js).
+    """
+    knots = int(round(tws_kts / 5) * 5)
+    pennants, knots = divmod(knots, 50)
+    fulls, knots = divmod(knots, 10)
+    halves = knots // 5
+    return pennants, fulls, halves
+
+
+def _barb_local_geometry(
+    tws_kts: float,
+) -> tuple[list[tuple[float, float, float, float]], list[list[tuple[float, float]]], bool]:
+    """Build a wind barb in local (X_along_shaft, Y_to_right) units.
+
+    Returns (line_segments, pennant_polygons, is_calm). Units are
+    "feature-steps" — the renderer scales these into world degrees so the
+    visual size scales with the venue's grid step. Local layout mirrors
+    session.js's ``_renderWindBarbSvg``: shaft from station outward,
+    pennants at the tip, then full barbs, then half barbs, walking inward.
+    """
+    if tws_kts < 3:
+        return [], [], True
+
+    pennants, fulls, halves = _barb_features(tws_kts)
+    shaft_len = 6.4  # 32 / step(5) in the SVG units
+    segments: list[tuple[float, float, float, float]] = [(0.0, 0.0, shaft_len, 0.0)]
+    polys: list[list[tuple[float, float]]] = []
+    y = shaft_len  # walk inward from the tip
+    for _ in range(pennants):
+        polys.append([(y, 0.0), (y, 2.0), (y - 1.0, 0.0)])
+        y -= 1.0
+    if pennants > 0:
+        y -= 0.2  # gap between pennants and full barbs
+    for _ in range(fulls):
+        segments.append((y, 0.0, y - 0.8, 2.0))
+        y -= 1.0
+    # A lone half barb sits one step in from the tip (matches session.js).
+    if halves > 0 and fulls == 0 and pennants == 0:
+        y -= 1.0
+    for _ in range(halves):
+        segments.append((y, 0.0, y - 0.4, 1.0))
+        y -= 1.0
+    return segments, polys, False
+
+
+def _local_to_world(
+    x_local: float,
+    y_local: float,
+    twd_deg: float,
+    station_lon: float,
+    station_lat: float,
+    step_lat: float,
+    cos_lat: float,
+) -> tuple[float, float]:
+    """Rotate a local barb point by TWD and place it in (lon, lat) space."""
+    import math
+
+    theta = math.radians(twd_deg)
+    sin_t = math.sin(theta)
+    cos_t = math.cos(theta)
+    # forward (along shaft) = (sin θ, cos θ); right = (cos θ, -sin θ).
+    dx = x_local * sin_t + y_local * cos_t  # uncompensated lon offset
+    dy = x_local * cos_t - y_local * sin_t  # lat offset
+    # set_aspect(1/cos_lat) means 1 lon-deg displays as cos_lat lat-degs;
+    # divide lon offset by cos_lat to keep the barb visually rigid.
+    cos_lat_safe = max(cos_lat, 0.1)
+    return (
+        station_lon + dx * step_lat / cos_lat_safe,
+        station_lat + dy * step_lat,
+    )
+
+
 def _load_coastline(filename: str) -> list[list[tuple[float, float]]]:
     """Load coastline polygons as list of (lat, lon) ring lists.
 
@@ -1030,18 +1129,33 @@ def render_animated_gif(
     cbar.set_label("wind (kt)", fontsize=9)
     cbar.ax.tick_params(labelsize=8)
 
-    # Per-frame wind arrows: one quiver-style arrow per grid cell.
-    # We use ax.annotate so we can mutate xy/xytext without rebuilding.
-    cell_arrows: list[Any] = []
-    for lat, lon, _samples in grid_cells:
-        a = ax.annotate(
-            "",
-            xy=(lon, lat),
-            xytext=(lon, lat),
-            arrowprops={"arrowstyle": "-|>", "color": "#222", "lw": 1.0},
-            zorder=2,
-        )
-        cell_arrows.append(a)
+    # Per-frame wind barbs (matching the session-page track overlay style
+    # in src/helmlog/static/session.js#_renderWindBarbSvg). Each cell gets
+    # an SVG-style barb whose shaft points to the wind source, with
+    # pennants/fulls/halves stacked from the tip inward and the line color
+    # banded by TWS to mirror `_twsColor`. We rebuild the segment lists
+    # each frame and update LineCollection / PolyCollection in place —
+    # cheaper than tearing down and re-adding artists.
+    from matplotlib.collections import LineCollection, PolyCollection
+
+    barb_lines = LineCollection([], linewidths=1.4, capstyle="round", zorder=2)
+    ax.add_collection(barb_lines)
+    barb_pennants = PolyCollection(
+        [], facecolors=[], edgecolors=[], linewidths=0.6, joinstyle="round", zorder=2
+    )
+    ax.add_collection(barb_pennants)
+    # Static station dots (one per grid cell).
+    ax.plot(
+        [c[1] for c in grid_cells],
+        [c[0] for c in grid_cells],
+        ".",
+        color="#1f2937",
+        ms=2.5,
+        zorder=2.5,
+    )
+    # Half-step in lat-degrees so the longest barb (~6.4 step) still fits
+    # comfortably within a grid cell at any rotation.
+    barb_step_lat = (venue.grid_step_deg * 0.45) / 6.4
 
     # Venue marker + currents arrow.
     ax.plot(
@@ -1075,30 +1189,47 @@ def render_animated_gif(
         zorder=5,
     )
 
-    # Geometry: arrow length scales with wind speed in degrees-of-longitude
-    # so it renders at a sensible visual size. Calibrate so a 20 kt wind
-    # arrow spans about half a grid step.
-    half_step_lon = venue.grid_step_deg / 2
-    deg_per_kt = (half_step_lon * 0.9) / max(speed_max, 1.0)
-    # Currents arrow uses a similar scale (knots, 1 kt ≈ same length as 1 kt wind).
-    cur_deg_per_kt = deg_per_kt * 1.5
+    # Currents arrow scales 1 kt ≈ ~half a grid step.
+    cur_deg_per_kt = (venue.grid_step_deg * 0.45) / max(2.0, 1.0)
 
     def update(frame_idx: int) -> tuple[Any, ...]:
         t = frames[frame_idx]
-        # Update each grid cell's color + arrow.
-        for (lat, lon, samples), patch, arrow in zip(
-            grid_cells, cell_patches, cell_arrows, strict=True
-        ):
-            speed, _gust, direction = _interp_at(samples, t)
+
+        # Heatmap (continuous gradient, 0–25 kt).
+        for (_lat, _lon, samples), patch in zip(grid_cells, cell_patches, strict=True):
+            speed, _g, _d = _interp_at(samples, t)
             norm = max(0.0, min(1.0, (speed - speed_min) / (speed_max - speed_min)))
             patch.set_facecolor(cmap(norm))
-            # Met convention: direction is FROM. Arrow points to where the
-            # wind is going. cos accounts for lat/lon scale at this lat.
-            to_dir = (direction + 180.0) % 360.0
-            dlon = math.sin(math.radians(to_dir)) * speed * deg_per_kt / max(cos_lat, 0.1)
-            dlat = math.cos(math.radians(to_dir)) * speed * deg_per_kt
-            arrow.xy = (lon + dlon, lat + dlat)
-            arrow.set_position((lon, lat))
+
+        # Wind barbs — rebuild segment + pennant lists for this frame.
+        all_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
+        all_seg_colors: list[str] = []
+        all_polys: list[list[tuple[float, float]]] = []
+        all_poly_colors: list[str] = []
+        for lat, lon, samples in grid_cells:
+            speed, _gust, direction = _interp_at(samples, t)
+            color = _tws_color(speed)
+            local_segments, local_polys, is_calm = _barb_local_geometry(speed)
+            if is_calm:
+                # Skip — the static station dot still marks the cell.
+                continue
+            for x0, y0, x1, y1 in local_segments:
+                p0 = _local_to_world(x0, y0, direction, lon, lat, barb_step_lat, cos_lat)
+                p1 = _local_to_world(x1, y1, direction, lon, lat, barb_step_lat, cos_lat)
+                all_segments.append((p0, p1))
+                all_seg_colors.append(color)
+            for poly in local_polys:
+                pts = [
+                    _local_to_world(px, py, direction, lon, lat, barb_step_lat, cos_lat)
+                    for px, py in poly
+                ]
+                all_polys.append(pts)
+                all_poly_colors.append(color)
+        barb_lines.set_segments(all_segments)
+        barb_lines.set_color(all_seg_colors)
+        barb_pennants.set_verts(all_polys)
+        barb_pennants.set_facecolor(all_poly_colors)
+        barb_pennants.set_edgecolor(all_poly_colors)
 
         # Currents arrow at the venue.
         cur_speed, cur_set = _interp_current(tide, t)
@@ -1123,7 +1254,7 @@ def render_animated_gif(
             f"wind  {v_speed:.1f} kt @ {int(round(v_dir))}°  gust {v_gust:.0f}\n"
             f"curr  {cur_str}"
         )
-        return (*cell_patches, *cell_arrows, current_arrow, badge)
+        return (*cell_patches, barb_lines, barb_pennants, current_arrow, badge)
 
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
