@@ -232,7 +232,7 @@ async def test_chart_renderer_is_called_best_effort(storage: Storage, tmp_path: 
     tide = _good_tide_samples(tick.window_start_utc)
     calls: list[Path] = []
 
-    def renderer(briefing: object, path: Path) -> bool:
+    def renderer(briefing: object, path: Path, **_: object) -> bool:
         path.write_bytes(b"GIF89a fake")
         calls.append(path)
         return True
@@ -330,7 +330,7 @@ async def test_chart_renderer_failure_does_not_block_briefing(
     forecast = _good_forecast_samples(tick.window_start_utc)
     tide = _good_tide_samples(tick.window_start_utc)
 
-    def renderer(briefing: object, path: Path) -> bool:
+    def renderer(briefing: object, path: Path, **_: object) -> bool:
         raise RuntimeError("matplotlib boom")
 
     briefing = await run_briefing_tick(

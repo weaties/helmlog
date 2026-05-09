@@ -47,6 +47,19 @@ class WeatherReading:
 
 
 @dataclass(frozen=True)
+class GridForecastPoint:
+    """A single grid cell's 15-min forecast time series for the briefing map.
+
+    ``samples`` are the same ``HourlyForecastSample`` shape used elsewhere;
+    the ``Hourly`` prefix predates the move to 15-min granularity.
+    """
+
+    lat: float
+    lon: float
+    samples: tuple[Any, ...]  # tuple[HourlyForecastSample, ...]
+
+
+@dataclass(frozen=True)
 class CurrentReading:
     """A single 6-min tidal-current prediction from NOAA CO-OPS."""
 
@@ -556,6 +569,105 @@ class ExternalFetcher:
             except (TypeError, ValueError, IndexError) as exc:
                 logger.debug("Minutely-15 forecast skipped row {}: {}", i, exc)
                 continue
+        return out
+
+    async def fetch_minutely_15_grid(
+        self,
+        *,
+        lats: list[float],
+        lons: list[float],
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> list[GridForecastPoint]:
+        """Fetch 15-min wind for a grid of (lat, lon) pairs in one request.
+
+        Open-Meteo accepts comma-separated coordinate lists and returns
+        an array of locations. We drive the LuckGrib-style map renderer
+        from the result. ``lats`` and ``lons`` must be the same length;
+        each index pairs into one grid cell. Empty list on any failure.
+        """
+        from helmlog.briefings import HourlyForecastSample
+
+        if len(lats) != len(lons) or not lats:
+            return []
+        rounded_lats = [_reduce_precision(la) for la in lats]
+        rounded_lons = [_reduce_precision(lo) for lo in lons]
+        params: dict[str, Any] = {
+            "latitude": ",".join(f"{la}" for la in rounded_lats),
+            "longitude": ",".join(f"{lo}" for lo in rounded_lons),
+            "minutely_15": "wind_speed_10m,wind_direction_10m,wind_gusts_10m",
+            "wind_speed_unit": "kn",
+            "timezone": "UTC",
+            "start_date": start_utc.date().isoformat(),
+            "end_date": end_utc.date().isoformat(),
+        }
+        try:
+            resp = await self._http().get(_OPEN_METEO_URL, params=params)
+            resp.raise_for_status()
+            _track_response("weather", resp)
+            data: Any = resp.json()
+        except httpx.HTTPError as exc:
+            logger.warning("Minutely-15 grid fetch failed: {}", exc)
+            return []
+
+        # Open-Meteo returns a single object when one location is queried,
+        # an array when multiple. Normalize to a list.
+        locations: list[dict[str, Any]] = data if isinstance(data, list) else [data]
+        if len(locations) != len(rounded_lats):
+            logger.warning(
+                "Minutely-15 grid: expected {} locations, got {}",
+                len(rounded_lats),
+                len(locations),
+            )
+
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+
+        out: list[GridForecastPoint] = []
+        for i, loc in enumerate(locations):
+            if i >= len(rounded_lats):
+                break
+            try:
+                block = loc["minutely_15"]
+                times = block["time"]
+                speeds = block["wind_speed_10m"]
+                dirs = block["wind_direction_10m"]
+                gusts = block["wind_gusts_10m"]
+            except (KeyError, TypeError) as exc:
+                logger.warning("Minutely-15 grid parse error at idx {}: {}", i, exc)
+                continue
+            samples = []
+            for j, t in enumerate(times):
+                try:
+                    ts = _datetime.fromisoformat(t).replace(tzinfo=_UTC)
+                except (TypeError, ValueError):
+                    continue
+                if not (start_utc <= ts <= end_utc):
+                    continue
+                try:
+                    samples.append(
+                        HourlyForecastSample(
+                            timestamp_utc=ts,
+                            wind_speed_kts=float(speeds[j]),
+                            wind_gust_kts=(
+                                float(gusts[j]) if gusts[j] is not None else float(speeds[j])
+                            ),
+                            wind_direction_deg=float(dirs[j]),
+                            air_temp_c=0.0,
+                            pressure_hpa=0.0,
+                            precip_probability_pct=0.0,
+                            cloud_cover_pct=0.0,
+                        )
+                    )
+                except (TypeError, ValueError, IndexError):
+                    continue
+            out.append(
+                GridForecastPoint(
+                    lat=rounded_lats[i],
+                    lon=rounded_lons[i],
+                    samples=tuple(samples),
+                )
+            )
         return out
 
     # ------------------------------------------------------------------

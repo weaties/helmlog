@@ -138,6 +138,7 @@ async def _briefings_loop(storage: object, fetcher: object) -> None:
                     fetch_forecast=fetcher.fetch_minutely_15_forecast,
                     fetch_tide=fetcher.fetch_tide_predictions,
                     fetch_currents=fetcher.fetch_current_predictions,
+                    fetch_grid=fetcher.fetch_minutely_15_grid,
                     chart_renderer=render_animated_gif,
                     chart_dir=chart_dir,
                 )
@@ -684,6 +685,7 @@ async def _briefing_run(
                 fetch_forecast=fetcher.fetch_minutely_15_forecast,
                 fetch_tide=fetcher.fetch_tide_predictions,
                 fetch_currents=fetcher.fetch_current_predictions,
+                fetch_grid=fetcher.fetch_minutely_15_grid,
                 chart_renderer=render_animated_gif,
                 chart_dir=out_dir,
             )
