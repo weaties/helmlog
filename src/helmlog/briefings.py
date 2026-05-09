@@ -689,8 +689,33 @@ async def run_briefing_tick(
             f"{venue.venue_id}_{tick.local_date.isoformat()}_l{tick.lead_hours:02d}.gif"
         )
         chart_path = chart_dir / chart_filename
+
+        # Pre-fetch OSM basemap tiles for the venue bbox. The cache lives
+        # next to the chart_dir and survives across runs, so once a bbox
+        # is rendered the tiles are free thereafter. A failure here is
+        # non-fatal — the renderer falls back to a plain water background.
+        basemap: tuple[Any, tuple[float, float, float, float]] | None = None
         try:
-            ok = chart_renderer(briefing, chart_path, grid=grid_points_data or None)
+            from helmlog.osm_tiles import fetch_basemap
+
+            tile_cache_dir = chart_dir.parent / "osm-cache"
+            img, ext = await fetch_basemap(venue.map_bbox_deg, tile_cache_dir)
+            if img is not None and ext is not None:
+                basemap = (img, ext)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "briefing basemap fetch failed venue={} err={}",
+                venue.venue_id,
+                exc,
+            )
+
+        try:
+            ok = chart_renderer(
+                briefing,
+                chart_path,
+                grid=grid_points_data or None,
+                basemap=basemap,
+            )
             if ok and chart_path.exists():
                 briefing = _briefing_with_chart_path(briefing, str(chart_path))
         except Exception as exc:  # noqa: BLE001 — best-effort
@@ -775,9 +800,13 @@ def _briefing_with_race_id(b: Briefing, race_id: int) -> Briefing:
 # ---------------------------------------------------------------------------
 
 
-_CHART_WIDTH_PX = 1200
-_CHART_HEIGHT_PX = 630
-_CHART_DPI = 100
+# GIF render resolution. With photo-like OSM tile content, the GIF file
+# size scales near-linearly with pixel count (each frame quantizes its
+# own palette). 900×500 @ 80 DPI gives a tight ~3 MB while still being
+# legible — bumping to 1200×630 quadruples the file size.
+_CHART_WIDTH_PX = 900
+_CHART_HEIGHT_PX = 500
+_CHART_DPI = 80
 _GIF_FRAME_INTERVAL = timedelta(minutes=5)
 _GIF_FRAME_FPS = 4  # ~250 ms per frame in the resulting GIF
 
@@ -1004,26 +1033,30 @@ def render_animated_gif(
     output_path: Path,
     *,
     grid: Sequence[Any] | None = None,
+    basemap: tuple[Any, tuple[float, float, float, float]] | None = None,
 ) -> bool:
     """Render a LuckGrib-style animated GIF of the briefing window.
 
     Each frame is a 2D map of the venue area showing:
 
-    - **Coastline polygons** (Natural Earth 10m, clipped to venue bbox).
+    - **OSM tile basemap** (when ``basemap`` is provided — matches the
+      tiles the selection map shows). Falls back to a Natural Earth
+      coastline polygon (or plain water-blue) if not.
     - **Wind heatmap** — per-grid-cell wind speed coloured (blue→red,
       0–25 kt). Falls back to a uniform wash from the venue's single
       forecast point if no ``grid`` is provided.
-    - **Wind arrows** at each grid cell, scaled by speed and rotated
-      to the to-wind direction. This is the "pressure map": where
-      the breeze is filling in across the venue.
+    - **Wind barbs** at each grid cell (matching session-page style),
+      colour banded by TWS, shaft pointing toward the wind source.
     - **Currents arrow** at the venue location (NOAA 6-min interpolated).
     - **Time/condition badge** with frame UTC + venue local time, speed,
       direction, gust.
 
-    Frames are emitted at 5-minute intervals. The ``grid`` argument is
-    a sequence of ``helmlog.external.GridForecastPoint`` (typed loosely
-    here to avoid the import). Best-effort: a False return / exception
-    is caught upstream and the briefing still persists.
+    Frames are emitted at 5-minute intervals. ``grid`` is a sequence of
+    ``helmlog.external.GridForecastPoint`` (typed loosely to avoid the
+    import). ``basemap`` is ``(PIL.Image, (left, right, bottom, top))``
+    as returned by ``helmlog.osm_tiles.fetch_basemap``. Best-effort: a
+    False return / exception is caught upstream and the briefing still
+    persists.
     """
     import math
 
@@ -1031,6 +1064,7 @@ def render_animated_gif(
 
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
+    import numpy as np
     from matplotlib.animation import FuncAnimation, PillowWriter
     from matplotlib.patches import Polygon as MplPolygon
 
@@ -1070,7 +1104,6 @@ def render_animated_gif(
         dpi=_CHART_DPI,
     )
     fig.patch.set_facecolor("#e8f0f5")
-    ax.set_facecolor("#cfe1ec")  # water
     ax.set_xlim(lon_min, lon_max)
     ax.set_ylim(lat_min, lat_max)
     # Equirectangular: 1° lat ≠ 1° lon at this latitude. Stretch x so the
@@ -1084,13 +1117,39 @@ def render_animated_gif(
         f"{briefing.local_date.isoformat()} (lead {briefing.lead_hours} h)"
     )
 
-    # Coastline backdrop.
-    if venue.coastline_geojson:
-        for ring in _load_coastline(venue.coastline_geojson):
-            xy = [(lon, lat) for lat, lon in ring]
-            ax.add_patch(
-                MplPolygon(xy, closed=True, facecolor="#dccfa6", edgecolor="#8a7d4a", lw=0.6)
-            )
+    # Basemap. Prefer OSM tiles (matches the selection map); fall back to
+    # the Natural Earth coastline polygon (Shilshole) or a plain water
+    # wash. Web Mercator vs equirectangular distortion is negligible at
+    # the venue scale we render (a few tens of km, mid-latitudes).
+    if basemap is not None and basemap[0] is not None:
+        bm_img, bm_extent = basemap
+        # Soften the basemap so the wind data pops AND the GIF's per-frame
+        # palette quantizer has fewer unique colours to chase (file size
+        # roughly halves vs the raw tile imagery).
+        try:
+            from PIL import ImageEnhance
+
+            bm_soft = ImageEnhance.Color(bm_img).enhance(0.35)  # ~mute saturation
+            bm_soft = ImageEnhance.Contrast(bm_soft).enhance(0.85)  # flatten
+            bm_soft = ImageEnhance.Brightness(bm_soft).enhance(1.08)  # lift slightly
+        except Exception:  # noqa: BLE001
+            bm_soft = bm_img
+        ax.imshow(
+            np.asarray(bm_soft),
+            extent=bm_extent,
+            origin="upper",
+            aspect="auto",
+            zorder=0,
+            interpolation="bilinear",
+        )
+    else:
+        ax.set_facecolor("#cfe1ec")  # water
+        if venue.coastline_geojson:
+            for ring in _load_coastline(venue.coastline_geojson):
+                xy = [(lon, lat) for lat, lon in ring]
+                ax.add_patch(
+                    MplPolygon(xy, closed=True, facecolor="#dccfa6", edgecolor="#8a7d4a", lw=0.6)
+                )
 
     # Heatmap setup. We render one rectangle per grid cell (axis-aligned)
     # and update its facecolor each frame. Same colormap (0–25 kt) for
@@ -1111,7 +1170,7 @@ def render_animated_gif(
             closed=True,
             facecolor=cmap(0.0),
             edgecolor="none",
-            alpha=0.45,
+            alpha=0.32,  # let the basemap show through
             zorder=0.5,
         )
         ax.add_patch(rect)
