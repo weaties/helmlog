@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from helmlog.external import ExternalFetcher, TideReading, WeatherReading
+from helmlog.external import CurrentReading, ExternalFetcher, TideReading, WeatherReading
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -549,3 +549,219 @@ class TestTideStorageRoundTrip:
             datetime(2025, 8, 11, 23, 59, 59, tzinfo=UTC),
         )
         assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# NOAA currents predictions (#700 GIF expansion)
+# ---------------------------------------------------------------------------
+
+_CURRENT_STATIONS_RESPONSE: dict[str, Any] = {
+    "stations": [
+        {
+            "id": "PUG1515",
+            "name": "Shilshole Bay",
+            "lat": 47.682,
+            "lng": -122.408,
+            "meanFloodDir": "10.0",
+            "meanEbbDir": "190.0",
+        },
+        {
+            "id": "PUG1516",
+            "name": "Off Pier 36",
+            "lat": 47.591,
+            "lng": -122.337,
+        },
+    ]
+}
+
+_CURRENTS_RESPONSE: dict[str, Any] = {
+    "current_predictions": {
+        "cp": [
+            {"Time": "2026-04-30 00:00", "Velocity_Major": 0.50, "Type": "flood"},
+            {"Time": "2026-04-30 00:06", "Velocity_Major": 0.55, "Type": "flood"},
+            {"Time": "2026-04-30 00:12", "Velocity_Major": -0.40, "Type": "ebb"},
+            {"Time": "2026-04-30 00:18", "Velocity_Major": 0.0, "Type": "slack"},
+        ]
+    }
+}
+
+_CURRENT_LAT = 47.68
+_CURRENT_LON = -122.41
+_ANIM_START = datetime(2026, 4, 30, 0, 0, tzinfo=UTC)
+_ANIM_END = datetime(2026, 4, 30, 5, 0, tzinfo=UTC)
+
+
+def _make_currents_mock_responses() -> list[MagicMock]:
+    def _resp(payload: dict[str, Any]) -> MagicMock:
+        r = MagicMock(spec=httpx.Response)
+        r.status_code = 200
+        r.json.return_value = payload
+        r.raise_for_status.return_value = None
+        return r
+
+    return [_resp(_CURRENT_STATIONS_RESPONSE), _resp(_CURRENTS_RESPONSE)]
+
+
+class TestFetchCurrentPredictions:
+    async def test_returns_list_of_current_readings(self) -> None:
+        responses = _make_currents_mock_responses()
+        idx = 0
+
+        async def _fake_get(url: str, **_: object) -> MagicMock:
+            nonlocal idx
+            r = responses[idx]
+            idx += 1
+            return r
+
+        async with ExternalFetcher() as fetcher:
+            with patch.object(fetcher._client, "get", side_effect=_fake_get):  # type: ignore[union-attr]
+                readings = await fetcher.fetch_current_predictions(
+                    lat=_CURRENT_LAT,
+                    lon=_CURRENT_LON,
+                    start_utc=_ANIM_START,
+                    end_utc=_ANIM_END,
+                )
+
+        assert len(readings) == 4
+        assert all(isinstance(r, CurrentReading) for r in readings)
+        # Velocity_Major sign chooses flood (10°) vs ebb (190°) direction.
+        assert readings[0].set_deg == pytest.approx(10.0)
+        assert readings[2].set_deg == pytest.approx(190.0)
+        # Speed is always non-negative.
+        for r in readings:
+            assert r.speed_kts >= 0
+        # Timestamps are UTC-aware.
+        for r in readings:
+            assert r.timestamp.tzinfo is not None
+        # Station id surfaces on every reading.
+        assert {r.station_id for r in readings} == {"PUG1515"}
+
+    async def test_returns_empty_on_http_error(self) -> None:
+        async def _fake_get(url: str, **_: object) -> MagicMock:
+            r = MagicMock(spec=httpx.Response)
+            r.raise_for_status.side_effect = httpx.HTTPError("boom")
+            return r
+
+        async with ExternalFetcher() as fetcher:
+            with patch.object(fetcher._client, "get", side_effect=_fake_get):  # type: ignore[union-attr]
+                readings = await fetcher.fetch_current_predictions(
+                    lat=_CURRENT_LAT,
+                    lon=_CURRENT_LON,
+                    start_utc=_ANIM_START,
+                    end_utc=_ANIM_END,
+                )
+        assert readings == []
+
+    async def test_returns_empty_on_no_stations(self) -> None:
+        async def _fake_get(url: str, **_: object) -> MagicMock:
+            r = MagicMock(spec=httpx.Response)
+            r.json.return_value = {"stations": []}
+            r.raise_for_status.return_value = None
+            return r
+
+        async with ExternalFetcher() as fetcher:
+            with patch.object(fetcher._client, "get", side_effect=_fake_get):  # type: ignore[union-attr]
+                readings = await fetcher.fetch_current_predictions(
+                    lat=_CURRENT_LAT,
+                    lon=_CURRENT_LON,
+                    start_utc=_ANIM_START,
+                    end_utc=_ANIM_END,
+                )
+        assert readings == []
+
+
+# ---------------------------------------------------------------------------
+# Open-Meteo minutely_15 forecast (#700 GIF expansion)
+# ---------------------------------------------------------------------------
+
+_MINUTELY_15_RESPONSE: dict[str, Any] = {
+    "minutely_15": {
+        "time": [
+            "2026-04-30T00:00",
+            "2026-04-30T00:15",
+            "2026-04-30T00:30",
+            "2026-04-30T00:45",
+            "2026-04-30T01:00",
+            "2026-04-30T01:15",
+        ],
+        "wind_speed_10m": [8.0, 8.5, 9.0, 9.5, 10.0, 10.5],
+        "wind_direction_10m": [200, 205, 210, 212, 215, 220],
+        "wind_gusts_10m": [12.0, 12.5, 13.0, 13.5, 14.0, 14.5],
+        "temperature_2m": [15.0] * 6,
+        "precipitation_probability": [10.0] * 6,
+        "cloud_cover": [50.0] * 6,
+        "surface_pressure": [1015.0, 1015.1, 1015.0, 1014.9, 1014.8, 1014.7],
+    }
+}
+
+
+class TestFetchMinutely15Forecast:
+    async def test_returns_minutely_samples_in_window(self) -> None:
+        from helmlog.briefings import HourlyForecastSample
+
+        async def _fake_get(url: str, **_: object) -> MagicMock:
+            r = MagicMock(spec=httpx.Response)
+            r.json.return_value = _MINUTELY_15_RESPONSE
+            r.raise_for_status.return_value = None
+            return r
+
+        async with ExternalFetcher() as fetcher:
+            with patch.object(fetcher._client, "get", side_effect=_fake_get):  # type: ignore[union-attr]
+                samples = await fetcher.fetch_minutely_15_forecast(
+                    lat=_CURRENT_LAT,
+                    lon=_CURRENT_LON,
+                    start_utc=_ANIM_START,
+                    end_utc=datetime(2026, 4, 30, 1, 0, tzinfo=UTC),
+                )
+
+        # 5 samples at 00:00, 00:15, 00:30, 00:45, 01:00 — the 01:15
+        # sample is filtered out as it falls past end_utc.
+        assert len(samples) == 5
+        assert all(isinstance(s, HourlyForecastSample) for s in samples)
+        assert samples[0].wind_speed_kts == pytest.approx(8.0)
+        assert samples[-1].wind_speed_kts == pytest.approx(10.0)
+        # Timestamps UTC-aware and monotonically increasing.
+        for prev, nxt in zip(samples, samples[1:], strict=False):
+            assert nxt.timestamp_utc > prev.timestamp_utc
+            assert nxt.timestamp_utc.tzinfo is not None
+
+    async def test_uses_minutely_15_param_in_request(self) -> None:
+        captured: dict[str, Any] = {}
+
+        async def _fake_get(
+            url: str, *, params: dict[str, Any] | None = None, **_: object
+        ) -> MagicMock:
+            if params:
+                captured.update(params)
+            r = MagicMock(spec=httpx.Response)
+            r.json.return_value = _MINUTELY_15_RESPONSE
+            r.raise_for_status.return_value = None
+            return r
+
+        async with ExternalFetcher() as fetcher:
+            with patch.object(fetcher._client, "get", side_effect=_fake_get):  # type: ignore[union-attr]
+                await fetcher.fetch_minutely_15_forecast(
+                    lat=_CURRENT_LAT,
+                    lon=_CURRENT_LON,
+                    start_utc=_ANIM_START,
+                    end_utc=_ANIM_END,
+                )
+        assert "minutely_15" in captured
+        assert "wind_speed_10m" in captured["minutely_15"]
+        assert captured["wind_speed_unit"] == "kn"
+
+    async def test_returns_empty_on_http_error(self) -> None:
+        async def _fake_get(url: str, **_: object) -> MagicMock:
+            r = MagicMock(spec=httpx.Response)
+            r.raise_for_status.side_effect = httpx.HTTPError("boom")
+            return r
+
+        async with ExternalFetcher() as fetcher:
+            with patch.object(fetcher._client, "get", side_effect=_fake_get):  # type: ignore[union-attr]
+                samples = await fetcher.fetch_minutely_15_forecast(
+                    lat=_CURRENT_LAT,
+                    lon=_CURRENT_LON,
+                    start_utc=_ANIM_START,
+                    end_utc=_ANIM_END,
+                )
+        assert samples == []

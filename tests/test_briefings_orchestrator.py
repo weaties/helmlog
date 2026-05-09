@@ -15,7 +15,6 @@ import pytest
 
 from helmlog.briefings import (
     HourlyForecastSample,
-    HourlyTideSample,
     VenueConfig,
     run_briefing_tick,
     ticks_for_date,
@@ -55,13 +54,27 @@ def _good_forecast_samples(start_utc: datetime) -> list[HourlyForecastSample]:
     ]
 
 
-def _good_tide_samples(start_utc: datetime) -> list[HourlyTideSample]:
+class _FakeTideReading:
+    """Mimics ``helmlog.external.TideReading``: the orchestrator's
+    ``_tide_to_hourly`` adapter reads ``timestamp`` and ``height_m`` from
+    each fetcher-returned object, not ``HourlyTideSample`` fields."""
+
+    def __init__(
+        self, *, timestamp: datetime, height_m: float, station_id: str, station_name: str
+    ) -> None:
+        self.timestamp = timestamp
+        self.height_m = height_m
+        self.station_id = station_id
+        self.station_name = station_name
+
+
+def _good_tide_samples(start_utc: datetime) -> list[_FakeTideReading]:
     return [
-        HourlyTideSample(
-            timestamp_utc=start_utc + timedelta(hours=h),
-            tide_height_m=2.0 + 0.1 * h,
-            current_speed_kts=None,
-            current_set_deg=None,
+        _FakeTideReading(
+            timestamp=start_utc + timedelta(hours=h),
+            height_m=2.0 + 0.1 * h,
+            station_id="9447130",
+            station_name="Seattle, WA",
         )
         for h in range(4)
     ]
@@ -81,9 +94,9 @@ def _make_forecast_fetcher(
 
 
 def _make_tide_fetcher(
-    samples: list[HourlyTideSample], *, raises: bool = False
-) -> Callable[..., Coroutine[Any, Any, list[HourlyTideSample]]]:
-    async def fn(*, lat: float, lon: float, for_date: date) -> list[HourlyTideSample]:
+    samples: list[_FakeTideReading], *, raises: bool = False
+) -> Callable[..., Coroutine[Any, Any, list[_FakeTideReading]]]:
+    async def fn(*, lat: float, lon: float, for_date: date) -> list[_FakeTideReading]:
         if raises:
             raise RuntimeError("noaa unreachable")
         return samples
@@ -220,7 +233,7 @@ async def test_chart_renderer_is_called_best_effort(storage: Storage, tmp_path: 
     calls: list[Path] = []
 
     def renderer(briefing: object, path: Path) -> bool:
-        path.write_bytes(b"\x89PNG fake")
+        path.write_bytes(b"GIF89a fake")
         calls.append(path)
         return True
 
@@ -237,6 +250,76 @@ async def test_chart_renderer_is_called_best_effort(storage: Storage, tmp_path: 
     assert briefing.chart_path is not None
     assert calls
     assert calls[0].exists()
+
+
+@pytest.mark.asyncio
+async def test_currents_fetcher_merges_into_tide_samples(storage: Storage) -> None:
+    """When fetch_currents is provided and returns readings, tide samples
+    carry current_speed_kts / current_set_deg from the 6-min predictions."""
+    tick = ticks_for_date(SHILSHOLE, date(2026, 4, 27))[0]
+    forecast = _good_forecast_samples(tick.window_start_utc)
+    tide = _good_tide_samples(tick.window_start_utc)
+
+    class _CurrentReading:
+        def __init__(self, ts: datetime, speed: float, set_deg: float) -> None:
+            self.timestamp = ts
+            self.speed_kts = speed
+            self.set_deg = set_deg
+
+    async def fetch_currents(
+        *, lat: float, lon: float, start_utc: datetime, end_utc: datetime
+    ) -> list[_CurrentReading]:
+        # Six 6-min samples spanning 30 minutes inside the window.
+        base = tick.window_start_utc
+        return [
+            _CurrentReading(
+                ts=base + timedelta(minutes=6 * i),
+                speed=0.5 + 0.1 * i,
+                set_deg=315.0,
+            )
+            for i in range(6)
+        ]
+
+    briefing = await run_briefing_tick(
+        storage=storage,
+        venue=SHILSHOLE,
+        tick=tick,
+        fetch_forecast=_make_forecast_fetcher(forecast),
+        fetch_tide=_make_tide_fetcher(tide),
+        fetch_currents=fetch_currents,
+    )
+    assert briefing.state == "Generated"
+    assert briefing.hourly_tide
+    # Every sample now carries a current speed/set populated from the 6-min
+    # predictions; the tide height is forward-filled from the hourly tide.
+    for s in briefing.hourly_tide:
+        assert s.current_speed_kts is not None
+        assert s.current_set_deg == 315.0
+
+
+@pytest.mark.asyncio
+async def test_currents_fetcher_failure_is_swallowed(storage: Storage) -> None:
+    """A currents-fetcher exception must not fail the briefing."""
+    tick = ticks_for_date(SHILSHOLE, date(2026, 4, 27))[0]
+    forecast = _good_forecast_samples(tick.window_start_utc)
+    tide = _good_tide_samples(tick.window_start_utc)
+
+    async def boom(*, lat: float, lon: float, start_utc: datetime, end_utc: datetime) -> list[Any]:
+        raise RuntimeError("noaa currents 503")
+
+    briefing = await run_briefing_tick(
+        storage=storage,
+        venue=SHILSHOLE,
+        tick=tick,
+        fetch_forecast=_make_forecast_fetcher(forecast),
+        fetch_tide=_make_tide_fetcher(tide),
+        fetch_currents=boom,
+    )
+    assert briefing.state == "Generated"
+    # Tide samples present (no currents merged in).
+    assert briefing.hourly_tide
+    for s in briefing.hourly_tide:
+        assert s.current_speed_kts is None
 
 
 @pytest.mark.asyncio

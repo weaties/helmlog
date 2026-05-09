@@ -145,6 +145,18 @@ def _local_window_to_utc(venue: VenueConfig, local_date: date) -> tuple[datetime
     return start_local.astimezone(ZoneInfo("UTC")), end_local.astimezone(ZoneInfo("UTC"))
 
 
+# The animated GIF spans the racing window padded by one hour on each side
+# (e.g. for Shilshole's 18:00–21:00 window, frames cover 17:00–22:00 local).
+# The forecast/current fetchers pull this wider window so every frame has
+# data behind it.
+ANIMATION_PAD = timedelta(hours=1)
+
+
+def _animation_window_utc(venue: VenueConfig, local_date: date) -> tuple[datetime, datetime]:
+    start, end = _local_window_to_utc(venue, local_date)
+    return start - ANIMATION_PAD, end + ANIMATION_PAD
+
+
 def ticks_for_date(venue: VenueConfig, local_date: date) -> list[BriefingTick]:
     """Return all ticks for a specific venue-local date.
 
@@ -274,10 +286,11 @@ def compose_briefing(
     - If ``tide_samples`` is empty but forecast samples are present, the
       briefing is returned in ``Generated`` state with an empty tide
       block and ``tide_unavailable_reason`` populated.
-    - The samples are filtered to the racing window (inclusive of both
-      ends) and sorted by timestamp before storage.
+    - The samples are filtered to the animation window (racing window
+      padded by one hour on each side, so the GIF can show pre/post-race
+      context) and sorted by timestamp before storage.
     """
-    window_start_utc, window_end_utc = _local_window_to_utc(venue, local_date)
+    window_start_utc, window_end_utc = _animation_window_utc(venue, local_date)
 
     if not forecast_samples:
         return Briefing(
@@ -371,6 +384,17 @@ class _TideFetcher(Protocol):
     ) -> Sequence[Any]: ...
 
 
+class _CurrentFetcher(Protocol):
+    async def __call__(
+        self,
+        *,
+        lat: float,
+        lon: float,
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> Sequence[Any]: ...
+
+
 def _forecast_url(venue: VenueConfig) -> str:
     return (
         f"{_OPEN_METEO_BASE_URL}?latitude={venue.venue_lat:.2f}"
@@ -380,7 +404,7 @@ def _forecast_url(venue: VenueConfig) -> str:
 
 
 def _tide_to_hourly(tide_readings: Sequence[Any]) -> tuple[list[HourlyTideSample], str | None]:
-    """Adapt TideReading-like objects to HourlyTideSample. Currents come later."""
+    """Adapt TideReading-like objects to HourlyTideSample (height-only)."""
     samples: list[HourlyTideSample] = []
     station_id: str | None = None
     for r in tide_readings:
@@ -401,6 +425,51 @@ def _tide_to_hourly(tide_readings: Sequence[Any]) -> tuple[list[HourlyTideSample
     return samples, station_id
 
 
+def _merge_currents(
+    tide_samples: list[HourlyTideSample], current_readings: Sequence[Any]
+) -> list[HourlyTideSample]:
+    """Merge 6-min current predictions into the tide-sample timeline.
+
+    Currents are densest, so we emit one combined sample per current
+    reading. Tide height is carried forward from the most recent earlier
+    tide sample (NOAA tide predictions are hourly; currents predictions
+    are 6-min). If no current readings exist, returns ``tide_samples``
+    unchanged.
+    """
+    if not current_readings:
+        return tide_samples
+
+    tides_sorted = sorted(tide_samples, key=lambda s: s.timestamp_utc)
+    currents_sorted = sorted(
+        current_readings,
+        key=lambda r: getattr(r, "timestamp"),  # noqa: B009
+    )
+
+    out: list[HourlyTideSample] = []
+    tide_idx = 0
+    last_height: float | None = None
+    for cr in currents_sorted:
+        cr_ts = getattr(cr, "timestamp", None)
+        cr_speed = getattr(cr, "speed_kts", None)
+        cr_set = getattr(cr, "set_deg", None)
+        if cr_ts is None or cr_speed is None or cr_set is None:
+            continue
+        # Advance through tide samples whose timestamp is <= cr_ts to
+        # carry the most recent height forward.
+        while tide_idx < len(tides_sorted) and tides_sorted[tide_idx].timestamp_utc <= cr_ts:
+            last_height = tides_sorted[tide_idx].tide_height_m
+            tide_idx += 1
+        out.append(
+            HourlyTideSample(
+                timestamp_utc=cr_ts,
+                tide_height_m=last_height,
+                current_speed_kts=float(cr_speed),
+                current_set_deg=float(cr_set),
+            )
+        )
+    return out
+
+
 async def run_briefing_tick(
     *,
     storage: Storage,
@@ -408,6 +477,7 @@ async def run_briefing_tick(
     tick: BriefingTick,
     fetch_forecast: _ForecastFetcher,
     fetch_tide: _TideFetcher,
+    fetch_currents: _CurrentFetcher | None = None,
     chart_renderer: Callable[[Briefing, Path], bool] | None = None,
     chart_dir: Path | None = None,
     now_utc: datetime | None = None,
@@ -418,12 +488,13 @@ async def run_briefing_tick(
     function owns the side effects: network fetches via the injected
     callables, DB writes via ``storage``, optional chart rendering.
 
-    The tide source error is captured (never raised) so a tide outage
-    doesn't fail the whole briefing — matches the spec's fail-safe rules.
-    A forecast outage produces a ``Failed`` briefing and skips Race
-    auto-creation.
+    The tide and currents source errors are captured (never raised) so
+    an outage doesn't fail the whole briefing — matches the spec's
+    fail-safe rules. A forecast outage produces a ``Failed`` briefing
+    and skips Race auto-creation.
     """
     fetched_at = now_utc or datetime.now(UTC)
+    anim_start, anim_end = _animation_window_utc(venue, tick.local_date)
 
     forecast_samples: list[HourlyForecastSample] = []
     forecast_error: str | None = None
@@ -432,8 +503,8 @@ async def run_briefing_tick(
             await fetch_forecast(
                 lat=venue.venue_lat,
                 lon=venue.venue_lon,
-                start_utc=tick.window_start_utc,
-                end_utc=tick.window_end_utc,
+                start_utc=anim_start,
+                end_utc=anim_end,
             )
         )
     except Exception as exc:  # noqa: BLE001 — fail-safe: capture and continue
@@ -468,6 +539,26 @@ async def run_briefing_tick(
             exc,
         )
 
+    if fetch_currents is not None:
+        try:
+            current_readings = list(
+                await fetch_currents(
+                    lat=venue.venue_lat,
+                    lon=venue.venue_lon,
+                    start_utc=anim_start,
+                    end_utc=anim_end,
+                )
+            )
+            if current_readings:
+                tide_samples = _merge_currents(tide_samples, current_readings)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "briefing currents fetch failed venue={} date={} err={}",
+                venue.venue_id,
+                tick.local_date,
+                exc,
+            )
+
     source_urls: dict[str, str] = {"forecast": _forecast_url(venue)}
     if tide_station_id:
         source_urls["tide"] = f"{_NOAA_STATION_BASE_URL}{tide_station_id}"
@@ -498,7 +589,7 @@ async def run_briefing_tick(
     if chart_renderer is not None and chart_dir is not None and briefing.state == "Generated":
         chart_dir.mkdir(parents=True, exist_ok=True)
         chart_filename = (
-            f"{venue.venue_id}_{tick.local_date.isoformat()}_l{tick.lead_hours:02d}.png"
+            f"{venue.venue_id}_{tick.local_date.isoformat()}_l{tick.lead_hours:02d}.gif"
         )
         chart_path = chart_dir / chart_filename
         try:
@@ -583,39 +674,149 @@ def _briefing_with_race_id(b: Briefing, race_id: int) -> Briefing:
 
 
 # ---------------------------------------------------------------------------
-# Chart renderer (matplotlib)
+# Animated GIF renderer (matplotlib + PillowWriter)
 # ---------------------------------------------------------------------------
 
 
 _CHART_WIDTH_PX = 1200
 _CHART_HEIGHT_PX = 630
 _CHART_DPI = 100
+_GIF_FRAME_INTERVAL = timedelta(minutes=5)
+_GIF_FRAME_FPS = 4  # ~250 ms per frame in the resulting GIF
 
 
-def render_chart(briefing: Briefing, output_path: Path) -> bool:
-    """Render a 1200x630 PNG showing wind + current across the racing window.
+def _frame_times(start_utc: datetime, end_utc: datetime) -> list[datetime]:
+    """Inclusive 5-minute frame timestamps from ``start_utc`` to ``end_utc``."""
+    out: list[datetime] = []
+    t = start_utc
+    while t <= end_utc:
+        out.append(t)
+        t = t + _GIF_FRAME_INTERVAL
+    return out
 
-    The chart has two stacked rows:
 
-    - **Top:** wind barbs at each hour, a wind-speed line with the gust
-      band shaded, and the wind-direction labelled per hour.
-    - **Bottom:** tide height curve with current arrows (kts + set deg)
-      where available. If no tide data exists the row collapses to a
-      "tide unavailable" annotation.
+def _interp_at(samples: Sequence[HourlyForecastSample], at: datetime) -> tuple[float, float, float]:
+    """Linearly interpolate (speed, gust, direction) at ``at`` from samples.
 
-    Returns True on success. The renderer is best-effort: callers should
-    treat a False return (or an exception caught upstream) as "chart
-    unavailable" without failing the whole briefing.
+    Direction is unwrapped before interpolation so a 359°→2° step crosses
+    the discontinuity smoothly. Returns (0, 0, direction-of-bracket-start)
+    if ``at`` falls outside the sample range — those frames will simply
+    show steady values rather than failing the render.
     """
-    # Lazy import — keeps `helmlog.briefings` cheap to import in code paths
-    # that don't render charts (Storage, web detail pages without a chart).
+    if not samples:
+        return 0.0, 0.0, 0.0
+    if at <= samples[0].timestamp_utc:
+        s = samples[0]
+        return s.wind_speed_kts, s.wind_gust_kts, s.wind_direction_deg
+    if at >= samples[-1].timestamp_utc:
+        s = samples[-1]
+        return s.wind_speed_kts, s.wind_gust_kts, s.wind_direction_deg
+    for i in range(len(samples) - 1):
+        a, b = samples[i], samples[i + 1]
+        if a.timestamp_utc <= at <= b.timestamp_utc:
+            span = (b.timestamp_utc - a.timestamp_utc).total_seconds()
+            if span <= 0:
+                return a.wind_speed_kts, a.wind_gust_kts, a.wind_direction_deg
+            f = (at - a.timestamp_utc).total_seconds() / span
+            speed = a.wind_speed_kts + (b.wind_speed_kts - a.wind_speed_kts) * f
+            gust = a.wind_gust_kts + (b.wind_gust_kts - a.wind_gust_kts) * f
+            # Unwrap direction across the 0/360 discontinuity.
+            d_a = a.wind_direction_deg
+            d_b = b.wind_direction_deg
+            delta = d_b - d_a
+            if delta > 180:
+                d_b -= 360
+            elif delta < -180:
+                d_b += 360
+            direction = (d_a + (d_b - d_a) * f) % 360
+            return speed, gust, direction
+    s = samples[-1]
+    return s.wind_speed_kts, s.wind_gust_kts, s.wind_direction_deg
+
+
+def _interp_current(
+    samples: Sequence[HourlyTideSample], at: datetime
+) -> tuple[float | None, float | None]:
+    """Linearly interpolate (speed_kts, set_deg) from current-bearing samples."""
+    valid = [
+        s for s in samples if s.current_speed_kts is not None and s.current_set_deg is not None
+    ]
+    if not valid:
+        return None, None
+    if at <= valid[0].timestamp_utc:
+        return valid[0].current_speed_kts, valid[0].current_set_deg
+    if at >= valid[-1].timestamp_utc:
+        return valid[-1].current_speed_kts, valid[-1].current_set_deg
+    for i in range(len(valid) - 1):
+        a, b = valid[i], valid[i + 1]
+        if a.timestamp_utc <= at <= b.timestamp_utc:
+            span = (b.timestamp_utc - a.timestamp_utc).total_seconds()
+            if span <= 0:
+                return a.current_speed_kts, a.current_set_deg
+            f = (at - a.timestamp_utc).total_seconds() / span
+            assert a.current_speed_kts is not None
+            assert b.current_speed_kts is not None
+            assert a.current_set_deg is not None
+            assert b.current_set_deg is not None
+            speed = a.current_speed_kts + (b.current_speed_kts - a.current_speed_kts) * f
+            d_a = a.current_set_deg
+            d_b = b.current_set_deg
+            delta = d_b - d_a
+            if delta > 180:
+                d_b -= 360
+            elif delta < -180:
+                d_b += 360
+            set_deg = (d_a + (d_b - d_a) * f) % 360
+            return speed, set_deg
+    return None, None
+
+
+def render_animated_gif(briefing: Briefing, output_path: Path) -> bool:
+    """Render an animated GIF of the briefing's racing window ± 1 hour.
+
+    Frames are emitted at 5-minute intervals (so for Shilshole's
+    18:00–21:00 racing window, the GIF covers 17:00–22:00 venue-local
+    with 60+ frames). Each frame draws:
+
+    - **Top panel** — wind direction arrows along a time axis with the
+      arrow length scaled by wind speed (the "pressure" map: where the
+      breeze is filling in across the window). A gust-band trace under
+      the arrows shows the speed envelope; a moving cursor marks the
+      current frame's position.
+    - **Bottom panel** — tide height curve and current arrows from NOAA
+      6-min predictions (when available). The current arrow direction
+      is the set (direction of flow), length proportional to speed.
+
+    Returns True on success. Best-effort: callers should treat a False
+    return (or an exception) as "chart unavailable" without failing the
+    whole briefing.
+    """
+    # Lazy imports — keep ``helmlog.briefings`` cheap to import in code
+    # paths that don't render the GIF (Storage, web detail pages without
+    # a rendered chart).
+    import math
+
     import matplotlib
 
     matplotlib.use("Agg", force=True)
+    import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
+    from matplotlib.animation import FuncAnimation, PillowWriter
 
     if not briefing.hourly_forecast:
         return False
+
+    venue = get_venue(briefing.venue_id)
+    if venue is None:
+        return False
+
+    anim_start, anim_end = _animation_window_utc(venue, briefing.local_date)
+    frames = _frame_times(anim_start, anim_end)
+    if not frames:
+        return False
+
+    forecast = sorted(briefing.hourly_forecast, key=lambda s: s.timestamp_utc)
+    tide = sorted(briefing.hourly_tide, key=lambda s: s.timestamp_utc)
 
     fig, (ax_wind, ax_tide) = plt.subplots(
         2,
@@ -625,57 +826,42 @@ def render_chart(briefing: Briefing, output_path: Path) -> bool:
         gridspec_kw={"height_ratios": [3, 2]},
     )
 
-    times = [s.timestamp_utc for s in briefing.hourly_forecast]
-    speeds = [s.wind_speed_kts for s in briefing.hourly_forecast]
-    gusts = [s.wind_gust_kts for s in briefing.hourly_forecast]
-    dirs = [s.wind_direction_deg for s in briefing.hourly_forecast]
-
-    ax_wind.fill_between(times, speeds, gusts, alpha=0.25, color="#1f77b4", label="gust")
-    ax_wind.plot(times, speeds, "o-", color="#1f77b4", label="wind (kts)")
+    # Static backdrop on the wind panel: the gust-band trace across all
+    # forecast samples in the animation window. The animated overlay is
+    # the per-frame direction arrow + cursor.
+    times = [s.timestamp_utc for s in forecast]
+    speeds = [s.wind_speed_kts for s in forecast]
+    gusts = [s.wind_gust_kts for s in forecast]
+    if times:
+        ax_wind.fill_between(times, speeds, gusts, alpha=0.18, color="#1f77b4", label="gust")
+        ax_wind.plot(times, speeds, "-", color="#1f77b4", lw=1.5, label="wind (kts)")
+    speed_max = max([*gusts, 1.0])
+    ax_wind.set_ylim(0, speed_max * 1.3)
+    ax_wind.set_xlim(anim_start, anim_end)
     ax_wind.set_ylabel("wind (kts)")
     ax_wind.set_title(
         f"{_venue_display_name(briefing.venue_id)} — "
         f"{briefing.local_date.isoformat()} (lead {briefing.lead_hours} h)"
     )
     ax_wind.grid(True, alpha=0.3)
-    for t, d in zip(times, dirs, strict=False):
-        ax_wind.annotate(
-            f"{int(round(d))}°",
-            xy=(t, ax_wind.get_ylim()[1]),
-            xytext=(0, -10),
-            textcoords="offset points",
-            ha="center",
-            fontsize=8,
-            color="#444",
-        )
+    ax_wind.xaxis.set_major_formatter(
+        mdates.DateFormatter("%H:%M", tz=ZoneInfo(venue.venue_tz))  # type: ignore[no-untyped-call]
+    )
     ax_wind.legend(loc="upper left", fontsize=8)
 
-    if briefing.hourly_tide:
-        tide_times = [s.timestamp_utc for s in briefing.hourly_tide]
-        heights = [
-            s.tide_height_m if s.tide_height_m is not None else 0.0 for s in briefing.hourly_tide
-        ]
-        ax_tide.plot(tide_times, heights, "o-", color="#2ca02c", label="tide (m)")
+    # Tide / current static backdrop.
+    if tide:
+        tide_times = [s.timestamp_utc for s in tide if s.tide_height_m is not None]
+        tide_heights = [s.tide_height_m for s in tide if s.tide_height_m is not None]
+        if tide_times:
+            ax_tide.plot(tide_times, tide_heights, "-", color="#2ca02c", lw=1.5, label="tide (m)")
+            ax_tide.set_ylim(min(tide_heights) - 0.3, max(tide_heights) + 0.3)
+        ax_tide.set_xlim(anim_start, anim_end)
         ax_tide.set_ylabel("tide (m, MLLW)")
         ax_tide.grid(True, alpha=0.3)
-        # Current arrows: only where speed and direction are present.
-        for s in briefing.hourly_tide:
-            if s.current_speed_kts is None or s.current_set_deg is None:
-                continue
-            import math
-
-            dx = math.sin(math.radians(s.current_set_deg)) * s.current_speed_kts
-            dy = math.cos(math.radians(s.current_set_deg)) * s.current_speed_kts
-            ax_tide.annotate(
-                f"{s.current_speed_kts:.1f} kt @ {int(round(s.current_set_deg))}°",
-                xy=(s.timestamp_utc, s.tide_height_m or 0.0),
-                xytext=(8, 8),
-                textcoords="offset points",
-                fontsize=7,
-                color="#666",
-                arrowprops={"arrowstyle": "->", "color": "#888", "lw": 0.6},
-            )
-            _ = dx, dy  # values currently used only for the offset hint
+        ax_tide.xaxis.set_major_formatter(
+            mdates.DateFormatter("%H:%M", tz=ZoneInfo(venue.venue_tz))  # type: ignore[no-untyped-call]
+        )
         ax_tide.legend(loc="upper left", fontsize=8)
     else:
         ax_tide.text(
@@ -689,10 +875,107 @@ def render_chart(briefing: Briefing, output_path: Path) -> bool:
         )
         ax_tide.set_axis_off()
 
-    fig.autofmt_xdate()
+    # Animated artists. The wind arrow is drawn from the cursor x at a
+    # fixed y (mid-panel) with length proportional to speed; direction
+    # uses meteorological convention (degrees true, 0 = N).
+    wind_cursor = ax_wind.axvline(anim_start, color="#d62728", lw=1.2, alpha=0.7)
+    wind_arrow = ax_wind.annotate(
+        "",
+        xy=(anim_start, 0),
+        xytext=(anim_start, 0),
+        arrowprops={"arrowstyle": "->", "color": "#d62728", "lw": 2.5},
+    )
+    wind_label = ax_wind.text(
+        0.02,
+        0.96,
+        "",
+        transform=ax_wind.transAxes,
+        ha="left",
+        va="top",
+        fontsize=10,
+        color="#222",
+        bbox={"boxstyle": "round", "fc": "white", "ec": "#ccc", "alpha": 0.85},
+    )
+
+    tide_cursor = ax_tide.axvline(anim_start, color="#d62728", lw=1.2, alpha=0.7)
+    current_arrow = ax_tide.annotate(
+        "",
+        xy=(anim_start, 0),
+        xytext=(anim_start, 0),
+        arrowprops={"arrowstyle": "->", "color": "#8c564b", "lw": 2.0},
+    )
+    current_label = ax_tide.text(
+        0.02,
+        0.92,
+        "",
+        transform=ax_tide.transAxes,
+        ha="left",
+        va="top",
+        fontsize=9,
+        color="#222",
+        bbox={"boxstyle": "round", "fc": "white", "ec": "#ccc", "alpha": 0.85},
+    )
+
+    # Geometry — wind arrow length in axis fraction (so it doesn't grow
+    # with x-axis units). We map kts → fraction of x-axis span.
+    x_span_seconds = (anim_end - anim_start).total_seconds() or 1.0
+    # An arrow at `speed_max` covers ~20 minutes of x-span.
+    pixels_per_kt = (timedelta(minutes=20).total_seconds() / x_span_seconds) / max(speed_max, 1.0)
+
+    def update(frame_idx: int) -> tuple[Any, ...]:
+        t = frames[frame_idx]
+        speed, gust, direction = _interp_at(forecast, t)
+        # Convert (speed, direction-from) to dx, dy in fraction-of-axis.
+        # Met convention: direction = where wind is FROM. Arrow points
+        # to where the wind is going (i.e. opposite). Use TO-direction
+        # for the arrow tail→head vector.
+        to_dir = (direction + 180.0) % 360.0
+        dx_frac = math.sin(math.radians(to_dir)) * speed * pixels_per_kt
+        dy_kts = math.cos(math.radians(to_dir)) * speed
+        # Convert dx_frac (axis fraction) back to a datetime offset.
+        dx_seconds = dx_frac * x_span_seconds
+        head = t + timedelta(seconds=dx_seconds)
+        # Vertical: anchor mid-panel and let the arrow rise/fall in kts.
+        anchor_y = speed_max * 0.6
+        head_y = anchor_y + dy_kts * 0.4
+
+        wind_cursor.set_xdata([t, t])
+        wind_arrow.xy = (head, head_y)
+        wind_arrow.set_position((t, anchor_y))
+        wind_label.set_text(
+            f"{t.astimezone(ZoneInfo(venue.venue_tz)).strftime('%H:%M')} "
+            f"local · {speed:.1f} kt @ {int(round(direction))}° "
+            f"(gust {gust:.0f})"
+        )
+
+        tide_cursor.set_xdata([t, t])
+        cur_speed, cur_set = _interp_current(tide, t)
+        if cur_speed is not None and cur_set is not None and cur_speed > 0:
+            # Set = direction current flows toward.
+            cur_dx_frac = math.sin(math.radians(cur_set)) * cur_speed * pixels_per_kt
+            cur_dy = math.cos(math.radians(cur_set)) * cur_speed
+            cur_dx_seconds = cur_dx_frac * x_span_seconds
+            cur_head = t + timedelta(seconds=cur_dx_seconds)
+            if tide and any(s.tide_height_m is not None for s in tide):
+                anchor = ax_tide.get_ylim()
+                anchor_t = (anchor[0] + anchor[1]) / 2
+            else:
+                anchor_t = 0.0
+            current_arrow.xy = (cur_head, anchor_t + cur_dy * 0.1)
+            current_arrow.set_position((t, anchor_t))
+            current_label.set_text(f"current {cur_speed:.2f} kt @ {int(round(cur_set))}°")
+        else:
+            current_arrow.xy = (t, 0)
+            current_arrow.set_position((t, 0))
+            current_label.set_text("current —")
+
+        return wind_cursor, wind_arrow, wind_label, tide_cursor, current_arrow, current_label
+
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=_CHART_DPI, format="png")
+    anim = FuncAnimation(fig, update, frames=len(frames), blit=False)
+    writer = PillowWriter(fps=_GIF_FRAME_FPS)
+    anim.save(str(output_path), writer=writer)
     plt.close(fig)
     return output_path.exists() and output_path.stat().st_size > 0
 

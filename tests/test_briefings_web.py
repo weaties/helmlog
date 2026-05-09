@@ -16,7 +16,8 @@ from helmlog.briefings import (
     HourlyTideSample,
     VenueConfig,
     compose_briefing,
-    render_chart,
+    register_venue,
+    render_animated_gif,
 )
 from helmlog.web import create_app
 
@@ -35,6 +36,7 @@ SHILSHOLE = VenueConfig(
     racing_window_local=(time(18, 0), time(21, 0)),
     lead_hours=(12, 8, 6, 4, 2, 0),
 )
+register_venue(SHILSHOLE)
 
 
 def _briefing(*, lead_hours: int = 12) -> Briefing:
@@ -82,10 +84,10 @@ def _briefing(*, lead_hours: int = 12) -> Briefing:
 async def test_briefing_detail_renders_with_og_meta(storage: Storage, tmp_path: Path) -> None:
     b = _briefing()
     bid = await storage.write_briefing(b)
-    # Render a real chart so the GET /chart.png test below has something
+    # Render a real chart so the GET /chart.gif test below has something
     # to serve.
-    chart_path = tmp_path / "chart.png"
-    render_chart(b, chart_path)
+    chart_path = tmp_path / "chart.gif"
+    render_animated_gif(b, chart_path)
     await storage.update_briefing_chart_path(briefing_id=bid, chart_path=str(chart_path))
 
     with patch.dict(os.environ, {"AUTH_DISABLED": "true"}):
@@ -106,15 +108,15 @@ async def test_briefing_detail_renders_with_og_meta(storage: Storage, tmp_path: 
             # OG meta is present so a WhatsApp paste previews the chart.
             assert "og:image" in html
             assert "og:title" in html
-            assert f"/briefings/{bid}/chart.png" in html
+            assert f"/briefings/{bid}/chart.gif" in html
 
 
 @pytest.mark.asyncio
-async def test_chart_png_route_serves_image(storage: Storage, tmp_path: Path) -> None:
+async def test_chart_gif_route_serves_image(storage: Storage, tmp_path: Path) -> None:
     b = _briefing()
     bid = await storage.write_briefing(b)
-    chart_path = tmp_path / "chart.png"
-    render_chart(b, chart_path)
+    chart_path = tmp_path / "chart.gif"
+    render_animated_gif(b, chart_path)
     await storage.update_briefing_chart_path(briefing_id=bid, chart_path=str(chart_path))
 
     with patch.dict(os.environ, {"AUTH_DISABLED": "true"}):
@@ -123,14 +125,14 @@ async def test_chart_png_route_serves_image(storage: Storage, tmp_path: Path) ->
             transport=httpx.ASGITransport(app=app),
             base_url="http://test",
         ) as client:
-            resp = await client.get(f"/briefings/{bid}/chart.png")
+            resp = await client.get(f"/briefings/{bid}/chart.gif")
             assert resp.status_code == 200
-            assert resp.headers.get("content-type", "").startswith("image/png")
-            assert resp.content[:8] == b"\x89PNG\r\n\x1a\n"
+            assert resp.headers.get("content-type", "").startswith("image/gif")
+            assert resp.content[:6] in (b"GIF87a", b"GIF89a")
 
 
 @pytest.mark.asyncio
-async def test_chart_png_404_when_chart_unavailable(storage: Storage) -> None:
+async def test_chart_gif_404_when_chart_unavailable(storage: Storage) -> None:
     """Missing chart file returns 404 — the textual page is still the source of truth."""
     b = _briefing()
     bid = await storage.write_briefing(b)
@@ -142,7 +144,7 @@ async def test_chart_png_404_when_chart_unavailable(storage: Storage) -> None:
             transport=httpx.ASGITransport(app=app),
             base_url="http://test",
         ) as client:
-            resp = await client.get(f"/briefings/{bid}/chart.png")
+            resp = await client.get(f"/briefings/{bid}/chart.gif")
             assert resp.status_code == 404
 
 

@@ -31,21 +31,35 @@ def _wed_window_utc() -> tuple[datetime, datetime]:
     )
 
 
+def _wed_animation_window_utc() -> tuple[datetime, datetime]:
+    # Racing window padded by 1 h on each side — the GIF window the
+    # briefing now stores. 17:00–22:00 PT → 00:00–05:00 UTC.
+    return (
+        datetime(2026, 4, 30, 0, 0, tzinfo=UTC),
+        datetime(2026, 4, 30, 5, 0, tzinfo=UTC),
+    )
+
+
 def _hourly_forecast(
     *,
     pressures: list[float] | None = None,
 ) -> list[HourlyForecastSample]:
-    """Build hourly forecast samples covering the racing window plus padding."""
-    start, _end = _wed_window_utc()
-    pressures = pressures or [1015, 1015, 1015, 1015]
-    samples: list[HourlyForecastSample] = []
-    # Include one sample before and after the window so window-filtering is
-    # actually exercised.
-    for offset, p in enumerate([1014.0, *pressures, 1014.0]):
-        ts = start.replace() + (offset - 1) * (start - start)  # placeholder
-        from datetime import timedelta
+    """Build hourly forecast samples spanning the animation window plus padding.
 
-        ts = start + timedelta(hours=offset - 1)
+    The animation window is racing_window ± 1 h (so 5 hours wide for
+    Shilshole). We also emit one sample 1 h before/after the animation
+    window so window-filtering is actually exercised.
+    """
+    from datetime import timedelta
+
+    anim_start, _anim_end = _wed_animation_window_utc()
+    # Default 6 in-animation-window samples (one per hour from anim_start
+    # through anim_end inclusive). Caller can pass `pressures` of length 6.
+    pressures = pressures or [1015.0] * 6
+    samples: list[HourlyForecastSample] = []
+    # 1 pre-padding + 6 in-window + 1 post-padding = 8 samples.
+    for offset, p in enumerate([1014.0, *pressures, 1014.0]):
+        ts = anim_start + timedelta(hours=offset - 1)
         samples.append(
             HourlyForecastSample(
                 timestamp_utc=ts,
@@ -62,9 +76,10 @@ def _hourly_forecast(
 
 
 def _hourly_tide() -> list[HourlyTideSample]:
-    start, end = _wed_window_utc()
+    """Build hourly tide samples across the animation window."""
     from datetime import timedelta
 
+    start, end = _wed_animation_window_utc()
     samples: list[HourlyTideSample] = []
     n_hours = int((end - start).total_seconds() // 3600) + 1
     for h in range(n_hours):
@@ -84,7 +99,7 @@ def test_generated_state_with_full_data() -> None:
         venue=SHILSHOLE,
         local_date=date(2026, 4, 29),
         lead_hours=12,
-        forecast_samples=_hourly_forecast(pressures=[1015, 1015, 1015, 1015]),
+        forecast_samples=_hourly_forecast(),
         tide_samples=_hourly_tide(),
         source_urls={
             "forecast": "https://api.open-meteo.com/...",
@@ -95,9 +110,9 @@ def test_generated_state_with_full_data() -> None:
     )
     assert b.state == "Generated"
     assert b.lead_hours == 12
-    # Window covers exactly 4 hour-boundaries (18:00, 19:00, 20:00, 21:00 PT).
-    assert len(b.hourly_forecast) == 4
-    assert len(b.hourly_tide) == 4
+    # Animation window covers 6 hour-boundaries (17:00..22:00 PT inclusive).
+    assert len(b.hourly_forecast) == 6
+    assert len(b.hourly_tide) == 6
     assert b.error is None
     assert b.source_urls["forecast"].startswith("https://")
 
@@ -185,13 +200,13 @@ def test_forecast_window_filtering_drops_padding_samples() -> None:
         venue=SHILSHOLE,
         local_date=date(2026, 4, 29),
         lead_hours=6,
-        forecast_samples=_hourly_forecast(),  # has 1 pre + 4 in-window + 1 post
+        forecast_samples=_hourly_forecast(),  # 1 pre + 6 in-anim-window + 1 post
         tide_samples=_hourly_tide(),
         source_urls={},
         forecast_issued_at=None,
         fetched_at=datetime(2026, 4, 29, 12, 0, tzinfo=UTC),
     )
-    assert len(b.hourly_forecast) == 4
-    start, end = _wed_window_utc()
+    assert len(b.hourly_forecast) == 6
+    anim_start, anim_end = _wed_animation_window_utc()
     for s in b.hourly_forecast:
-        assert start <= s.timestamp_utc <= end
+        assert anim_start <= s.timestamp_utc <= anim_end

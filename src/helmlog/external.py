@@ -46,6 +46,17 @@ class WeatherReading:
     pressure_hpa: float  # surface pressure (hPa)
 
 
+@dataclass(frozen=True)
+class CurrentReading:
+    """A single 6-min tidal-current prediction from NOAA CO-OPS."""
+
+    timestamp: datetime  # UTC time of the prediction
+    speed_kts: float  # current speed (knots, always >= 0)
+    set_deg: float  # direction current is flowing toward (degrees true)
+    station_id: str
+    station_name: str
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -84,6 +95,16 @@ def external_data_should_fetch() -> bool:
     return os.environ.get("METERED", "false").lower() != "true"
 
 
+def _safe_float(val: object) -> float | None:
+    """Coerce to float; return None if val is None / empty / non-numeric."""
+    if val is None or val == "":
+        return None
+    try:
+        return float(val)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 def _reduce_precision(val: float, decimals: int = 2) -> float:
     """Reduce GPS coordinate precision for external API calls (#209).
 
@@ -109,6 +130,8 @@ class ExternalFetcher:
         self._client: httpx.AsyncClient | None = None
         # NOAA tide station list — fetched once and reused for the session
         self._stations_cache: list[dict[str, Any]] | None = None
+        # NOAA currents prediction station list — separate API endpoint.
+        self._current_stations_cache: list[dict[str, Any]] | None = None
         # Optional T2 cache for successful API responses (#594 / #610).
         # Weather entries expire after 1h; tides never expire (predictions
         # for a given date are immutable once published).
@@ -323,6 +346,217 @@ class ExternalFetcher:
             if r.timestamp.hour == dt.hour:
                 return r
         return None
+
+    # ------------------------------------------------------------------
+    # Tidal currents — NOAA CO-OPS (#700 GIF expansion)
+    # ------------------------------------------------------------------
+
+    async def _get_current_stations(self) -> list[dict[str, Any]]:
+        if self._current_stations_cache is not None:
+            return self._current_stations_cache
+        try:
+            resp = await self._http().get(_NOAA_STATIONS_URL, params={"type": "currentpredictions"})
+            resp.raise_for_status()
+            _track_response("tides", resp)
+            data: dict[str, Any] = resp.json()
+            self._current_stations_cache = data["stations"]
+            logger.debug("Fetched {} NOAA currents stations", len(self._current_stations_cache))
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            logger.warning("Failed to fetch NOAA currents station list: {}", exc)
+            self._current_stations_cache = []
+        return self._current_stations_cache or []
+
+    async def fetch_current_predictions(
+        self,
+        *,
+        lat: float,
+        lon: float,
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> list[CurrentReading]:
+        """Fetch 6-minute NOAA tidal-current predictions for ``[start_utc, end_utc]``.
+
+        Picks the nearest currentpredictions station to (lat, lon). Returns
+        an empty list on any failure — callers treat as "currents
+        unavailable" without raising. Speeds are always >= 0; the set
+        direction is the direction the water is flowing toward (degrees
+        true). NOAA returns negative ``Velocity_Major`` for ebb; we
+        normalize to (speed, set) using the station's flood/ebb directions.
+        """
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+
+        lat = _reduce_precision(lat)
+        lon = _reduce_precision(lon)
+
+        stations = await self._get_current_stations()
+        station = self._nearest_station(stations, lat, lon)
+        if station is None:
+            return []
+
+        station_id = str(station["id"])
+        station_name = str(station.get("name", ""))
+        # NOAA's stations.json doesn't always carry meanFloodDir/meanEbbDir
+        # at top level for currents; we'll fall back to abs(velocity) and
+        # use Velocity-derived direction from the per-prediction payload.
+        flood_dir = _safe_float(station.get("meanFloodDir"))
+        ebb_dir = _safe_float(station.get("meanEbbDir"))
+
+        params: dict[str, Any] = {
+            "product": "currents_predictions",
+            "application": "helmlog",
+            "begin_date": start_utc.strftime("%Y%m%d %H:%M"),
+            "end_date": end_utc.strftime("%Y%m%d %H:%M"),
+            "station": station_id,
+            "time_zone": "gmt",
+            "interval": "6",
+            "units": "english",
+            "format": "json",
+        }
+        try:
+            resp = await self._http().get(_NOAA_PREDICTIONS_URL, params=params)
+            resp.raise_for_status()
+            _track_response("tides", resp)
+            data: dict[str, Any] = resp.json()
+        except httpx.HTTPError as exc:
+            logger.warning("Currents predictions fetch failed: {}", exc)
+            return []
+
+        if "error" in data:
+            logger.warning(
+                "NOAA currents API error for station {}: {}",
+                station_id,
+                data["error"].get("message", "unknown"),
+            )
+            return []
+
+        cps = data.get("current_predictions", {}).get("cp") or []
+        out: list[CurrentReading] = []
+        for cp in cps:
+            try:
+                ts_raw = str(cp["Time"]).replace(" ", "T")
+                ts = _datetime.fromisoformat(ts_raw).replace(tzinfo=_UTC)
+                vel = float(cp["Velocity_Major"])
+            except (KeyError, ValueError, TypeError):
+                continue
+            if not (start_utc <= ts <= end_utc):
+                continue
+            speed = abs(vel)
+            # Direction the current flows toward. Use station-level flood/
+            # ebb directions when available; otherwise fall back to whatever
+            # Direction the per-prediction payload carries.
+            if vel >= 0 and flood_dir is not None:
+                set_deg: float = flood_dir
+            elif vel < 0 and ebb_dir is not None:
+                set_deg = ebb_dir
+            else:
+                d = _safe_float(cp.get("Direction"))
+                if d is None:
+                    continue
+                set_deg = d
+            out.append(
+                CurrentReading(
+                    timestamp=ts,
+                    speed_kts=speed,
+                    set_deg=set_deg % 360.0,
+                    station_id=station_id,
+                    station_name=station_name,
+                )
+            )
+        logger.info(
+            "Currents predictions: {} samples from {!r} ({})",
+            len(out),
+            station_name,
+            station_id,
+        )
+        return out
+
+    # ------------------------------------------------------------------
+    # 15-minute forecast — Open-Meteo (#700 GIF expansion)
+    # ------------------------------------------------------------------
+
+    async def fetch_minutely_15_forecast(
+        self,
+        *,
+        lat: float,
+        lon: float,
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> list[Any]:
+        """Fetch a 15-minute resolution forecast slice covering the window.
+
+        Returns a list of ``helmlog.briefings.HourlyForecastSample``
+        (the dataclass name predates this denser resolution; the shape is
+        identical). Empty list on failure — callers treat as "forecast
+        unavailable" without raising.
+        """
+        from helmlog.briefings import HourlyForecastSample
+
+        lat = _reduce_precision(lat)
+        lon = _reduce_precision(lon)
+        params: dict[str, Any] = {
+            "latitude": lat,
+            "longitude": lon,
+            "minutely_15": (
+                "wind_speed_10m,wind_direction_10m,wind_gusts_10m,"
+                "temperature_2m,precipitation_probability,cloud_cover,surface_pressure"
+            ),
+            "wind_speed_unit": "kn",
+            "timezone": "UTC",
+            "start_date": start_utc.date().isoformat(),
+            "end_date": end_utc.date().isoformat(),
+        }
+        try:
+            resp = await self._http().get(_OPEN_METEO_URL, params=params)
+            resp.raise_for_status()
+            _track_response("weather", resp)
+            data: dict[str, Any] = resp.json()
+        except httpx.HTTPError as exc:
+            logger.warning("Minutely-15 forecast fetch failed: {}", exc)
+            return []
+
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+
+        try:
+            block = data["minutely_15"]
+            times = block["time"]
+            speeds = block["wind_speed_10m"]
+            dirs = block["wind_direction_10m"]
+            gusts = block["wind_gusts_10m"]
+            temps = block["temperature_2m"]
+            precips = block["precipitation_probability"]
+            clouds = block["cloud_cover"]
+            pressures = block["surface_pressure"]
+        except (KeyError, TypeError) as exc:
+            logger.warning("Minutely-15 forecast parse error: {}", exc)
+            return []
+
+        out: list[HourlyForecastSample] = []
+        for i, t in enumerate(times):
+            try:
+                ts = _datetime.fromisoformat(t).replace(tzinfo=_UTC)
+            except (TypeError, ValueError):
+                continue
+            if not (start_utc <= ts <= end_utc):
+                continue
+            try:
+                out.append(
+                    HourlyForecastSample(
+                        timestamp_utc=ts,
+                        wind_speed_kts=float(speeds[i]),
+                        wind_gust_kts=float(gusts[i]) if gusts[i] is not None else float(speeds[i]),
+                        wind_direction_deg=float(dirs[i]),
+                        air_temp_c=float(temps[i]) if temps[i] is not None else 0.0,
+                        pressure_hpa=float(pressures[i]) if pressures[i] is not None else 0.0,
+                        precip_probability_pct=float(precips[i]) if precips[i] is not None else 0.0,
+                        cloud_cover_pct=float(clouds[i]) if clouds[i] is not None else 0.0,
+                    )
+                )
+            except (TypeError, ValueError, IndexError) as exc:
+                logger.debug("Minutely-15 forecast skipped row {}: {}", i, exc)
+                continue
+        return out
 
     # ------------------------------------------------------------------
     # Hourly forecast — Open-Meteo (#700)

@@ -96,7 +96,7 @@ async def _briefings_loop(storage: object, fetcher: object) -> None:
     from helmlog.briefings import (
         list_venues,
         next_tick,
-        render_chart,
+        render_animated_gif,
         run_briefing_tick,
     )
     from helmlog.external import ExternalFetcher
@@ -135,9 +135,10 @@ async def _briefings_loop(storage: object, fetcher: object) -> None:
                     storage=storage,
                     venue=venue,
                     tick=tick,
-                    fetch_forecast=fetcher.fetch_hourly_forecast,
+                    fetch_forecast=fetcher.fetch_minutely_15_forecast,
                     fetch_tide=fetcher.fetch_tide_predictions,
-                    chart_renderer=render_chart,
+                    fetch_currents=fetcher.fetch_current_predictions,
+                    chart_renderer=render_animated_gif,
                     chart_dir=chart_dir,
                 )
         except asyncio.CancelledError:

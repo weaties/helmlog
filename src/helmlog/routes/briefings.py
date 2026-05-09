@@ -2,7 +2,8 @@
 
 GET /briefings                 Filterable list of recent briefings.
 GET /briefings/{id}            HTML detail page (with OG meta).
-GET /briefings/{id}/chart.png  PNG chart written by the briefing job.
+GET /briefings/{id}/chart.gif  Animated GIF (5-min frames, 17:00–22:00
+                               local) written by the briefing job.
 
 The job that creates briefings is in helmlog.briefings.run_briefing_tick
 and runs from main.py at scheduler ticks; the routes here are read-only.
@@ -99,7 +100,7 @@ async def briefing_detail(request: Request, briefing_id: int) -> Response:
     if briefing.race_id is not None:
         linked_race = await storage.get_race(briefing.race_id)
 
-    chart_url = f"/briefings/{briefing_id}/chart.png" if briefing.chart_path else None
+    chart_url = f"/briefings/{briefing_id}/chart.gif" if briefing.chart_path else None
     headline = _headline(briefing)
 
     ctx = tpl_ctx(
@@ -116,9 +117,9 @@ async def briefing_detail(request: Request, briefing_id: int) -> Response:
     return templates.TemplateResponse(request, "briefing_detail.html", ctx)
 
 
-@router.get("/briefings/{briefing_id}/chart.png", include_in_schema=False)
+@router.get("/briefings/{briefing_id}/chart.gif", include_in_schema=False)
 async def briefing_chart(request: Request, briefing_id: int) -> Response:
-    """Serve the chart PNG for a briefing, or 404 if it isn't rendered."""
+    """Serve the animated GIF for a briefing, or 404 if it isn't rendered."""
     storage = get_storage(request)
     chart_path = await storage.get_briefing_chart_path(briefing_id)
     if not chart_path:
@@ -126,7 +127,7 @@ async def briefing_chart(request: Request, briefing_id: int) -> Response:
     p = Path(chart_path)
     if not p.exists():
         raise HTTPException(status_code=404, detail="chart unavailable")
-    return FileResponse(p, media_type="image/png")
+    return FileResponse(p, media_type="image/gif")
 
 
 def _headline(briefing: Briefing) -> str:
