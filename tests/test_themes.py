@@ -267,6 +267,25 @@ async def test_api_set_boat_default_unknown_scheme_422(client: httpx.AsyncClient
 
 
 @pytest.mark.asyncio
+async def test_api_set_boat_default_custom_scheme(client: httpx.AsyncClient) -> None:
+    """PUT /api/color-schemes/default with a custom scheme id persists (regression #747).
+
+    The admin/settings page now triggers this PUT directly on click instead of
+    staging the selection in JS. This guards the path the new click handler hits.
+    """
+    create = await client.post(
+        "/api/color-schemes",
+        json={"name": "Corvo", "bg": "#000000", "text_color": "#FFD600", "accent": "#FFD600"},
+    )
+    assert create.status_code == 201
+    sid = create.json()["id"]
+    resp = await client.put("/api/color-schemes/default", json={"scheme_id": f"custom:{sid}"})
+    assert resp.status_code == 200
+    list_resp = await client.get("/api/color-schemes")
+    assert list_resp.json()["boat_default"] == f"custom:{sid}"
+
+
+@pytest.mark.asyncio
 async def test_api_delete_custom_scheme(client: httpx.AsyncClient) -> None:
     """DELETE /api/color-schemes/{id} removes the scheme."""
     create = await client.post(
