@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}New pre-race briefing{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+.briefing-form { display:flex; flex-direction:column; gap:1rem; max-width:1100px; }
+.briefing-map { width:100%; height:480px; border:1px solid var(--accent-strong); border-radius:8px; }
+.briefing-form-row { display:flex; gap:.75rem; flex-wrap:wrap; align-items:end; }
+.briefing-form-row label { display:flex; flex-direction:column; gap:.25rem; font-size:.85rem; }
+.briefing-form-row input,
+.briefing-form-row select {
+  background:var(--bg-input); border:1px solid var(--accent-strong); border-radius:6px;
+  color:var(--text-primary); padding:.4rem .55rem; font:inherit;
+}
+.briefing-bbox-readout { font-family:monospace; font-size:.85rem; color:var(--text-muted); }
+.briefing-help { font-size:.85rem; color:var(--text-muted); }
+.briefing-spinner { display:none; font-size:.9rem; color:var(--text-muted); }
+.briefing-spinner.visible { display:inline; }
+</style>
+{% endblock %}
+
+{% block content %}
+<section>
+  <h1>New pre-race briefing</h1>
+  <p class="briefing-help">
+    Pan and zoom the map until the area you'll be racing is in view. The current
+    map viewport defines the briefing's bbox. Pick the date and racing window
+    (local time at the venue), then generate.
+  </p>
+
+  <form id="briefing-form" class="briefing-form" method="post" action="/briefings/run">
+    <div id="briefing-map" class="briefing-map"></div>
+
+    <div class="briefing-form-row">
+      <label>
+        Venue name
+        <input type="text" name="venue_name" value="Custom" maxlength="60" required>
+      </label>
+      <label>
+        Local date
+        <input type="date" name="local_date" id="briefing-date" required>
+      </label>
+      <label>
+        Window start (local)
+        <input type="time" name="start_time" value="18:00" required>
+      </label>
+      <label>
+        Window end (local)
+        <input type="time" name="end_time" value="21:00" required>
+      </label>
+      <label>
+        Timezone
+        <select name="venue_tz">
+          <option value="America/Los_Angeles" selected>Pacific (Seattle)</option>
+          <option value="America/Denver">Mountain</option>
+          <option value="America/Chicago">Central</option>
+          <option value="America/New_York">Eastern</option>
+          <option value="UTC">UTC</option>
+        </select>
+      </label>
+    </div>
+
+    <input type="hidden" name="lat_min" id="lat_min">
+    <input type="hidden" name="lon_min" id="lon_min">
+    <input type="hidden" name="lat_max" id="lat_max">
+    <input type="hidden" name="lon_max" id="lon_max">
+
+    <div class="briefing-form-row">
+      <button type="submit" id="briefing-submit">Generate briefing</button>
+      <span id="briefing-bbox" class="briefing-bbox-readout"></span>
+      <span id="briefing-spinner" class="briefing-spinner">
+        Fetching forecast + rendering GIF — this takes ~10–20 s…
+      </span>
+    </div>
+  </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function () {
+  // Default the date input to today (browser local).
+  var dateInput = document.getElementById('briefing-date');
+  if (dateInput && !dateInput.value) {
+    var d = new Date();
+    var y = d.getFullYear();
+    var m = String(d.getMonth() + 1).padStart(2, '0');
+    var dd = String(d.getDate()).padStart(2, '0');
+    dateInput.value = y + '-' + m + '-' + dd;
+  }
+
+  var map = L.map('briefing-map');
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap',
+    maxZoom: 18,
+  }).addTo(map);
+  // Default view: Shilshole Bay (matches the built-in venue).
+  map.setView([47.68, -122.40], 12);
+
+  var bboxEl = document.getElementById('briefing-bbox');
+  var latMinEl = document.getElementById('lat_min');
+  var lonMinEl = document.getElementById('lon_min');
+  var latMaxEl = document.getElementById('lat_max');
+  var lonMaxEl = document.getElementById('lon_max');
+
+  function syncBounds() {
+    var b = map.getBounds();
+    var sw = b.getSouthWest();
+    var ne = b.getNorthEast();
+    latMinEl.value = sw.lat.toFixed(4);
+    lonMinEl.value = sw.lng.toFixed(4);
+    latMaxEl.value = ne.lat.toFixed(4);
+    lonMaxEl.value = ne.lng.toFixed(4);
+    var dlat = (ne.lat - sw.lat).toFixed(2);
+    var dlon = (ne.lng - sw.lng).toFixed(2);
+    bboxEl.textContent =
+      'bbox  ' + sw.lat.toFixed(3) + ', ' + sw.lng.toFixed(3) +
+      '  →  ' + ne.lat.toFixed(3) + ', ' + ne.lng.toFixed(3) +
+      '   (' + dlat + '° × ' + dlon + '°)';
+  }
+  map.on('moveend zoomend', syncBounds);
+  // Defer initial sync until the map has a size.
+  setTimeout(syncBounds, 100);
+
+  // Show "rendering…" hint while the POST is in flight (the POST does the
+  // fetch+render synchronously and redirects when done).
+  var form = document.getElementById('briefing-form');
+  form.addEventListener('submit', function () {
+    document.getElementById('briefing-spinner').classList.add('visible');
+    document.getElementById('briefing-submit').disabled = true;
+  });
+})();
+</script>
+{% endblock %}

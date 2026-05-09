@@ -1,24 +1,38 @@
 """Routes for pre-race briefings (#700).
 
 GET /briefings                 Filterable list of recent briefings.
+GET /briefings/new             Custom-briefing form (map + date/time).
+POST /briefings/run            Generate a one-off briefing (crew+ only).
 GET /briefings/{id}            HTML detail page (with OG meta).
 GET /briefings/{id}/chart.gif  Animated GIF (5-min frames, 17:00–22:00
                                local) written by the briefing job.
 
-The job that creates briefings is in helmlog.briefings.run_briefing_tick
-and runs from main.py at scheduler ticks; the routes here are read-only.
+The scheduled job that creates briefings is in
+``helmlog.briefings.run_briefing_tick`` and runs from main.py; this
+module also exposes the ad-hoc form/endpoint so a sailor can render a
+GIF for any bbox + date/time.
 """
 
 from __future__ import annotations
 
 from datetime import date as _date
+from datetime import time as _time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
-from helmlog.briefings import get_venue, list_venues
+from helmlog.auth import require_auth
+from helmlog.briefings import (
+    VenueConfig,
+    force_tick,
+    get_venue,
+    list_venues,
+    register_venue,
+    render_animated_gif,
+    run_briefing_tick,
+)
 from helmlog.routes._helpers import get_storage, templates, tpl_ctx
 
 if TYPE_CHECKING:
@@ -78,6 +92,136 @@ def _parse_date(value: str | None) -> _date | None:
         raise HTTPException(
             status_code=400, detail=f"invalid date {value!r} (expect YYYY-MM-DD)"
         ) from exc
+
+
+@router.get("/briefings/new", response_class=HTMLResponse, include_in_schema=False)
+async def briefings_new_form(
+    request: Request,
+    user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+) -> Response:
+    """Render the custom-briefing form (map + date + time)."""
+    ctx = tpl_ctx(request, "/briefings", user=user)
+    return templates.TemplateResponse(request, "briefings_new.html", ctx)
+
+
+# Hard limits to keep one-off briefings cheap. A bbox much wider than ~1°
+# would explode the Open-Meteo grid request and the GIF render time.
+_MAX_BBOX_SPAN_DEG = 1.0
+_MIN_BBOX_SPAN_DEG = 0.05
+
+
+@router.post("/briefings/run", include_in_schema=False)
+async def briefings_run(  # noqa: PLR0913
+    request: Request,
+    lat_min: float = Form(...),
+    lon_min: float = Form(...),
+    lat_max: float = Form(...),
+    lon_max: float = Form(...),
+    local_date: str = Form(...),
+    start_time: str = Form(...),
+    end_time: str = Form(...),
+    venue_name: str = Form("Custom"),
+    venue_tz: str = Form("America/Los_Angeles"),
+    user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+) -> Response:
+    """Run a one-off briefing for the requested bbox and time window.
+
+    Builds an ephemeral ``VenueConfig`` registered under a content-hashed
+    id so the renderer (which looks up venues by id) resolves it. The
+    render uses the same fetcher + renderer pipeline as the scheduled job.
+    """
+    import hashlib
+    import os
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    from helmlog.external import ExternalFetcher
+
+    # --- Validation ---
+    lo_lat, hi_lat = sorted((lat_min, lat_max))
+    lo_lon, hi_lon = sorted((lon_min, lon_max))
+    span_lat = hi_lat - lo_lat
+    span_lon = hi_lon - lo_lon
+    if not (_MIN_BBOX_SPAN_DEG <= span_lat <= _MAX_BBOX_SPAN_DEG):
+        raise HTTPException(
+            status_code=400,
+            detail=f"bbox lat span must be {_MIN_BBOX_SPAN_DEG}–{_MAX_BBOX_SPAN_DEG}°",
+        )
+    if not (_MIN_BBOX_SPAN_DEG <= span_lon <= _MAX_BBOX_SPAN_DEG):
+        raise HTTPException(
+            status_code=400,
+            detail=f"bbox lon span must be {_MIN_BBOX_SPAN_DEG}–{_MAX_BBOX_SPAN_DEG}°",
+        )
+    try:
+        target_date = _date.fromisoformat(local_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid date {local_date!r}") from exc
+    try:
+        start_t = _time.fromisoformat(start_time)
+        end_t = _time.fromisoformat(end_time)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid HH:MM time") from exc
+    if end_t <= start_t:
+        raise HTTPException(status_code=400, detail="end_time must be after start_time")
+    try:
+        ZoneInfo(venue_tz)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"invalid timezone {venue_tz!r}") from exc
+
+    # --- Build ephemeral venue ---
+    center_lat = (lo_lat + hi_lat) / 2
+    center_lon = (lo_lon + hi_lon) / 2
+    # Aim for ~7 grid points across the longer axis; floor to a sensible step.
+    longest = max(span_lat, span_lon)
+    step = max(0.02, round(longest / 7, 3))
+    digest = hashlib.sha1(
+        f"{lo_lat:.4f},{lo_lon:.4f},{hi_lat:.4f},{hi_lon:.4f}:{venue_tz}".encode()
+    ).hexdigest()[:10]
+    venue_id = f"custom_{digest}"
+    venue = VenueConfig(
+        venue_id=venue_id,
+        venue_name=venue_name or "Custom",
+        venue_lat=center_lat,
+        venue_lon=center_lon,
+        venue_tz=venue_tz,
+        days_of_week=tuple(range(7)),  # any day
+        racing_window_local=(start_t, end_t),
+        lead_hours=(0,),
+        map_bbox_deg=(lo_lat, lo_lon, hi_lat, hi_lon),
+        grid_step_deg=step,
+        coastline_geojson=None,
+    )
+    register_venue(venue)
+
+    tick = force_tick(venue, target_date, lead_hours=0)
+    storage = get_storage(request)
+    chart_dir = Path(os.environ.get("BRIEFING_CHART_DIR", "data/briefings"))
+
+    async with ExternalFetcher() as fetcher:
+        briefing = await run_briefing_tick(
+            storage=storage,
+            venue=venue,
+            tick=tick,
+            fetch_forecast=fetcher.fetch_minutely_15_forecast,
+            fetch_tide=fetcher.fetch_tide_predictions,
+            fetch_currents=fetcher.fetch_current_predictions,
+            fetch_grid=fetcher.fetch_minutely_15_grid,
+            chart_renderer=render_animated_gif,
+            chart_dir=chart_dir,
+        )
+
+    if briefing.state != "Generated":
+        raise HTTPException(
+            status_code=502,
+            detail=f"briefing failed: {briefing.error or 'unknown'}",
+        )
+
+    ids = await storage.list_briefing_ids_for_date(venue_id=venue_id, local_date=target_date)
+    row_id = ids.get((venue_id, target_date.isoformat(), 0))
+    if row_id is None:
+        raise HTTPException(status_code=500, detail="briefing not persisted")
+    _ = (datetime, UTC, user)  # silence unused locals from the import block / dep
+    return RedirectResponse(url=f"/briefings/{row_id}", status_code=303)
 
 
 @router.get("/briefings/{briefing_id}", response_class=HTMLResponse, include_in_schema=False)

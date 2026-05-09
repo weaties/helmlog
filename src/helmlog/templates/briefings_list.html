@@ -3,7 +3,13 @@
 
 {% block content %}
 <section class="briefings-list">
-  <h1>Pre-race briefings</h1>
+  <div style="display:flex;justify-content:space-between;align-items:baseline;gap:1rem;flex-wrap:wrap">
+    <h1>Pre-race briefings</h1>
+    <a href="/briefings/new" class="btn-primary"
+       style="padding:.45rem .8rem;background:var(--accent-strong);color:#fff;border-radius:6px;text-decoration:none;font-size:.9rem">
+      + New briefing
+    </a>
+  </div>
 
   <form method="get" action="/briefings" class="briefings-filters" style="margin-bottom:1rem;display:flex;gap:.75rem;flex-wrap:wrap;align-items:end">
     <label>

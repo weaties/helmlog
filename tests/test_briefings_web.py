@@ -275,3 +275,93 @@ async def test_briefing_detail_lists_prior_briefings_in_series(
             for other_lh in (12, 8):
                 assert f"lead {other_lh}" in html or f"{other_lh} h" in html
     _ = lead_6  # just keeps the helpful local for diagnostics
+
+
+# ---------------------------------------------------------------------------
+# /briefings/new + POST /briefings/run
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_briefings_new_form_renders_for_authed_user(storage: Storage) -> None:
+    """The custom-briefing form page renders when auth is bypassed (admin)."""
+    with patch.dict(os.environ, {"AUTH_DISABLED": "true"}):
+        app = create_app(storage)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            resp = await client.get("/briefings/new")
+            assert resp.status_code == 200
+            assert "briefing-map" in resp.text
+            assert 'name="local_date"' in resp.text
+            assert 'name="start_time"' in resp.text
+
+
+@pytest.mark.asyncio
+async def test_briefings_run_rejects_invalid_bbox(storage: Storage) -> None:
+    """A bbox span outside the [0.05, 1.0]° guardrails returns 400."""
+    with patch.dict(os.environ, {"AUTH_DISABLED": "true"}):
+        app = create_app(storage)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            resp = await client.post(
+                "/briefings/run",
+                data={
+                    # Way too small (< 0.05° span).
+                    "lat_min": "47.68",
+                    "lon_min": "-122.41",
+                    "lat_max": "47.681",
+                    "lon_max": "-122.409",
+                    "local_date": "2026-05-09",
+                    "start_time": "18:00",
+                    "end_time": "21:00",
+                    "venue_name": "Tiny",
+                    "venue_tz": "America/Los_Angeles",
+                },
+                follow_redirects=False,
+            )
+            assert resp.status_code == 400
+            assert "bbox" in resp.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_briefings_run_rejects_invalid_time_window(storage: Storage) -> None:
+    with patch.dict(os.environ, {"AUTH_DISABLED": "true"}):
+        app = create_app(storage)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            resp = await client.post(
+                "/briefings/run",
+                data={
+                    "lat_min": "47.55",
+                    "lon_min": "-122.55",
+                    "lat_max": "47.85",
+                    "lon_max": "-122.25",
+                    "local_date": "2026-05-09",
+                    "start_time": "21:00",
+                    "end_time": "18:00",  # before start
+                    "venue_name": "Custom",
+                    "venue_tz": "America/Los_Angeles",
+                },
+                follow_redirects=False,
+            )
+            assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_briefings_index_links_to_new_form(storage: Storage) -> None:
+    """The index surfaces a 'New briefing' link to /briefings/new."""
+    with patch.dict(os.environ, {"AUTH_DISABLED": "true"}):
+        app = create_app(storage)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            resp = await client.get("/briefings")
+            assert resp.status_code == 200
+            assert 'href="/briefings/new"' in resp.text
