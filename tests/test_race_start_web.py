@@ -77,6 +77,30 @@ async def test_state_returns_idle_initially(storage: Storage) -> None:
     assert body["phase"] == "idle"
     assert body["t0_utc"] is None
     assert body["start_line"]["is_complete"] is False
+    # No schedule by default.
+    assert body["scheduled_start"] is None
+
+
+@pytest.mark.asyncio
+async def test_state_surfaces_scheduled_start(storage: Storage) -> None:
+    """When a scheduled start row exists, /api/race-start/state exposes it
+    so the page can render the upcoming-gun banner + arm button. Pursuit
+    starts (helm sets the gun the night before) drove this addition."""
+    fire_at = datetime.now(UTC) + timedelta(hours=22)
+    await storage.schedule_start(fire_at, event="R2TS", session_type="race")
+
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        r = await client.get("/api/race-start/state")
+    body = r.json()
+    sched = body["scheduled_start"]
+    assert sched is not None
+    assert sched["event"] == "R2TS"
+    assert sched["session_type"] == "race"
+    # seconds_until_start ≈ 22 h within a couple seconds for test latency.
+    assert sched["seconds_until_start"] > 22 * 3600 - 5
 
 
 @pytest.mark.asyncio
@@ -521,6 +545,69 @@ async def test_gun_with_no_current_race_does_not_error(storage: Storage) -> None
         r = await client.get("/api/race-start/state")
     assert r.status_code == 200
     assert r.json()["phase"] == "started"
+
+
+@pytest.mark.asyncio
+async def test_state_snapshot_exposes_carry_over(storage: Storage) -> None:
+    """Snapshot's start_line block surfaces carried_over_from_race_id per
+    end so the UI can warn the helm to re-ping (#702)."""
+    date = "2026-04-30"
+    r1 = await storage.start_race("CYC", datetime.now(UTC), date, 1, "20260430-CYC-1")
+    await storage.add_start_line_ping(
+        race_id=r1.id,
+        end_kind="boat",
+        latitude_deg=47.6895,
+        longitude_deg=-122.4160,
+        captured_at=datetime.now(UTC),
+        captured_by=None,
+    )
+    await storage.add_start_line_ping(
+        race_id=r1.id,
+        end_kind="pin",
+        latitude_deg=47.6901,
+        longitude_deg=-122.4189,
+        captured_at=datetime.now(UTC),
+        captured_by=None,
+    )
+    # Close race 1, start race 2 — race 2 has no pings of its own.
+    await storage.end_race(r1.id, datetime.now(UTC))
+    await storage.start_race("CYC", datetime.now(UTC), date, 2, "20260430-CYC-2")
+
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        r = await client.get("/api/race-start/state")
+    body = r.json()
+    sl = body["start_line"]
+    assert sl["is_complete"] is True
+    assert sl["boat_end_carried_over_from_race_id"] == r1.id
+    assert sl["pin_end_carried_over_from_race_id"] == r1.id
+
+
+@pytest.mark.asyncio
+async def test_state_snapshot_no_carry_over_for_fresh_pings(storage: Storage) -> None:
+    """When pings belong to the active race, carried_over_from_race_id is null."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Start a race and ping its line.
+        await storage.start_race("CYC", datetime.now(UTC), "2026-04-30", 1, "20260430-CYC-1")
+        await client.post(
+            "/api/race-start/ping/boat",
+            json={"latitude_deg": 47.65, "longitude_deg": -122.40},
+        )
+        await client.post(
+            "/api/race-start/ping/pin",
+            json={"latitude_deg": 47.66, "longitude_deg": -122.41},
+        )
+        r = await client.get("/api/race-start/state")
+    body = r.json()
+    sl = body["start_line"]
+    assert sl["is_complete"] is True
+    assert sl["boat_end_carried_over_from_race_id"] is None
+    assert sl["pin_end_carried_over_from_race_id"] is None
 
 
 @pytest.mark.asyncio

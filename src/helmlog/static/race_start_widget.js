@@ -159,18 +159,26 @@
   function drawOnMap() {
     const map = window._helmlogLeafletMap;
     if (!map || !window.L) return;
+    // On /session/* pages, session.js owns a richer time-synced overlay
+    // (loadHelmlogStartLineOverlay). Skip the widget's static draw here so
+    // we don't paint duplicate lines/markers on top of it.
+    if (window.location.pathname.startsWith('/session/')) return;
     clearMapLayers();
     if (!snapshot.start_line || !snapshot.start_line.is_complete) return;
 
     const sl = snapshot.start_line;
     const boat = [sl.boat_end_lat, sl.boat_end_lon];
     const pin = [sl.pin_end_lat, sl.pin_end_lon];
+    const boatCarry = sl.boat_end_carried_over_from_race_id;
+    const pinCarry = sl.pin_end_carried_over_from_race_id;
+    const anyCarry = boatCarry || pinCarry;
 
-    // The HelmLog start line: solid orange dashed polyline so it reads
-    // distinctly from the dashed-rose Vakaros line (different agent, same
-    // map). Tooltip explains.
+    // HelmLog start line: solid orange dashed polyline (distinct from the
+    // dashed-rose Vakaros line). When either end is carried over from a
+    // prior race (#702), drop opacity + use a sparser dash so the helm
+    // sees at-a-glance that it should re-ping if RC moved the line.
     const m = snapshot.line_metrics;
-    let tip = "HelmLog start line";
+    let tip = anyCarry ? "HelmLog start line (carried over)" : "HelmLog start line";
     if (m) {
       tip += " · " + m.line_length_m.toFixed(0) + " m · "
         + m.line_bearing_deg.toFixed(0) + "°";
@@ -180,20 +188,30 @@
           + (m.favoured_end ? " " + m.favoured_end : "");
       }
     }
+    if (boatCarry) tip += "\nboat end from race " + boatCarry;
+    if (pinCarry) tip += "\npin end from race " + pinCarry;
     const line = L.polyline([pin, boat], {
       color: "#f59e0b",
-      weight: 4,
-      opacity: 0.95,
-      dashArray: "8, 8",
+      weight: anyCarry ? 3 : 4,
+      opacity: anyCarry ? 0.55 : 0.95,
+      dashArray: anyCarry ? "2, 10" : "8, 8",
     }).addTo(map).bindTooltip(tip, { sticky: true }).bindPopup(tip);
     mapLayers.push(line);
 
+    const boatTip = boatCarry
+      ? "HelmLog boat-end ping (from race " + boatCarry + ")"
+      : "HelmLog boat-end ping";
+    const pinTip = pinCarry
+      ? "HelmLog pin-end ping (from race " + pinCarry + ")"
+      : "HelmLog pin-end ping";
     const boatMarker = L.circleMarker(boat, {
-      radius: 6, color: "#f59e0b", fillColor: "#f59e0b", fillOpacity: 1, weight: 2,
-    }).addTo(map).bindTooltip("HelmLog boat-end ping");
+      radius: 6, color: "#f59e0b", fillColor: "#f59e0b",
+      fillOpacity: boatCarry ? 0.4 : 1, weight: 2,
+    }).addTo(map).bindTooltip(boatTip);
     const pinMarker = L.circleMarker(pin, {
-      radius: 6, color: "#f59e0b", fillColor: "#fbbf24", fillOpacity: 1, weight: 2,
-    }).addTo(map).bindTooltip("HelmLog pin-end ping");
+      radius: 6, color: "#f59e0b", fillColor: "#fbbf24",
+      fillOpacity: pinCarry ? 0.4 : 1, weight: 2,
+    }).addTo(map).bindTooltip(pinTip);
     mapLayers.push(boatMarker, pinMarker);
   }
 

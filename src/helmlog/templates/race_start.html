@@ -45,47 +45,68 @@
   <div class="rs-phase">Phase: <strong id="rs-phase">—</strong>
     <span id="rs-sync-status"></span></div>
 
-  <div class="rs-clock" id="rs-clock">--:--</div>
-
-  <div class="rs-flags">
-    <div class="rs-flag-cell">
-      <div class="label">Class flag</div>
-      <div class="value" id="rs-class-flag">—</div>
+  <!-- Scheduled-pre-arm view: only visible when a schedule exists and the
+       FSM is still idle. Big d:hh:mm:ss countdown, no buttons — the
+       system auto-fires at T-15min so the helm can't accidentally arm
+       early or out-of-band. -->
+  <div id="rs-scheduled-view" style="display:none;text-align:center">
+    <div style="font-size:.9rem;color:var(--text-secondary)">
+      Scheduled start: <strong id="rs-sched-utc">—</strong>
+      <span id="rs-sched-event" style="color:var(--text-muted)"></span>
     </div>
-    <div class="rs-flag-cell">
-      <div class="label">Prep flag</div>
-      <div class="value" id="rs-prep-flag">—</div>
-    </div>
-    <div class="rs-flag-cell">
-      <div class="label">Special</div>
-      <div class="value" id="rs-special-flag">—</div>
+    <div id="rs-sched-countdown" class="rs-clock" style="color:var(--accent,#2563eb)">—</div>
+    <div style="font-size:.85rem;color:var(--text-muted)">
+      Auto-arms 15 min before the gun. Cancel from <a href="/control">/control</a>.
     </div>
   </div>
 
-  <div class="rs-grid-buttons">
-    <button id="rs-sync" class="primary" {% if not is_writer %}disabled{% endif %}>Sync to gun</button>
-    <button id="rs-arm" {% if not is_writer %}disabled{% endif %}>Arm 5-4-1-0</button>
-    <button id="rs-ping-boat" {% if not is_writer %}disabled{% endif %}>Boat-end ping</button>
-    <button id="rs-ping-pin" {% if not is_writer %}disabled{% endif %}>Pin-end ping</button>
-    <button id="rs-plus-min" {% if not is_writer %}disabled{% endif %}>+1 min</button>
-    <button id="rs-minus-min" {% if not is_writer %}disabled{% endif %}>−1 min</button>
-  </div>
+  <!-- Live FSM view: shown whenever the FSM is non-idle, or when no
+       schedule is set (so manual arm is still possible). -->
+  <div id="rs-live-view">
+    <div class="rs-clock" id="rs-clock">--:--</div>
 
-  <div class="rs-row">
-    <button id="rs-postpone" {% if not is_writer %}disabled{% endif %}>Postpone (AP)</button>
-    <button id="rs-recall" {% if not is_writer %}disabled{% endif %}>General recall</button>
-    <button id="rs-abandon" class="danger" {% if not is_writer %}disabled{% endif %}>Abandon (N)</button>
-    <button id="rs-reset" {% if not is_writer %}disabled{% endif %}>Reset</button>
-  </div>
+    <div class="rs-flags">
+      <div class="rs-flag-cell">
+        <div class="label">Class flag</div>
+        <div class="value" id="rs-class-flag">—</div>
+      </div>
+      <div class="rs-flag-cell">
+        <div class="label">Prep flag</div>
+        <div class="value" id="rs-prep-flag">—</div>
+      </div>
+      <div class="rs-flag-cell">
+        <div class="label">Special</div>
+        <div class="value" id="rs-special-flag">—</div>
+      </div>
+    </div>
 
-  <div class="rs-line">
-    <dl>
-      <dt>Line bearing</dt><dd id="rs-line-bearing">—</dd>
-      <dt>Line length</dt><dd id="rs-line-length">—</dd>
-      <dt>Bias</dt><dd id="rs-line-bias">—</dd>
-      <dt>Distance to line</dt><dd id="rs-line-dist">—</dd>
-      <dt>Time to line</dt><dd id="rs-line-time">—</dd>
-    </dl>
+    <div class="rs-grid-buttons">
+      <button id="rs-sync" class="primary" {% if not is_writer %}disabled{% endif %}>Sync to gun</button>
+      <button id="rs-arm" {% if not is_writer %}disabled{% endif %}>Arm 5-4-1-0</button>
+      <button id="rs-ping-boat" {% if not is_writer %}disabled{% endif %}>Boat-end ping</button>
+      <button id="rs-ping-pin" {% if not is_writer %}disabled{% endif %}>Pin-end ping</button>
+      <button id="rs-plus-min" {% if not is_writer %}disabled{% endif %}>+1 min</button>
+      <button id="rs-minus-min" {% if not is_writer %}disabled{% endif %}>−1 min</button>
+    </div>
+
+    <div class="rs-row">
+      <button id="rs-postpone" {% if not is_writer %}disabled{% endif %}>Postpone (AP)</button>
+      <button id="rs-recall" {% if not is_writer %}disabled{% endif %}>General recall</button>
+      <button id="rs-abandon" class="danger" {% if not is_writer %}disabled{% endif %}>Abandon (N)</button>
+      <button id="rs-reset" {% if not is_writer %}disabled{% endif %}>Reset</button>
+    </div>
+
+    <div class="rs-line">
+      <div id="rs-line-carryover" style="display:none;color:var(--warning,#f5c518);
+           font-size:.85rem;padding:.25rem 0;font-style:italic"></div>
+      <dl>
+        <dt>Line bearing</dt><dd id="rs-line-bearing">—</dd>
+        <dt>Line length</dt><dd id="rs-line-length">—</dd>
+        <dt>Bias</dt><dd id="rs-line-bias">—</dd>
+        <dt>Distance to line</dt><dd id="rs-line-dist">—</dd>
+        <dt>Time to line</dt><dd id="rs-line-time">—</dd>
+      </dl>
+    </div>
   </div>
 
   <div class="rs-error" id="rs-error"></div>

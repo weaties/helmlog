@@ -259,6 +259,152 @@ async def test_list_pings_ordered_oldest_first(storage: Storage) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Carry-over from prior same-date race (#702)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_carry_over_from_prior_race_same_date(storage: Storage) -> None:
+    """When race 2 has no pings, fall back to race 1's pings on the same
+    date, tagged with the source race_id."""
+    date = "2026-04-30"
+    r1 = await storage.start_race("CYC", T0, date, 1, "20260430-CYC-1")
+    await storage.add_start_line_ping(
+        race_id=r1.id,
+        end_kind="boat",
+        latitude_deg=47.6895,
+        longitude_deg=-122.4160,
+        captured_at=T0,
+        captured_by=None,
+    )
+    await storage.add_start_line_ping(
+        race_id=r1.id,
+        end_kind="pin",
+        latitude_deg=47.6901,
+        longitude_deg=-122.4189,
+        captured_at=T0,
+        captured_by=None,
+    )
+    r2 = await storage.start_race("CYC", T0, date, 2, "20260430-CYC-2")
+
+    line = await storage.get_latest_start_line(race_id=r2.id)
+    assert line is not None
+    assert line["boat_end_lat"] == 47.6895
+    assert line["pin_end_lat"] == 47.6901
+    # Both ends came from race 1 — annotated for the UI banner.
+    assert line["boat_end_race_id"] == r1.id
+    assert line["pin_end_race_id"] == r1.id
+
+
+@pytest.mark.asyncio
+async def test_carry_over_mixes_per_end(storage: Storage) -> None:
+    """If race 2 re-pinged the boat end only, that end is fresh while the
+    pin end carries over from race 1."""
+    date = "2026-04-30"
+    r1 = await storage.start_race("CYC", T0, date, 1, "20260430-CYC-1")
+    await storage.add_start_line_ping(
+        race_id=r1.id,
+        end_kind="boat",
+        latitude_deg=47.6895,
+        longitude_deg=-122.4160,
+        captured_at=T0,
+        captured_by=None,
+    )
+    await storage.add_start_line_ping(
+        race_id=r1.id,
+        end_kind="pin",
+        latitude_deg=47.6901,
+        longitude_deg=-122.4189,
+        captured_at=T0,
+        captured_by=None,
+    )
+    r2 = await storage.start_race("CYC", T0, date, 2, "20260430-CYC-2")
+    await storage.add_start_line_ping(
+        race_id=r2.id,
+        end_kind="boat",
+        latitude_deg=47.6905,
+        longitude_deg=-122.4170,
+        captured_at=T0,
+        captured_by=None,
+    )
+
+    line = await storage.get_latest_start_line(race_id=r2.id)
+    assert line is not None
+    # Boat end is the new race-2 ping.
+    assert line["boat_end_lat"] == 47.6905
+    assert line["boat_end_race_id"] == r2.id
+    # Pin end carried over from race 1.
+    assert line["pin_end_lat"] == 47.6901
+    assert line["pin_end_race_id"] == r1.id
+
+
+@pytest.mark.asyncio
+async def test_carry_over_does_not_cross_dates(storage: Storage) -> None:
+    """Pings from a different UTC date must not bleed forward."""
+    yesterday = "2026-04-29"
+    today = "2026-04-30"
+    r_yesterday = await storage.start_race("CYC", T0, yesterday, 1, "20260429-CYC-1")
+    await storage.add_start_line_ping(
+        race_id=r_yesterday.id,
+        end_kind="boat",
+        latitude_deg=47.0,
+        longitude_deg=-122.0,
+        captured_at=T0,
+        captured_by=None,
+    )
+    r_today = await storage.start_race("CYC", T0, today, 1, "20260430-CYC-1")
+
+    line = await storage.get_latest_start_line(race_id=r_today.id)
+    assert line is None
+
+
+@pytest.mark.asyncio
+async def test_no_carry_over_when_race_has_own_pings(storage: Storage) -> None:
+    """If the race has both ends pinged itself, it doesn't reach back."""
+    date = "2026-04-30"
+    r1 = await storage.start_race("CYC", T0, date, 1, "20260430-CYC-1")
+    await storage.add_start_line_ping(
+        race_id=r1.id,
+        end_kind="boat",
+        latitude_deg=1.0,
+        longitude_deg=1.0,
+        captured_at=T0,
+        captured_by=None,
+    )
+    await storage.add_start_line_ping(
+        race_id=r1.id,
+        end_kind="pin",
+        latitude_deg=2.0,
+        longitude_deg=2.0,
+        captured_at=T0,
+        captured_by=None,
+    )
+    r2 = await storage.start_race("CYC", T0, date, 2, "20260430-CYC-2")
+    await storage.add_start_line_ping(
+        race_id=r2.id,
+        end_kind="boat",
+        latitude_deg=10.0,
+        longitude_deg=10.0,
+        captured_at=T0,
+        captured_by=None,
+    )
+    await storage.add_start_line_ping(
+        race_id=r2.id,
+        end_kind="pin",
+        latitude_deg=20.0,
+        longitude_deg=20.0,
+        captured_at=T0,
+        captured_by=None,
+    )
+    line = await storage.get_latest_start_line(race_id=r2.id)
+    assert line is not None
+    assert line["boat_end_lat"] == 10.0
+    assert line["pin_end_lat"] == 20.0
+    assert line["boat_end_race_id"] == r2.id
+    assert line["pin_end_race_id"] == r2.id
+
+
+# ---------------------------------------------------------------------------
 # Schema migration sanity
 # ---------------------------------------------------------------------------
 

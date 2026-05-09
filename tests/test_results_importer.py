@@ -612,6 +612,176 @@ async def test_force_rematch_invalidates_old_and_new_live_sessions(
 
 
 @pytest.mark.asyncio
+async def test_filter_drops_races_without_own_sail(storage: Storage) -> None:
+    """Regression for #735: STYC publishes 10 division-races per race-num.
+    With own_sail known, only races containing that sail are persisted.
+    """
+    from helmlog.results.base import BoatFinish, RaceData, Regatta, RegattaResults
+
+    own = RaceData(
+        source_id="own_div",
+        race_number=1,
+        name="Race 1",
+        date="2026-05-04",
+        class_name="Flying Sails Div 6",
+        finishes=(
+            BoatFinish(sail_number="475", place=1),
+            BoatFinish(sail_number="403", place=2),
+        ),
+    )
+    foreign = RaceData(
+        source_id="foreign_div",
+        race_number=1,
+        name="Race 1",
+        date="2026-05-04",
+        class_name="Flying Sails Div 2",
+        finishes=(BoatFinish(sail_number="34", place=1),),
+    )
+    results = RegattaResults(
+        regatta=Regatta(source="test", source_id="filter_t1", name="Test"),
+        races=(own, foreign),
+    )
+
+    counts = await import_results(storage, results, own_sail="475")
+    assert counts["races_upserted"] == 1, "foreign division must be filtered out"
+
+    db = storage._conn()
+    cur = await db.execute(
+        "SELECT source_id FROM races WHERE source = 'test' ORDER BY source_id",
+    )
+    rows = await cur.fetchall()
+    assert [r["source_id"] for r in rows] == ["own_div"]
+
+
+@pytest.mark.asyncio
+async def test_filter_keeps_all_when_sail_absent_from_regatta(storage: Storage) -> None:
+    """If the own sail isn't in *any* race (spectator regatta), don't
+    silently drop everything — fall back to importing every race."""
+    from helmlog.results.base import BoatFinish, RaceData, Regatta, RegattaResults
+
+    foreign1 = RaceData(
+        source_id="foreign_a",
+        race_number=1,
+        name="Race 1",
+        date="2026-05-04",
+        class_name="Class A",
+        finishes=(BoatFinish(sail_number="34", place=1),),
+    )
+    foreign2 = RaceData(
+        source_id="foreign_b",
+        race_number=2,
+        name="Race 2",
+        date="2026-05-04",
+        class_name="Class B",
+        finishes=(BoatFinish(sail_number="153", place=1),),
+    )
+    results = RegattaResults(
+        regatta=Regatta(source="test", source_id="filter_t2", name="Test"),
+        races=(foreign1, foreign2),
+    )
+
+    counts = await import_results(storage, results, own_sail="475")
+    assert counts["races_upserted"] == 2, "fall back to all races when own sail absent"
+
+
+@pytest.mark.asyncio
+async def test_filter_skipped_when_no_own_sail(storage: Storage) -> None:
+    """No identity → no filter, every race imported (back-compat)."""
+    from helmlog.results.base import BoatFinish, RaceData, Regatta, RegattaResults
+
+    a = RaceData(
+        source_id="a_div",
+        race_number=1,
+        name="Race 1",
+        date="2026-05-04",
+        class_name="Class A",
+        finishes=(BoatFinish(sail_number="475", place=1),),
+    )
+    b = RaceData(
+        source_id="b_div",
+        race_number=1,
+        name="Race 1",
+        date="2026-05-04",
+        class_name="Class B",
+        finishes=(BoatFinish(sail_number="34", place=1),),
+    )
+    results = RegattaResults(
+        regatta=Regatta(source="test", source_id="filter_t3", name="Test"),
+        races=(a, b),
+    )
+
+    counts = await import_results(storage, results, own_sail=None)
+    assert counts["races_upserted"] == 2
+
+
+@pytest.mark.asyncio
+async def test_link_matches_when_local_session_crosses_utc_midnight(
+    storage: Storage,
+) -> None:
+    """Regression for #734: a local session whose ``start_utc`` is past
+    midnight UTC but in the venue-local previous evening must still link
+    to an imported race published with the venue-local date.
+
+    Concrete example from corvopi-live: STYC publishes a Wed-night race
+    as date 2026-05-04, but the local session's start_utc is
+    2026-05-05T01:27Z (= 2026-05-04 18:27 PDT). String-compare on
+    ``races.date`` (UTC-derived → '2026-05-05') previously failed to
+    match the imported '2026-05-04' and left ``local_session_id`` NULL.
+    """
+    from helmlog.results.base import BoatFinish, RaceData, Regatta, RegattaResults
+
+    db = storage._conn()
+    # Local session started at 18:27 PDT on May 4 — that's 01:27 UTC on May 5.
+    # The stored ``date`` column is UTC-derived ('2026-05-05'), but the
+    # venue-local date is '2026-05-04'.
+    await db.execute(
+        "INSERT INTO races (name, event, race_num, date, start_utc, session_type)"
+        " VALUES (?, ?, ?, ?, ?, 'race')",
+        (
+            "Local Wed evening race",
+            "Local",
+            1,
+            "2026-05-05",
+            "2026-05-05T01:27:15+00:00",
+        ),
+    )
+    cur = await db.execute("SELECT last_insert_rowid()")
+    (local_id,) = await cur.fetchone()  # type: ignore[misc]
+    await db.commit()
+
+    # Imported race published with the venue-local date '2026-05-04'.
+    imported = RaceData(
+        source_id="cross_midnight_race",
+        race_number=4,
+        name="Race 4",
+        date="2026-05-04",
+        class_name="J/105",
+        finishes=(BoatFinish(sail_number="475", place=1),),
+    )
+    results = RegattaResults(
+        regatta=Regatta(
+            source="test",
+            source_id="cross_midnight",
+            name="Cross-midnight regatta",
+            venue_tz="America/Los_Angeles",
+        ),
+        races=(imported,),
+    )
+
+    await import_results(storage, results)
+
+    cur = await db.execute(
+        "SELECT local_session_id FROM races WHERE source = 'test' AND source_id = ?",
+        ("cross_midnight_race",),
+    )
+    row = await cur.fetchone()
+    assert row is not None
+    assert row["local_session_id"] == local_id, (
+        "imported race must auto-link via venue-local date conversion"
+    )
+
+
+@pytest.mark.asyncio
 async def test_race_with_no_date_skipped(storage: Storage) -> None:
     """R: imported race with no date is rejected, not written."""
     from helmlog.results.base import BoatFinish, RaceData, Regatta, RegattaResults

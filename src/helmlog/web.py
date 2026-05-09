@@ -309,4 +309,19 @@ def create_app(
 
     storage.set_live_callback(_on_live_update)
 
+    def _on_position_update(payload: dict) -> None:  # type: ignore[type-arg]
+        """Sync callback from Storage.update_live() for PositionRecord → broadcast.
+
+        Throttled to 1 Hz inside Storage so the wire stays predictable
+        regardless of GPS fix rate. Frontend appends each fix to its track
+        polyline so the live page extends in real time without polling.
+        """
+        try:
+            loop = _asyncio.get_running_loop()
+            loop.create_task(broadcast(app.state.ws_clients, {"type": "position", "data": payload}))
+        except RuntimeError:
+            pass
+
+    storage.set_position_callback(_on_position_update)
+
     return app

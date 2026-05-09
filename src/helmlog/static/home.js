@@ -1105,10 +1105,12 @@ function toggleSchedulePanel() {
   const panel = document.getElementById('schedule-panel');
   panel.classList.toggle('hidden');
   if (!panel.classList.contains('hidden')) {
-    // Pre-fill with a time 5 minutes from now
+    // Pre-fill with a time 5 minutes from now, second-precise (the input
+    // has step="1" so seconds are editable for pursuit-start times).
     const d = new Date(Date.now() + 5 * 60000);
     const pad = n => String(n).padStart(2, '0');
-    const local = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const local = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
+      + `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
     document.getElementById('schedule-time').value = local;
   }
 }
@@ -1142,21 +1144,29 @@ async function cancelSchedule() {
   await loadState();
 }
 
+function _fmtScheduleCountdown(seconds) {
+  if (seconds <= 0) return 'Starting...';
+  const days = Math.floor(seconds / 86400);
+  const hrs = Math.floor((seconds % 86400) / 3600);
+  const min = Math.floor((seconds % 3600) / 60);
+  const sec = seconds % 60;
+  if (days > 0) return `${days}d ${hrs}h ${min}m ${String(sec).padStart(2, '0')}s`;
+  if (hrs > 0) return `${hrs}h ${min}m ${String(sec).padStart(2, '0')}s`;
+  if (min > 0) return `${min}m ${String(sec).padStart(2, '0')}s`;
+  return `${sec}s`;
+}
+
 function _startScheduleCountdown(fireAt) {
   _stopScheduleCountdown();
   const el = document.getElementById('schedule-countdown-time');
   function update() {
     const diff = Math.max(0, Math.floor((fireAt - Date.now()) / 1000));
+    el.textContent = _fmtScheduleCountdown(diff);
     if (diff <= 0) {
-      el.textContent = 'Starting...';
       _stopScheduleCountdown();
-      // Poll state to pick up the new race
+      // Poll state to pick up the new race.
       setTimeout(() => loadState(), 2000);
-      return;
     }
-    const m = Math.floor(diff / 60);
-    const s = diff % 60;
-    el.textContent = `${m}:${String(s).padStart(2, '0')}`;
   }
   update();
   scheduleCountdownInterval = setInterval(update, 1000);

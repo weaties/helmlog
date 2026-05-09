@@ -309,7 +309,6 @@ async function init() {
   // than flashing them on screen and yanking them away.
   if (cfg.dataset.live === '1') {
     document.body.classList.add('live-race');
-    document.getElementById('live-instruments-card').style.display = '';
   }
 
   // If a deep-link query string targets a specific moment, start opening
@@ -384,20 +383,25 @@ function _maybeOpenDeepLinkMoment() {
 // ---------------------------------------------------------------------------
 
 const _LIVE_REFRESH_MS = 15000;
-const _LIVE_INSTRUMENT_MS = 2000;
 let _liveInterval = null;
-let _liveInstrumentInterval = null;
-let _liveInstTickInterval = null;
 let _liveWs = null;
 let _liveLastRefresh = 0;
 let _livePhotoUrl = null;
+let _liveWsBackoffMs = 1000;
+let _liveWsRetryTimer = null;
+let _liveGotPositionViaWs = false;
 
 async function _liveRefreshOnce() {
+  // Polling fallback. Only invoked if the WS is dead — once a position
+  // arrives over the socket, _liveGotPositionViaWs flips and this stops
+  // re-fetching the track endpoint (the expensive part on cellular).
   const now = Date.now();
   if (now - _liveLastRefresh < _LIVE_REFRESH_MS - 500) return;
   _liveLastRefresh = now;
   try {
-    await Promise.all([loadTrack(), loadVideos(), _refreshLivePhoto()]);
+    const tasks = [loadVideos(), _refreshLivePhoto()];
+    if (!_liveGotPositionViaWs) tasks.push(loadTrack());
+    await Promise.all(tasks);
   } catch (e) { /* non-fatal */ }
 }
 
@@ -427,44 +431,245 @@ async function _refreshLivePhoto() {
   } catch (e) { /* non-fatal */ }
 }
 
-async function _refreshLiveInstruments() {
+// Haversine distance in nautical miles between two [lat, lng] points.
+// Used by the live distance gauges and the boat→start straight-line
+// computation. 3440.065 nm is the Earth's mean radius in nm.
+function _haversineNm(a, b) {
+  const toRad = (d) => d * Math.PI / 180;
+  const dLat = toRad(b[0] - a[0]);
+  const dLon = toRad(b[1] - a[1]);
+  const lat1 = toRad(a[0]);
+  const lat2 = toRad(b[0]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * 3440.065 * Math.asin(Math.sqrt(h));
+}
+
+// Cumulative track length (nm) from start_utc to the latest fix. Iterates
+// _trackData.latLngs and sums Haversine legs from the first point at or
+// after race start_utc.
+let _gunLatLngIdx = -1;
+function _recomputeDistanceSailed() {
+  if (!_trackData || !_trackData.latLngs.length || !_session || !_session.start_utc) return;
+  const startMs = new Date(_session.start_utc).getTime();
+  if (_gunLatLngIdx < 0) {
+    for (let i = 0; i < _trackData.timestamps.length; i++) {
+      if (_trackData.timestamps[i].getTime() >= startMs) { _gunLatLngIdx = i; break; }
+    }
+    if (_gunLatLngIdx < 0) return; // no post-gun fixes yet
+  }
+  let total = 0;
+  for (let i = _gunLatLngIdx + 1; i < _trackData.latLngs.length; i++) {
+    total += _haversineNm(_trackData.latLngs[i - 1], _trackData.latLngs[i]);
+  }
+  const el = document.getElementById('hud-dist-sailed');
+  if (el) el.textContent = total.toFixed(2);
+}
+
+// Course distance: start → rounding₁ → … → rounding_n → boat. With no
+// roundings yet (the live-race case — detector only runs at race-end),
+// degrades to start → boat. _roundings is populated lazily from the
+// maneuvers endpoint once it's been run.
+let _roundings = []; // [{ts, lat, lon}]
+function _recomputeCourseDistance() {
+  if (!_trackData || !_trackData.latLngs.length || !_session || !_session.start_utc) return;
+  if (_gunLatLngIdx < 0) return;
+  const startLatLng = _trackData.latLngs[_gunLatLngIdx];
+  const boat = _trackData.latLngs[_trackData.latLngs.length - 1];
+  let total = 0;
+  let prev = startLatLng;
+  for (const r of _roundings) {
+    const here = [r.lat, r.lon];
+    total += _haversineNm(prev, here);
+    prev = here;
+  }
+  total += _haversineNm(prev, boat);
+  const el = document.getElementById('hud-dist-line');
+  if (el) el.textContent = total.toFixed(2);
+}
+
+// Resolve roundings from the maneuvers list to (lat, lon) by snapping
+// each rounding's ts to the nearest position in _trackData. Stored in
+// _roundings so the course-distance compute can iterate them. Refreshes
+// any time _maneuvers or _trackData changes.
+function _populateRoundings() {
+  if (typeof _maneuvers === 'undefined' || !_maneuvers || !_trackData) {
+    _roundings = [];
+    return;
+  }
+  const tsList = _trackData.timestamps;
+  if (!tsList.length) { _roundings = []; return; }
+  const out = [];
+  for (const m of _maneuvers) {
+    if (m.type !== 'rounding') continue;
+    const tsMs = new Date(m.ts.endsWith('Z') || m.ts.includes('+') ? m.ts : m.ts + 'Z').getTime();
+    let bestIdx = -1, bestDt = Infinity;
+    for (let i = 0; i < tsList.length; i++) {
+      const dt = Math.abs(tsList[i].getTime() - tsMs);
+      if (dt < bestDt) { bestDt = dt; bestIdx = i; }
+    }
+    if (bestIdx >= 0) {
+      const ll = _trackData.latLngs[bestIdx];
+      out.push({ts: m.ts, lat: ll[0], lon: ll[1]});
+    }
+  }
+  _roundings = out;
+}
+
+// Latest live instrument snapshot from the WS — used to enrich the
+// synthetic _replaySamples row we push when a new position arrives, so
+// the scrubber HUD has data when pinned at the live tip.
+let _lastLiveInstruments = null;
+
+// Push live instrument values straight into the GAUGES card so it stays
+// real-time without polling /api/instruments. Mirrors the binding inside
+// _renderHud() — but driven by the WS message instead of the scrubber.
+// Set / drift now arrive pre-computed from the server (#729) so we just
+// bind them here alongside the raw measurements.
+function _renderLiveGauges(d) {
+  if (!d) return;
+  _lastLiveInstruments = d;
+  const setNum = (id, val, decimals) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = (val != null && !Number.isNaN(val)) ? Number(val).toFixed(decimals) : '—';
+  };
+  const setDeg = (id, val) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (val == null || Number.isNaN(val)) { el.textContent = '—'; return; }
+    const wrapped = ((Math.round(val) % 360) + 360) % 360;
+    el.textContent = wrapped + '°';
+  };
+  const setSigned = (id, val, decimals) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (val == null || Number.isNaN(val)) { el.textContent = '—'; return; }
+    const sign = Number(val) >= 0 ? '+' : '';
+    el.textContent = sign + Number(val).toFixed(decimals) + '°';
+  };
+  setNum('hud-stw', d.bsp_kts, 2);
+  setNum('hud-sog', d.sog_kts, 2);
+  setNum('hud-tws', d.tws_kts, 1);
+  setNum('hud-aws', d.aws_kts, 1);
+  setDeg('hud-twd', d.twd_deg);
+  setDeg('hud-twa', d.twa_deg);
+  setDeg('hud-awa', d.awa_deg);
+  setNum('hud-hdg', d.heading_deg, 0);
+  setNum('hud-cog', d.cog_deg, 0);
+  setSigned('hud-heel', d.heel_deg, 1);
+  setSigned('hud-trim', d.trim_deg, 1);
+  setDeg('hud-set', d.set_deg);
+  setNum('hud-drift', d.drift_kts, 2);
+}
+
+// Throttle for live overlay rebuilds — wind/current arrow layers iterate
+// the entire track on each rebuild, so 1 Hz would be wasteful. The
+// existing arrow cadence is multi-second (zoom-dependent) so a 10 s
+// rebuild is plenty to extend coverage along the new track segment.
+let _lastOverlayRebuildMs = 0;
+const _OVERLAY_REBUILD_INTERVAL_MS = 10000;
+
+// Append a position fix to the polyline + casing and refresh distances.
+// If the user is pinned at the end of the scrubber, also advance the
+// replay clock so the boat icon, HUD, and overlays follow the live tip.
+// No-op if the fix is older than the last one we have (out-of-order
+// arrival, e.g. on reconnect after a brief disconnect).
+function _appendLivePosition(payload) {
+  if (!_trackData || !payload || payload.lat == null || payload.lon == null) return;
+  const ts = new Date(payload.ts.endsWith('Z') || payload.ts.includes('+') ? payload.ts : payload.ts + 'Z');
+  const last = _trackData.timestamps[_trackData.timestamps.length - 1];
+  if (last && ts <= last) return;
+  _trackData.latLngs.push([payload.lat, payload.lon]);
+  _trackData.timestamps.push(ts);
+  if (_trackData.line) _trackData.line.setLatLngs(_trackData.latLngs);
+  if (_trackData.casing) _trackData.casing.setLatLngs(_trackData.latLngs);
+  _liveGotPositionViaWs = true;
+  _recomputeDistanceSailed();
+  _recomputeCourseDistance();
+
+  // Live-tail follow: extend the scrubber range and, if the user was
+  // pinned at the end (within 1 s of _replayEnd), advance the play
+  // clock so the boat cursor, HUD, sparklines, and overlay arrows all
+  // follow the new fix.
+  if (_replayEnd && _replaySamples) {
+    const wasAtEnd = _playClock.positionUtc &&
+                     _playClock.positionUtc.getTime() >= _replayEnd.getTime() - 1000;
+    if (_lastLiveInstruments) {
+      const inst = _lastLiveInstruments;
+      _replaySamples.push({
+        ts: ts,
+        stw: inst.bsp_kts,
+        sog: inst.sog_kts,
+        tws: inst.tws_kts,
+        twa: inst.twa_deg,
+        twd: inst.twd_deg,
+        aws: inst.aws_kts,
+        awa: inst.awa_deg,
+        hdg: inst.heading_deg,
+        cog: inst.cog_deg,
+        heel: inst.heel_deg,
+        trim: inst.trim_deg,
+        set: inst.set_deg,
+        drift: inst.drift_kts,
+      });
+    }
+    _replayEnd = ts;
+    if (wasAtEnd) {
+      // setPosition fans out to all _playClock consumers — the map
+      // cursor, HUD, sparklines, etc. — so the live tip stays selected
+      // and _updateReplayControls() keeps the scrubber in sync.
+      setPosition(ts, {source: 'live-tail'});
+    } else if (typeof _updateReplayControls === 'function') {
+      // User has scrubbed back; don't move the playhead, but keep the
+      // scrubber's max + duration label in sync with the new end.
+      _updateReplayControls();
+    }
+
+    // Throttled rebuild so wind/current arrows extend along the new
+    // segment of track. Skipped if neither overlay is enabled.
+    const nowMs = Date.now();
+    if (nowMs - _lastOverlayRebuildMs >= _OVERLAY_REBUILD_INTERVAL_MS) {
+      _lastOverlayRebuildMs = nowMs;
+      if (_currentEnabled && typeof _rebuildCurrentOverlay === 'function') _rebuildCurrentOverlay();
+      if (_windEnabled && typeof _rebuildWindOverlay === 'function') _rebuildWindOverlay();
+    }
+  }
+}
+
+function _handleLiveWsMessage(ev) {
+  let msg;
+  try { msg = JSON.parse(ev.data); } catch (e) { return; }
+  if (msg.type === 'position') {
+    _appendLivePosition(msg.data);
+  } else if (msg.type === 'instruments') {
+    _renderLiveGauges(msg.data);
+  }
+}
+
+function _connectLiveWs() {
   try {
-    const r = await fetch('/api/instruments');
-    if (!r.ok) return;
-    const d = await r.json();
-    const set = (id, val, decimals) => {
-      const el = document.getElementById(id);
-      if (el) el.textContent = val != null ? Number(val).toFixed(decimals) : '—';
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    _liveWs = new WebSocket(`${proto}//${location.host}/ws/live`);
+    _liveWs.onmessage = _handleLiveWsMessage;
+    _liveWs.onopen = () => { _liveWsBackoffMs = 1000; };
+    _liveWs.onclose = () => {
+      _liveWs = null;
+      // Reconnect with exponential backoff capped at 30 s. The polling
+      // fallback in _liveRefreshOnce() takes over (re-fetching the full
+      // track) until the socket comes back.
+      _liveGotPositionViaWs = false;
+      if (_liveWsRetryTimer) clearTimeout(_liveWsRetryTimer);
+      _liveWsRetryTimer = setTimeout(_connectLiveWs, _liveWsBackoffMs);
+      _liveWsBackoffMs = Math.min(_liveWsBackoffMs * 2, 30000);
     };
-    set('liv-sog', d.sog_kts, 1);
-    set('liv-cog', d.cog_deg, 0);
-    set('liv-hdg', d.heading_deg, 0);
-    set('liv-bsp', d.bsp_kts, 1);
-    set('liv-aws', d.aws_kts, 1);
-    set('liv-awa', d.awa_deg, 0);
-    set('liv-tws', d.tws_kts, 1);
-    set('liv-twa', d.twa_deg, 0);
-    set('liv-twd', d.twd_deg, 0);
-    set('liv-rdr', d.rudder_deg, 1);
-  } catch (e) { /* non-fatal */ }
+    _liveWs.onerror = () => { try { _liveWs.close(); } catch (e) {} };
+  } catch (e) { /* fallback to polling */ }
 }
 
 function _startLiveRefresh() {
   if (_liveInterval) return;
   _liveInterval = setInterval(_liveRefreshOnce, _LIVE_REFRESH_MS);
-  _liveInstrumentInterval = setInterval(_refreshLiveInstruments, _LIVE_INSTRUMENT_MS);
-  _liveInstTickInterval = setInterval(() => {
-    const el = document.getElementById('live-inst-time');
-    if (el) el.textContent = new Date().toISOString().substring(11, 19) + ' UTC';
-  }, 1000);
-  _refreshLiveInstruments();
   _refreshLivePhoto();
-  try {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    _liveWs = new WebSocket(`${proto}//${location.host}/ws/live`);
-    _liveWs.onmessage = () => { _liveRefreshOnce(); };
-    _liveWs.onclose = () => { _liveWs = null; };
-  } catch (e) { /* polling covers the fallback */ }
+  _connectLiveWs();
 }
 
 // ---------------------------------------------------------------------------
@@ -594,15 +799,21 @@ async function loadTrack() {
   // cursor continues to interpolate against the raw latLngs so the
   // boat position itself isn't lagged by the smoothing.
   const trackColor = cssVar('--warning') || '#fbbf24';
-  // The /track endpoint now returns 1 Hz mean-averaged positions (one
-  // row per second across all GPS sources), so we don't need any
-  // frontend smoothing or decimation — the polyline already matches
-  // Vakaros's vertex density. Just style it with the same dash pattern
-  // so the two tracks read the same way.
+  // Dark casing under the bright dashed line so the track reads against
+  // light water tiles — the dashed yellow alone disappeared on OSM blue.
+  // The casing is solid + slightly wider, the bright line is dashed on
+  // top, preserving the Vakaros-style visual identity.
+  const casing = L.polyline(latLngs, {
+    color: '#1a1a1a',
+    weight: 5,
+    opacity: 0.55,
+    lineCap: 'round',
+    lineJoin: 'round',
+  }).addTo(_map);
   const line = L.polyline(latLngs, {
     color: trackColor,
     weight: 3,
-    opacity: 0.9,
+    opacity: 1,
     lineCap: 'butt',
     lineJoin: 'miter',
     dashArray: '2, 4',
@@ -628,7 +839,12 @@ async function loadTrack() {
   });
   const cursor = L.marker([0, 0], {icon: cursorIcon, interactive: false});
 
-  _trackData = {latLngs, timestamps, line, cursor};
+  _trackData = {latLngs, timestamps, line, casing, cursor};
+  // Reset the gun-index cache so the next compute walks from scratch.
+  _gunLatLngIdx = -1;
+  _recomputeDistanceSailed();
+  _populateRoundings();
+  _recomputeCourseDistance();
 
   // Map is a consumer: render the cursor at the requested UTC. We use a
   // continuous interpolated position (not the nearest sample index) so the
@@ -670,6 +886,14 @@ async function loadTrack() {
     await loadVakarosOverlay();
   } catch (err) {
     console.warn('Vakaros overlay failed to load:', err);
+  }
+
+  // HelmLog start-line overlay (#644 + bias-overlay): boat/pin markers and
+  // a time-synced bias indicator that updates as the scrubber moves.
+  try {
+    await loadHelmlogStartLineOverlay();
+  } catch (err) {
+    console.warn('HelmLog start-line overlay failed to load:', err);
   }
 }
 
@@ -835,8 +1059,13 @@ async function loadVakarosOverlay() {
     }
     if (skBox && _trackData && _trackData.line) {
       skBox.addEventListener('change', function() {
-        if (skBox.checked) { _trackData.line.addTo(_map); }
-        else { _map.removeLayer(_trackData.line); }
+        if (skBox.checked) {
+          if (_trackData.casing) _trackData.casing.addTo(_map);
+          _trackData.line.addTo(_map);
+        } else {
+          _map.removeLayer(_trackData.line);
+          if (_trackData.casing) _map.removeLayer(_trackData.casing);
+        }
       });
     }
   }
@@ -883,6 +1112,175 @@ async function loadVakarosOverlay() {
       start_favored_end: ctx.favored_end || null,
     };
     _injectVakarosStartIntoManeuvers();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// HelmLog start-line overlay (#644 + bias overlay)
+// ---------------------------------------------------------------------------
+//
+// Renders boat/pin markers, a dashed orange line, and dynamic upwind ticks
+// at each end that follow the replay scrubber. The favoured end is
+// highlighted with a halo. All of it is computed from /race-start-overlay
+// (the line) + _replaySamples (TWD-at-cursor); no extra fetch on scrub.
+
+let _hlStartLineData = null;  // {boat: [lat,lon], pin: [...], length_m, bearing_deg}
+let _hlBoatHalo = null;
+let _hlPinHalo = null;
+let _hlPinTick = null;
+let _hlBoatTick = null;
+let _hlBiasLabel = null;
+
+function _angleDiffDeg(a, b) {
+  const d = ((a - b + 540) % 360) - 180;
+  return d;
+}
+
+function _findReplaySampleAt(utcMs) {
+  if (!_replaySamples || !_replaySamples.length) return null;
+  // Binary search for the latest sample with ts <= utcMs.
+  let lo = 0;
+  let hi = _replaySamples.length - 1;
+  if (_replaySamples[0].ts.getTime() > utcMs) return null;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (_replaySamples[mid].ts.getTime() <= utcMs) lo = mid;
+    else hi = mid - 1;
+  }
+  return _replaySamples[lo];
+}
+
+async function loadHelmlogStartLineOverlay() {
+  if (!_map) return;
+  const r = await fetch('/api/sessions/' + SESSION_ID + '/race-start-overlay');
+  if (!r.ok) return;
+  const data = await r.json();
+  if (!data || !data.line) return;
+
+  _hlStartLineData = data.line;
+  const HELMLOG_COLOR = '#f59e0b';
+
+  // Static endpoint markers + line (always on, regardless of scrubber).
+  const boat = data.line.boat;
+  const pin = data.line.pin;
+  const boatTip = data.line.boat_end_carried_over_from_race_id
+    ? 'HelmLog boat-end (from race ' + data.line.boat_end_carried_over_from_race_id + ')'
+    : 'HelmLog boat-end ping';
+  const pinTip = data.line.pin_end_carried_over_from_race_id
+    ? 'HelmLog pin-end (from race ' + data.line.pin_end_carried_over_from_race_id + ')'
+    : 'HelmLog pin-end ping';
+  L.polyline([pin, boat], {
+    color: HELMLOG_COLOR, weight: 3, opacity: 0.9, dashArray: '8, 8',
+  }).addTo(_map).bindTooltip('HelmLog start line', { sticky: true });
+  L.circleMarker(boat, {
+    radius: 7, color: HELMLOG_COLOR, fillColor: HELMLOG_COLOR,
+    fillOpacity: 0.9, weight: 2,
+  }).addTo(_map).bindTooltip(boatTip);
+  L.circleMarker(pin, {
+    radius: 7, color: HELMLOG_COLOR, fillColor: '#fbbf24',
+    fillOpacity: 0.9, weight: 2,
+  }).addTo(_map).bindTooltip(pinTip);
+
+  // Halos behind each marker — sized/colored by which end is favoured
+  // at the current scrub time. Drawn beneath the static markers (added
+  // first so they paint underneath).
+  _hlBoatHalo = L.circleMarker(boat, {
+    radius: 0, color: HELMLOG_COLOR, fillColor: HELMLOG_COLOR,
+    fillOpacity: 0.25, weight: 0, interactive: false,
+  }).addTo(_map);
+  _hlPinHalo = L.circleMarker(pin, {
+    radius: 0, color: HELMLOG_COLOR, fillColor: '#fbbf24',
+    fillOpacity: 0.25, weight: 0, interactive: false,
+  }).addTo(_map);
+
+  // Wind ticks pointing upwind from each end — redrawn every clock tick.
+  _hlBoatTick = L.polyline([boat, boat], {
+    color: HELMLOG_COLOR, weight: 2, opacity: 0.85, interactive: false,
+  }).addTo(_map);
+  _hlPinTick = L.polyline([pin, pin], {
+    color: HELMLOG_COLOR, weight: 2, opacity: 0.85, interactive: false,
+  }).addTo(_map);
+
+  // Bias label panel below the map (re-uses the existing track-hint area
+  // styling; we add our own tiny block right under it).
+  _ensureHlBiasLabel();
+
+  // Register as a play-clock surface so it updates on every tick/seek.
+  registerSurface('hl-start-bias', function(utc) { _renderHlStartBias(utc); });
+  // Initial render at the current cursor (may be _replayStart on first load).
+  if (_playClock && _playClock.positionUtc) {
+    _renderHlStartBias(_playClock.positionUtc);
+  }
+}
+
+function _ensureHlBiasLabel() {
+  if (_hlBiasLabel) return;
+  const container = document.getElementById('track-container');
+  if (!container) return;
+  _hlBiasLabel = document.createElement('div');
+  _hlBiasLabel.id = 'hl-bias-label';
+  _hlBiasLabel.style.cssText =
+    'font-size:.78rem;color:var(--text-secondary);padding:6px 8px;'
+    + 'background:var(--bg-input);border:1px solid var(--border);'
+    + 'border-radius:4px;margin-top:6px;font-variant-numeric:tabular-nums';
+  _hlBiasLabel.innerHTML = 'Line bias: <span id="hl-bias-text">—</span>';
+  container.appendChild(_hlBiasLabel);
+}
+
+function _renderHlStartBias(utc) {
+  if (!_hlStartLineData || !_hlBoatHalo || !_hlPinHalo) return;
+  const utcMs = utc instanceof Date ? utc.getTime() : new Date(utc).getTime();
+  const sample = _findReplaySampleAt(utcMs);
+  const twd = sample && sample.twd != null ? sample.twd : null;
+  const tws = sample && sample.tws != null ? sample.tws : null;
+  const lineBearing = _hlStartLineData.bearing_deg;
+  const boat = _hlStartLineData.boat;
+  const pin = _hlStartLineData.pin;
+  const lineLen = _hlStartLineData.length_m || 100;
+
+  const labelEl = document.getElementById('hl-bias-text');
+
+  if (twd == null) {
+    if (labelEl) labelEl.textContent = '— (no wind data at this moment)';
+    if (_hlBoatTick) _hlBoatTick.setLatLngs([boat, boat]);
+    if (_hlPinTick) _hlPinTick.setLatLngs([pin, pin]);
+    if (_hlBoatHalo) _hlBoatHalo.setRadius(0);
+    if (_hlPinHalo) _hlPinHalo.setRadius(0);
+    return;
+  }
+
+  // Bias = 90 − |angle_diff(line_bearing, twd)|. Positive = pin favoured.
+  const delta = _angleDiffDeg(lineBearing, twd);
+  const bias = 90 - Math.abs(delta);
+  const favoured = Math.abs(bias) < 1 ? 'neutral' : (bias > 0 ? 'pin' : 'boat');
+
+  // Wind ticks upwind from each end (toward TWD).
+  const tickLen = Math.max(40, lineLen * 0.4);
+  const boatUp = _offsetPoint(boat[0], boat[1], twd, tickLen);
+  const pinUp = _offsetPoint(pin[0], pin[1], twd, tickLen);
+  if (_hlBoatTick) _hlBoatTick.setLatLngs([boat, boatUp]);
+  if (_hlPinTick) _hlPinTick.setLatLngs([pin, pinUp]);
+
+  // Halo on the favoured end. Size scales with bias magnitude (1°→10px, 90°→25px).
+  const haloRadius = Math.min(25, 10 + Math.abs(bias) / 6);
+  if (favoured === 'boat') {
+    _hlBoatHalo.setRadius(haloRadius);
+    _hlPinHalo.setRadius(0);
+  } else if (favoured === 'pin') {
+    _hlPinHalo.setRadius(haloRadius);
+    _hlBoatHalo.setRadius(0);
+  } else {
+    _hlBoatHalo.setRadius(0);
+    _hlPinHalo.setRadius(0);
+  }
+
+  if (labelEl) {
+    const sign = bias >= 0 ? '+' : '';
+    const twsTxt = tws != null ? ' · ' + tws.toFixed(1) + ' kt' : '';
+    labelEl.innerHTML =
+      '<strong>' + sign + bias.toFixed(0) + '°</strong> '
+      + '<span style="text-transform:uppercase;letter-spacing:.05em">'
+      + favoured + '</span> favoured · TWD ' + Math.round(twd) + '°' + twsTxt;
   }
 }
 
@@ -1895,8 +2293,10 @@ async function loadVideos() {
       const lbl = v.label ? '<b>' + esc(v.label) + '</b> — ' : '';
       const ttl = esc(v.title || v.youtube_url).substring(0, 60);
       const link = '<a href="' + esc(v.youtube_url) + '" target="_blank" style="color:var(--accent)">' + ttl + '</a>';
-      const del = '<button onclick="deleteVideo(' + v.id + ')" style="color:var(--danger);background:none;border:none;cursor:pointer;font-size:.8rem;margin-left:8px">&#10005;</button>';
-      return '<div style="margin-bottom:4px">' + lbl + link + del + '</div>';
+      const editSync = '<button onclick="toggleEditSync(' + v.id + ')" style="color:var(--accent);background:none;border:none;cursor:pointer;font-size:.78rem;margin-left:8px" title="Edit sync">&#8635; sync</button>';
+      const del = '<button onclick="deleteVideo(' + v.id + ')" style="color:var(--danger);background:none;border:none;cursor:pointer;font-size:.8rem;margin-left:4px">&#10005;</button>';
+      return '<div style="margin-bottom:4px">' + lbl + link + editSync + del + '</div>'
+        + _videoEditSyncForm(v);
     }).join('');
   } else {
     body.innerHTML = '<span style="color:var(--text-secondary)">No videos linked</span>';
@@ -1904,30 +2304,141 @@ async function loadVideos() {
   body.innerHTML += _videoAddForm();
 }
 
+// The track-scrubber readout (the "00:00 / 00:00" label next to the
+// scrubber) measures elapsed from _replayStart, which is the prestart
+// window cutoff (start_utc − 20 min) — not start_utc itself. Use that
+// same anchor here so what the user types matches what they read off
+// the page. Falls back to start_utc if the replay payload hasn't
+// landed yet (cache miss / pre-load).
+function _trackTimeAnchor() {
+  if (typeof _replayStart !== 'undefined' && _replayStart) return _replayStart;
+  const startUtc = _session && _session.start_utc;
+  return startUtc ? new Date(startUtc) : null;
+}
+
+// Convert a track-scrubber time (mm:ss) and a video position (mm:ss)
+// into the sync_utc + sync_offset_s pair the API expects.
+function _resolveSyncTimes(videoPosStr, trackPosStr) {
+  const videoPosS = parseVideoPosition(videoPosStr);
+  if (videoPosS === null || videoPosS < 0) {
+    alert('Video position must be mm:ss or seconds');
+    return null;
+  }
+  const trackPosS = parseVideoPosition(trackPosStr);
+  if (trackPosS === null || trackPosS < 0) {
+    alert('Track position must be mm:ss or seconds (matches the scrubber readout)');
+    return null;
+  }
+  const anchor = _trackTimeAnchor();
+  if (!anchor) {
+    alert('Session has no start time — cannot resolve track position');
+    return null;
+  }
+  const syncUtc = new Date(anchor.getTime() + trackPosS * 1000).toISOString();
+  return {syncUtc, syncOffsetS: videoPosS};
+}
+
 function _videoAddForm() {
-  const startUtc = _session.start_utc || '';
-  const defaultSync = startUtc ? new Date(startUtc).toISOString().substring(0, 19) : '';
   return '<div id="video-add-form" style="display:none;margin-top:8px">'
     + '<input id="video-url" class="field" placeholder="YouTube URL" style="width:100%;margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
     + '<input id="video-label" class="field" placeholder="Label (e.g. Bow cam)" style="width:100%;margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
-    + '<div style="font-size:.72rem;color:var(--text-secondary);margin-bottom:2px">Sync calibration (optional):</div>'
-    + '<input id="video-sync-utc" class="field" type="datetime-local" step="1" value="' + defaultSync + '" style="width:100%;margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
-    + '<input id="video-sync-pos" class="field" placeholder="Video position (mm:ss)" style="width:100%;margin-bottom:4px;padding:6px 8px;font-size:.82rem"/>'
+    + '<div style="font-size:.72rem;color:var(--text-secondary);margin-bottom:2px">Sync calibration: pick the same moment in the video and on the track scrubber.</div>'
+    + '<div style="display:flex;gap:4px;margin-bottom:4px">'
+    +   '<input id="video-sync-video-pos" class="field" placeholder="Video pos (mm:ss)" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
+    +   '<input id="video-sync-track-pos" class="field" placeholder="Track pos (mm:ss)" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
+    + '</div>'
     + '<button id="video-add-submit" class="btn-export" style="background:var(--accent-strong);color:var(--bg-primary);border-color:var(--accent-strong)" onclick="submitAddVideo()">Add Video</button>'
     + ' <button onclick="document.getElementById(\'video-add-form\').style.display=\'none\'" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:.82rem">Cancel</button>'
     + '</div>'
     + '<button onclick="document.getElementById(\'video-add-form\').style.display=\'\'" style="font-size:.78rem;color:var(--accent);background:none;border:none;cursor:pointer;padding:4px 0;margin-top:4px">+ Add Video</button>';
 }
 
+// Convert a current video row's stored sync into the (videoPos, trackPos)
+// pair the editor presents. trackPos is elapsed seconds from the same
+// anchor the scrubber readout uses (_replayStart, falling back to
+// start_utc); it can be negative if the video starts before the
+// replay window, so keep the sign instead of clamping.
+function _currentSyncDisplay(v) {
+  const offsetS = Number(v.sync_offset_s || 0);
+  let trackS = 0;
+  const anchor = _trackTimeAnchor();
+  if (anchor && v.sync_utc) {
+    trackS = (new Date(v.sync_utc).getTime() - anchor.getTime()) / 1000;
+  }
+  const fmt = (s) => {
+    const sign = s < 0 ? '-' : '';
+    return sign + fmtDuration(Math.round(Math.abs(s)));
+  };
+  return {videoPos: fmt(offsetS), trackPos: fmt(trackS)};
+}
+
+function _videoEditSyncForm(v) {
+  const cur = _currentSyncDisplay(v);
+  return '<div id="video-edit-sync-' + v.id + '" style="display:none;margin:4px 0 10px 16px;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:4px">'
+    + '<div style="font-size:.72rem;color:var(--text-secondary);margin-bottom:4px">Pick the same moment (e.g. the gun) in the video and on the track scrubber:</div>'
+    + '<div style="display:flex;gap:4px;margin-bottom:4px">'
+    +   '<input id="edit-sync-video-' + v.id + '" class="field" placeholder="Video pos (mm:ss)" value="' + esc(cur.videoPos) + '" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
+    +   '<input id="edit-sync-track-' + v.id + '" class="field" placeholder="Track pos (mm:ss)" value="' + esc(cur.trackPos) + '" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
+    + '</div>'
+    + '<button class="btn-sm" style="background:var(--accent-strong);color:var(--bg-primary);border:none;border-radius:4px;padding:4px 10px;font-size:.78rem;cursor:pointer" onclick="submitEditSync(' + v.id + ')">Save sync</button>'
+    + ' <button onclick="toggleEditSync(' + v.id + ')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:.78rem">Cancel</button>'
+    + '</div>';
+}
+
+// _replayStart is loaded asynchronously via _loadReplayData and may not
+// be set when loadVideos first renders the form HTML. Re-derive the
+// prefill at toggle time so the user sees the values measured against
+// the same anchor the scrubber uses by the time they're looking.
+function toggleEditSync(videoId) {
+  const el = document.getElementById('video-edit-sync-' + videoId);
+  if (!el) return;
+  if (el.style.display === 'none') {
+    const v = _videoSync && _videoSync.allVideos
+      ? _videoSync.allVideos.find(x => x.id === videoId)
+      : null;
+    if (v) {
+      const cur = _currentSyncDisplay(v);
+      const videoEl = document.getElementById('edit-sync-video-' + videoId);
+      const trackEl = document.getElementById('edit-sync-track-' + videoId);
+      if (videoEl) videoEl.value = cur.videoPos;
+      if (trackEl) trackEl.value = cur.trackPos;
+    }
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+async function submitEditSync(videoId) {
+  const videoPosVal = document.getElementById('edit-sync-video-' + videoId).value.trim();
+  const trackPosVal = document.getElementById('edit-sync-track-' + videoId).value.trim();
+  const sync = _resolveSyncTimes(videoPosVal, trackPosVal);
+  if (!sync) return;
+  const resp = await fetch('/api/videos/' + videoId, {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({sync_utc: sync.syncUtc, sync_offset_s: sync.syncOffsetS})
+  });
+  if (!resp.ok) { alert('Failed: ' + resp.status); return; }
+  location.reload();
+}
+
 async function submitAddVideo() {
   const url = document.getElementById('video-url').value.trim();
   const label = document.getElementById('video-label').value.trim();
-  const syncUtcVal = document.getElementById('video-sync-utc').value;
-  const syncPosVal = document.getElementById('video-sync-pos').value.trim();
+  const videoPosVal = document.getElementById('video-sync-video-pos').value.trim();
+  const trackPosVal = document.getElementById('video-sync-track-pos').value.trim();
   if (!url) { alert('YouTube URL is required'); return; }
-  const syncUtc = syncUtcVal ? (syncUtcVal.includes('Z') ? syncUtcVal : syncUtcVal + 'Z') : new Date().toISOString();
-  const syncOffsetS = syncPosVal ? parseVideoPosition(syncPosVal) : 0;
-  if (syncOffsetS === null) { alert('Video position must be mm:ss or seconds'); return; }
+  let syncUtc;
+  let syncOffsetS = 0;
+  if (videoPosVal || trackPosVal) {
+    const sync = _resolveSyncTimes(videoPosVal, trackPosVal);
+    if (!sync) return;
+    syncUtc = sync.syncUtc;
+    syncOffsetS = sync.syncOffsetS;
+  } else {
+    // No calibration entered: anchor at session start, video offset 0.
+    syncUtc = _session.start_utc || new Date().toISOString();
+  }
   // Disable the button while the POST is in flight: yt-dlp metadata lookup
   // can take several seconds, and a second click would have created a
   // duplicate row (now also blocked at the DB layer, but the UX should
@@ -5108,6 +5619,9 @@ async function loadManeuvers() {
   // Roundings are now loaded — refresh laylines so they anchor on the
   // mark positions from this fetch (handles re-detection too).
   if (typeof _drawAllLaylines === 'function') _drawAllLaylines();
+  // Refresh the course-distance gauge using the new rounding set.
+  _populateRoundings();
+  _recomputeCourseDistance();
 }
 
 function _manKey(m, idx) {
@@ -8333,8 +8847,9 @@ function _drawGradeSegments() {
       runStart = i;
     }
   }
-  // Hide the underlying single-color track while grade overlay is active
+  // Hide the underlying single-color track + its casing while grade overlay is active
   if (_trackData.line) _trackData.line.setStyle({opacity: 0});
+  if (_trackData.casing) _trackData.casing.setStyle({opacity: 0});
 }
 
 function _setGradeViewActive(active) {
@@ -8346,6 +8861,7 @@ function _setGradeViewActive(active) {
   } else {
     _clearGradeSegments();
     if (_trackData && _trackData.line) _trackData.line.setStyle({opacity: 1});
+    if (_trackData && _trackData.casing) _trackData.casing.setStyle({opacity: 0.55});
   }
 }
 
@@ -8602,9 +9118,12 @@ async function _loadReplayData() {
     const r = await fetch('/api/sessions/' + SESSION_ID + '/replay');
     if (!r.ok) return;
     const data = await r.json();
-    _replayStart = new Date(data.start_utc);
+    // Scrubber 0 is the prestart-window cutoff (start_utc − 20 min) so the
+    // helm can scrub through pre-gun maneuvers and have video / gauges /
+    // track follow. Falls back to start_utc for older payloads (cache).
+    _replayStart = new Date(data.prestart_start_utc || data.start_utc);
     _replayEnd = new Date(data.end_utc);
-    _raceGun = data.race_gun_utc ? new Date(data.race_gun_utc) : _replayStart;
+    _raceGun = data.race_gun_utc ? new Date(data.race_gun_utc) : new Date(data.start_utc);
     _replaySamples = (data.samples || []).map(s => ({
       ts: new Date(s.ts),
       stw: s.stw,

@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from helmlog.storage import Storage
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -157,9 +160,12 @@ async def _build_snapshot(request: Request, state: SequenceState) -> dict[str, A
     storage = get_storage(request)
     current_race = await storage.get_current_race()
     race_id = current_race.id if current_race else None
+    # Storage handles per-end carry-over from prior same-date races when
+    # *race_id* is set (#702). When no race is active we still fall back
+    # to unscoped pre-arm pings so the helm can ping before the race row
+    # exists.
     line_row = await storage.get_latest_start_line(race_id=race_id)
-    if line_row is None:
-        # Fall back to unscoped pings (pre-arm flow).
+    if line_row is None and race_id is not None:
         line_row = await storage.get_latest_start_line(race_id=None)
     line = StartLine(
         boat_end_lat=line_row.get("boat_end_lat") if line_row else None,
@@ -234,15 +240,58 @@ async def _build_snapshot(request: Request, state: SequenceState) -> dict[str, A
             "boat_end_captured_at": (
                 line.boat_end_captured_at.isoformat() if line.boat_end_captured_at else None
             ),
+            "boat_end_carried_over_from_race_id": (
+                line_row.get("boat_end_race_id")
+                if (
+                    line_row
+                    and race_id is not None
+                    and line_row.get("boat_end_race_id") not in (None, race_id)
+                )
+                else None
+            ),
             "pin_end_lat": line.pin_end_lat,
             "pin_end_lon": line.pin_end_lon,
             "pin_end_captured_at": (
                 line.pin_end_captured_at.isoformat() if line.pin_end_captured_at else None
             ),
+            "pin_end_carried_over_from_race_id": (
+                line_row.get("pin_end_race_id")
+                if (
+                    line_row
+                    and race_id is not None
+                    and line_row.get("pin_end_race_id") not in (None, race_id)
+                )
+                else None
+            ),
             "is_complete": line.is_complete,
         },
         "line_metrics": metrics_payload,
         "race_id": race_id,
+        "scheduled_start": await _scheduled_start_payload(storage),
+    }
+
+
+async def _scheduled_start_payload(storage: Storage) -> dict[str, Any] | None:
+    """Surface the active scheduled-start row (if any) so /race-start can
+    display the upcoming gun and offer an "Arm for scheduled start" button.
+
+    Use case: pursuit starts where each boat's gun depends on rating —
+    the helm sets the schedule the night before, and the page shows the
+    countdown without anyone needing to remember to arm at the right
+    moment.
+    """
+    row = await storage.get_scheduled_start()
+    if row is None:
+        return None
+    fire_at = datetime.fromisoformat(row["scheduled_start_utc"])
+    if fire_at.tzinfo is None:
+        fire_at = fire_at.replace(tzinfo=UTC)
+    seconds_until = max(0, int((fire_at - datetime.now(UTC)).total_seconds()))
+    return {
+        "scheduled_start_utc": fire_at.isoformat(),
+        "event": row["event"],
+        "session_type": row["session_type"],
+        "seconds_until_start": seconds_until,
     }
 
 

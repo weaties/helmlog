@@ -192,6 +192,11 @@ _LIVE_KEYS = (
     "aws_kts",
     "awa_deg",
     "rudder_deg",
+    # Derived current vector — computed in _recompute_set_drift from the
+    # already-smoothed sog/cog/stw/hdg, then routed through its own EMA
+    # so the gauge doesn't twitch on every input fix.
+    "set_deg",
+    "drift_kts",
 )
 
 # ---------------------------------------------------------------------------
@@ -2078,10 +2083,41 @@ class Storage:
         self._pending: int = 0
         self._last_flush: float = 0.0
         self._session_active: bool = False
+        # Active race id, if any. Maintained by start_race / end_race. Used
+        # to tag WS position broadcasts so clients can filter by race.
+        self._active_race_id: int | None = None
         self._live: dict[str, float | None] = dict.fromkeys(_LIVE_KEYS)
         self._live_tw_ref: int | None = None
         self._live_tw_angle_raw: float | None = None
         self._on_live_update: Callable[[dict[str, float | None]], None] | None = None
+        # Position broadcasts go on a separate callback because they're a
+        # different message shape (per-fix lat/lon/ts) and we throttle them
+        # to 1 Hz on the wire — GPS can arrive at 5–10 Hz and we don't need
+        # that granularity for the live polyline.
+        self._on_position_update: Callable[[dict[str, Any]], None] | None = None
+        # Per-second position bucket (#732). The SK reader records every fix
+        # with source_addr=0 even when Signal K is multiplexing two physical
+        # GPS antennas (~3 m apart on Corvo), so consecutive raw fixes
+        # zig-zag between antennas. We accumulate every fix in the current
+        # whole-second bucket; when the second ticks over, the bucket's
+        # mean lat/lon is broadcast as one position. Mirrors the per-second
+        # mean averaging in routes.sessions._compute_session_track so the
+        # live polyline reads the same as the historical track.
+        self._position_bucket_key: str | None = None
+        self._position_bucket_lats: list[float] = []
+        self._position_bucket_lons: list[float] = []
+        self._position_bucket_first_ts: str | None = None
+        # Per-channel smoothing applied to live broadcast values (#727).
+        # Loaded from app_settings during connect(); refresh_smoothing()
+        # picks up admin tau changes without restarting the service.
+        from helmlog.smoothing import DEFAULT_TAUS, SmoothingConfig
+
+        self._smoothing: SmoothingConfig = SmoothingConfig.from_taus(DEFAULT_TAUS)
+        # Leeway coefficient for the live current compute (#730). Loaded from
+        # boat_settings.leeway_coefficient on connect; refresh_leeway_k() picks
+        # up admin changes. Default 10 is a reasonable starting point for a
+        # 30–40 ft sailboat — admin can tune via /admin/boats.
+        self._leeway_k: float = 10.0
         self._last_rudder_write: float = 0.0
         self._last_attitude_write: float = 0.0
         # Web response cache (#594). Optional; web.py binds a WebCache
@@ -2149,36 +2185,146 @@ class Storage:
             self._live["twd_deg"] = round(ang % 360, 1)
             self._live["twa_deg"] = round((ang - hdg + 360) % 360, 1) if hdg is not None else None
 
+    def _recompute_set_drift(self) -> None:
+        """Derive set / drift from the (already-smoothed) sog, cog, stw, hdg
+        + heel in ``self._live``. The heading is leeway-corrected (#730)
+        so the result doesn't flip direction on every tack. The output
+        runs through its own EMA so a few-degree heading wobble doesn't
+        bounce drift by a knot every tick.
+        """
+        from helmlog.current import compute_set_drift
+
+        sog = self._live["sog_kts"]
+        cog = self._live["cog_deg"]
+        stw = self._live["bsp_kts"]
+        hdg = self._live["heading_deg"]
+        heel = self._live.get("heel_deg")
+        result = compute_set_drift(sog, cog, stw, hdg, heel_deg=heel, leeway_k=self._leeway_k)
+        if result is None:
+            return
+        set_raw, drift_raw = result
+        sm = self._smoothing
+        self._live["set_deg"] = round(sm.update("set_deg", set_raw), 1)
+        self._live["drift_kts"] = round(sm.update("drift_kts", drift_raw), 2)
+
     def update_live(self, record: PGNRecord) -> None:
-        """Update the in-memory live cache from a decoded record (no DB write)."""
+        """Update the in-memory live cache from a decoded record (no DB write).
+
+        Wind / speed / heading values pass through ``self._smoothing`` so
+        the gauges don't jitter on every CAN tick. The smoothed value is
+        what gets stored in ``self._live`` and broadcast over the WS;
+        SQLite still records the raw record (see ``write``).
+        """
+        sm = self._smoothing
         match record:
             case HeadingRecord():
-                self._live["heading_deg"] = round(record.heading_deg, 1)
+                self._live["heading_deg"] = round(sm.update("heading_deg", record.heading_deg), 1)
                 self._recompute_true_wind()
+                self._recompute_set_drift()
             case SpeedRecord():
-                self._live["bsp_kts"] = round(record.speed_kts, 2)
+                self._live["bsp_kts"] = round(sm.update("bsp_kts", record.speed_kts), 2)
+                self._recompute_set_drift()
             case COGSOGRecord():
-                self._live["cog_deg"] = round(record.cog_deg, 1)
-                self._live["sog_kts"] = round(record.sog_kts, 2)
+                self._live["cog_deg"] = round(sm.update("cog_deg", record.cog_deg), 1)
+                self._live["sog_kts"] = round(sm.update("sog_kts", record.sog_kts), 2)
+                self._recompute_set_drift()
             case WindRecord() if record.reference == 2:  # apparent
-                self._live["aws_kts"] = round(record.wind_speed_kts, 1)
-                self._live["awa_deg"] = round(record.wind_angle_deg, 1)
+                self._live["aws_kts"] = round(sm.update("aws_kts", record.wind_speed_kts), 1)
+                self._live["awa_deg"] = round(sm.update("awa_deg", record.wind_angle_deg), 1)
             case WindRecord() if record.reference in (0, 4):  # true
-                self._live["tws_kts"] = round(record.wind_speed_kts, 1)
+                self._live["tws_kts"] = round(sm.update("tws_kts", record.wind_speed_kts), 1)
                 self._live_tw_ref = record.reference
-                self._live_tw_angle_raw = record.wind_angle_deg
+                # Smoothed angle feeds the recompute below so TWD/TWA come
+                # out smoothed too. Vector EMA handles 0/360 wrap.
+                channel = "twd_deg" if record.reference == 4 else "twa_deg"
+                self._live_tw_angle_raw = sm.update(channel, record.wind_angle_deg)
                 self._recompute_true_wind()
             case RudderRecord():
                 self._live["rudder_deg"] = round(record.rudder_angle_deg, 1)
             case AttitudeRecord():
                 self._live["heel_deg"] = round(record.heel_deg, 1)
                 self._live["trim_deg"] = round(record.trim_deg, 1)
+                # Heel is an input to the leeway correction, so recompute
+                # set/drift whenever it changes.
+                self._recompute_set_drift()
+            case PositionRecord():
+                # Position records bypass the instruments callback and go
+                # on the separate position channel. We bucket all fixes
+                # within each whole-second key and broadcast the mean
+                # lat/lon when the bucket rolls over (see __init__ for
+                # rationale — collapses dual-antenna zig-zag).
+                ts_iso = record.timestamp.isoformat()
+                key = ts_iso[:19]  # truncate to whole-second precision
+                if self._position_bucket_key is None:
+                    self._position_bucket_key = key
+                    self._position_bucket_first_ts = ts_iso
+                if key != self._position_bucket_key:
+                    # Bucket rolled over — emit the previous second's mean.
+                    if self._position_bucket_lats and self._on_position_update is not None:
+                        n = len(self._position_bucket_lats)
+                        avg_lat = sum(self._position_bucket_lats) / n
+                        avg_lon = sum(self._position_bucket_lons) / n
+                        self._on_position_update(
+                            {
+                                "ts": self._position_bucket_first_ts,
+                                "lat": avg_lat,
+                                "lon": avg_lon,
+                                "race_id": self._active_race_id,
+                            }
+                        )
+                    self._position_bucket_key = key
+                    self._position_bucket_first_ts = ts_iso
+                    self._position_bucket_lats = []
+                    self._position_bucket_lons = []
+                self._position_bucket_lats.append(record.latitude_deg)
+                self._position_bucket_lons.append(record.longitude_deg)
+                return
         if self._on_live_update is not None:
             self._on_live_update(dict(self._live))
 
     def set_live_callback(self, cb: Callable[[dict[str, float | None]], None]) -> None:
         """Register a callback invoked on every live instrument update."""
         self._on_live_update = cb
+
+    def set_position_callback(self, cb: Callable[[dict[str, Any]], None]) -> None:
+        """Register a callback invoked on each new GPS fix (1 Hz throttled)."""
+        self._on_position_update = cb
+
+    async def refresh_leeway_k(self) -> float:
+        """Reload ``boat_settings.leeway_coefficient`` into the cached
+        ``self._leeway_k``. Returns the effective value. Called during
+        ``connect()`` and whenever an admin updates boat settings."""
+        try:
+            rows = await self.current_boat_settings(race_id=None)
+        except Exception:
+            return self._leeway_k
+        import contextlib
+
+        for row in rows:
+            if row["parameter"] == "leeway_coefficient":
+                with contextlib.suppress(TypeError, ValueError):
+                    self._leeway_k = float(row["value"])
+                break
+        return self._leeway_k
+
+    async def refresh_smoothing(self) -> dict[str, float]:
+        """Reload per-channel time constants from ``app_settings`` and apply
+        them to the live smoothers without losing accumulated state.
+
+        Returns the effective tau map so the caller (admin API) can echo
+        back what's now in force. Settings keys are
+        ``smoothing.<channel>.tau_s``; missing or malformed values fall
+        back to ``DEFAULT_TAUS``.
+        """
+        from helmlog.smoothing import DEFAULT_TAUS, parse_tau
+
+        out: dict[str, float] = {}
+        for channel, default in DEFAULT_TAUS.items():
+            raw = await self.get_setting(f"smoothing.{channel}.tau_s")
+            tau = parse_tau(raw, default)
+            self._smoothing.set_tau(channel, tau)
+            out[channel] = tau
+        return out
 
     def live_instruments(self) -> dict[str, float | None]:
         """Return a snapshot of the current in-memory instrument cache."""
@@ -2218,6 +2364,9 @@ class Storage:
                 self._read_db = None
         current = await self.get_current_race()
         self._session_active = current is not None
+        self._active_race_id = current.id if current is not None else None
+        await self.refresh_smoothing()
+        await self.refresh_leeway_k()
 
     async def close(self) -> None:
         """Flush any buffered writes and close the database connections."""
@@ -3631,6 +3780,7 @@ class Storage:
         await self._invalidate_race_cache(cur.lastrowid)
         logger.info("Race started: {} (id={}) type={}", name, cur.lastrowid, session_type)
         self._session_active = True
+        self._active_race_id = cur.lastrowid
         return _Race(
             id=cur.lastrowid,
             name=name,
@@ -3653,6 +3803,8 @@ class Storage:
         await db.commit()
         await self._invalidate_race_cache(race_id)
         self._session_active = False
+        if self._active_race_id == race_id:
+            self._active_race_id = None
         logger.info("Race {} ended at {}", race_id, end_utc.isoformat())
 
     async def set_race_start_utc(self, race_id: int, start_utc: datetime) -> None:
@@ -4264,13 +4416,19 @@ class Storage:
     async def get_latest_start_line(self, race_id: int | None) -> dict[str, Any] | None:
         """Return the latest boat-end and pin-end ping for *race_id*.
 
-        When ``race_id`` is None, returns the latest *unscoped* pings (used
-        in pre-arm flow before a race row exists).
+        Carry-over (#702): when *race_id* is given and a particular end has
+        no ping for this race, fall back to the most recent ping of that
+        end_kind from any prior race on the same UTC date. The carried-over
+        end is tagged with ``{end}_end_race_id`` so callers can render a
+        "from race N" hint when the line wasn't explicitly re-pinged.
+
+        When *race_id* is ``None`` (pre-arm flow before a race row exists),
+        returns the latest unscoped pings only — no cross-race fallback.
         """
         db = self._read_conn()
         if race_id is None:
-            sql = (
-                "SELECT end_kind, latitude_deg, longitude_deg, captured_at"
+            cur = await db.execute(
+                "SELECT end_kind, latitude_deg, longitude_deg, captured_at, race_id"
                 "  FROM start_line_pings"
                 " WHERE race_id IS NULL"
                 " AND id IN ("
@@ -4278,27 +4436,58 @@ class Storage:
                 "   WHERE race_id IS NULL GROUP BY end_kind"
                 " )"
             )
-            cur = await db.execute(sql)
-        else:
-            sql = (
-                "SELECT end_kind, latitude_deg, longitude_deg, captured_at"
+            rows = await cur.fetchall()
+            if not rows:
+                return None
+            out: dict[str, Any] = {}
+            for end_kind, lat, lon, ts, rid in rows:
+                out[f"{end_kind}_end_lat"] = lat
+                out[f"{end_kind}_end_lon"] = lon
+                out[f"{end_kind}_end_captured_at"] = ts
+                out[f"{end_kind}_end_race_id"] = rid
+            return out
+
+        # Race-scoped path with carry-over fallback per end.
+        race_cur = await db.execute("SELECT date FROM races WHERE id = ?", (race_id,))
+        race_row = await race_cur.fetchone()
+        date_str = race_row["date"] if race_row else None
+
+        out = {}
+        for end_kind in ("boat", "pin"):
+            # Prefer a ping for this exact race.
+            cur = await db.execute(
+                "SELECT latitude_deg, longitude_deg, captured_at, race_id"
                 "  FROM start_line_pings"
-                " WHERE race_id = ?"
-                " AND id IN ("
-                "   SELECT MAX(id) FROM start_line_pings"
-                "   WHERE race_id = ? GROUP BY end_kind"
-                " )"
+                " WHERE race_id = ? AND end_kind = ?"
+                " ORDER BY captured_at DESC LIMIT 1",
+                (race_id, end_kind),
             )
-            cur = await db.execute(sql, (race_id, race_id))
-        rows = await cur.fetchall()
-        if not rows:
-            return None
-        out: dict[str, Any] = {}
-        for end_kind, lat, lon, ts in rows:
-            out[f"{end_kind}_end_lat"] = lat
-            out[f"{end_kind}_end_lon"] = lon
-            out[f"{end_kind}_end_captured_at"] = ts
-        return out
+            row = await cur.fetchone()
+
+            # Carry-over: most recent ping of this end_kind on the same
+            # UTC date, from a different race. Same-date keeps the helm
+            # safe across consecutive starts but won't reach into older
+            # sessions where the line is irrelevant.
+            if row is None and date_str is not None:
+                cur = await db.execute(
+                    "SELECT slp.latitude_deg, slp.longitude_deg,"
+                    "       slp.captured_at, slp.race_id"
+                    "  FROM start_line_pings slp"
+                    "  JOIN races r ON r.id = slp.race_id"
+                    " WHERE slp.end_kind = ? AND r.date = ? AND r.id != ?"
+                    " ORDER BY slp.captured_at DESC LIMIT 1",
+                    (end_kind, date_str, race_id),
+                )
+                row = await cur.fetchone()
+
+            if row is None:
+                continue
+            out[f"{end_kind}_end_lat"] = row["latitude_deg"]
+            out[f"{end_kind}_end_lon"] = row["longitude_deg"]
+            out[f"{end_kind}_end_captured_at"] = row["captured_at"]
+            out[f"{end_kind}_end_race_id"] = row["race_id"]
+
+        return out or None
 
     async def list_start_line_pings(self, race_id: int | None) -> list[dict[str, Any]]:
         """Return full ping history for *race_id*, ordered oldest → newest."""
@@ -9097,6 +9286,11 @@ class Storage:
             )
             ids.append(cur.lastrowid or 0)
         await db.commit()
+        # Hot-reload the cached leeway coefficient if it was just written —
+        # admin tuning takes effect on the live broadcast immediately
+        # without a service restart (#730 follow-up).
+        if any(e["parameter"] == "leeway_coefficient" for e in entries):
+            await self.refresh_leeway_k()
         return ids
 
     async def list_boat_settings(self, race_id: int | None) -> list[dict[str, Any]]:

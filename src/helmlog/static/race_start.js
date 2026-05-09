@@ -87,8 +87,70 @@
     }
   }
 
+  function fmtCountdown(seconds) {
+    const sign = seconds < 0 ? "−" : "";
+    const abs = Math.abs(Math.floor(seconds));
+    const days = Math.floor(abs / 86400);
+    const hrs = Math.floor((abs % 86400) / 3600);
+    const min = Math.floor((abs % 3600) / 60);
+    const sec = abs % 60;
+    if (days > 0) return sign + days + "d " + hrs + "h " + min + "m";
+    if (hrs > 0) return sign + hrs + "h " + min + "m " + sec + "s";
+    if (min > 0) return sign + min + "m " + sec + "s";
+    return sign + sec + "s";
+  }
+
+  function renderScheduledStart() {
+    const schedView = document.getElementById("rs-scheduled-view");
+    const liveView = document.getElementById("rs-live-view");
+    if (!schedView || !liveView || !snapshot) return;
+    const sched = snapshot.scheduled_start;
+    // Scheduled-pre-arm: only when a schedule is set AND the FSM is still
+    // idle. Hide the live FSM controls entirely — auto-fire at T-15min
+    // takes over without any helm action, and cancellation lives on
+    // /control to avoid accidental taps near a real start.
+    const showScheduled =
+      !!sched && (snapshot.phase === "idle" || snapshot.phase === "abandoned");
+    if (showScheduled) {
+      schedView.style.display = "";
+      liveView.style.display = "none";
+      const fireMs = new Date(sched.scheduled_start_utc).getTime();
+      document.getElementById("rs-sched-utc").textContent =
+        new Date(fireMs).toLocaleString();
+      const ev = document.getElementById("rs-sched-event");
+      ev.textContent = sched.event ? "· " + sched.event : "";
+      const remaining = (fireMs - virtualNowMs()) / 1000;
+      document.getElementById("rs-sched-countdown").textContent =
+        fmtCountdown(remaining);
+    } else {
+      schedView.style.display = "none";
+      liveView.style.display = "";
+    }
+  }
+
+  function renderLineCarryover() {
+    const el = document.getElementById("rs-line-carryover");
+    if (!el || !snapshot || !snapshot.start_line) return;
+    const sl = snapshot.start_line;
+    const parts = [];
+    if (sl.boat_end_carried_over_from_race_id) {
+      parts.push("boat end from race " + sl.boat_end_carried_over_from_race_id);
+    }
+    if (sl.pin_end_carried_over_from_race_id) {
+      parts.push("pin end from race " + sl.pin_end_carried_over_from_race_id);
+    }
+    if (parts.length === 0) {
+      el.style.display = "none";
+      return;
+    }
+    el.textContent = "⚠ Line carried over: " + parts.join(", ")
+      + ". Re-ping if RC has moved the line.";
+    el.style.display = "";
+  }
+
   function renderLineMetrics(metrics) {
     function set(id, value) { document.getElementById(id).textContent = value; }
+    renderLineCarryover();
     if (!metrics) {
       set("rs-line-bearing", "—");
       set("rs-line-length", "—");
@@ -130,6 +192,7 @@
       renderPhase();
       renderFlags();
       renderClock();
+      renderScheduledStart();
       renderLineMetrics(snapshot.line_metrics);
       showError("");
     } catch (e) {
@@ -166,6 +229,7 @@
       renderPhase();
       renderFlags();
       renderClock();
+      renderScheduledStart();
       renderLineMetrics(snapshot.line_metrics);
     } catch (e) {
       showError(e.message);
@@ -235,6 +299,9 @@
   // 2 s × handful of devices the load is negligible and the flow is
   // robust to disconnect.
   setInterval(renderClock, 250);
+  // Tick the scheduled-start countdown alongside the main clock so the
+  // helm sees the seconds drop without waiting for the 2 s state poll.
+  setInterval(renderScheduledStart, 1000);
   setInterval(refreshState, 2000);
 
   refreshState();
