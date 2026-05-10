@@ -3181,51 +3181,67 @@ class Storage:
     async def _write_heading(self, r: HeadingRecord) -> None:
         db = self._conn()
         await db.execute(
-            "INSERT INTO headings (ts, source_addr, heading_deg, deviation_deg, variation_deg)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (_ts(r.timestamp), r.source_addr, r.heading_deg, r.deviation_deg, r.variation_deg),
+            "INSERT INTO headings (ts, source_addr, heading_deg, deviation_deg, variation_deg,"
+            " race_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                _ts(r.timestamp),
+                r.source_addr,
+                r.heading_deg,
+                r.deviation_deg,
+                r.variation_deg,
+                self._active_race_id,
+            ),
         )
 
     async def _write_speed(self, r: SpeedRecord) -> None:
         db = self._conn()
         await db.execute(
-            "INSERT INTO speeds (ts, source_addr, speed_kts) VALUES (?, ?, ?)",
-            (_ts(r.timestamp), r.source_addr, r.speed_kts),
+            "INSERT INTO speeds (ts, source_addr, speed_kts, race_id) VALUES (?, ?, ?, ?)",
+            (_ts(r.timestamp), r.source_addr, r.speed_kts, self._active_race_id),
         )
 
     async def _write_depth(self, r: DepthRecord) -> None:
         db = self._conn()
         await db.execute(
-            "INSERT INTO depths (ts, source_addr, depth_m, offset_m) VALUES (?, ?, ?, ?)",
-            (_ts(r.timestamp), r.source_addr, r.depth_m, r.offset_m),
+            "INSERT INTO depths (ts, source_addr, depth_m, offset_m, race_id)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (_ts(r.timestamp), r.source_addr, r.depth_m, r.offset_m, self._active_race_id),
         )
 
     async def _write_position(self, r: PositionRecord) -> None:
         db = self._conn()
         await db.execute(
-            "INSERT INTO positions (ts, source_addr, latitude_deg, longitude_deg)"
-            " VALUES (?, ?, ?, ?)",
-            (_ts(r.timestamp), r.source_addr, r.latitude_deg, r.longitude_deg),
+            "INSERT INTO positions (ts, source_addr, latitude_deg, longitude_deg, race_id)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (
+                _ts(r.timestamp),
+                r.source_addr,
+                r.latitude_deg,
+                r.longitude_deg,
+                self._active_race_id,
+            ),
         )
 
     async def _write_cogsog(self, r: COGSOGRecord) -> None:
         db = self._conn()
         await db.execute(
-            "INSERT INTO cogsog (ts, source_addr, cog_deg, sog_kts) VALUES (?, ?, ?, ?)",
-            (_ts(r.timestamp), r.source_addr, r.cog_deg, r.sog_kts),
+            "INSERT INTO cogsog (ts, source_addr, cog_deg, sog_kts, race_id)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (_ts(r.timestamp), r.source_addr, r.cog_deg, r.sog_kts, self._active_race_id),
         )
 
     async def _write_wind(self, r: WindRecord) -> None:
         db = self._conn()
         await db.execute(
-            "INSERT INTO winds (ts, source_addr, wind_speed_kts, wind_angle_deg, reference)"
-            " VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO winds (ts, source_addr, wind_speed_kts, wind_angle_deg, reference,"
+            " race_id) VALUES (?, ?, ?, ?, ?, ?)",
             (
                 _ts(r.timestamp),
                 r.source_addr,
                 r.wind_speed_kts,
                 r.wind_angle_deg,
                 r.reference,
+                self._active_race_id,
             ),
         )
 
