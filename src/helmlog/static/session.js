@@ -2347,7 +2347,7 @@ function _videoAddForm() {
     +   '<input id="video-sync-video-pos" class="field" placeholder="Video pos (mm:ss)" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
     +   '<input id="video-sync-track-pos" class="field" placeholder="Track pos (mm:ss)" style="flex:1;padding:6px 8px;font-size:.82rem"/>'
     + '</div>'
-    + '<button class="btn-export" style="background:var(--accent-strong);color:var(--bg-primary);border-color:var(--accent-strong)" onclick="submitAddVideo()">Add Video</button>'
+    + '<button id="video-add-submit" class="btn-export" style="background:var(--accent-strong);color:var(--bg-primary);border-color:var(--accent-strong)" onclick="submitAddVideo()">Add Video</button>'
     + ' <button onclick="document.getElementById(\'video-add-form\').style.display=\'none\'" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:.82rem">Cancel</button>'
     + '</div>'
     + '<button onclick="document.getElementById(\'video-add-form\').style.display=\'\'" style="font-size:.78rem;color:var(--accent);background:none;border:none;cursor:pointer;padding:4px 0;margin-top:4px">+ Add Video</button>';
@@ -2439,11 +2439,27 @@ async function submitAddVideo() {
     // No calibration entered: anchor at session start, video offset 0.
     syncUtc = _session.start_utc || new Date().toISOString();
   }
-  const resp = await fetch('/api/sessions/' + SESSION_ID + '/videos', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({youtube_url: url, label, sync_utc: syncUtc, sync_offset_s: syncOffsetS})
-  });
-  if (!resp.ok) { alert('Failed: ' + resp.status); return; }
+  // Disable the button while the POST is in flight: yt-dlp metadata lookup
+  // can take several seconds, and a second click would have created a
+  // duplicate row (now also blocked at the DB layer, but the UX should
+  // never let it get that far).
+  const btn = document.getElementById('video-add-submit');
+  if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
+  try {
+    const resp = await fetch('/api/sessions/' + SESSION_ID + '/videos', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({youtube_url: url, label, sync_utc: syncUtc, sync_offset_s: syncOffsetS})
+    });
+    if (!resp.ok) {
+      alert('Failed: ' + resp.status);
+      if (btn) { btn.disabled = false; btn.textContent = 'Add Video'; }
+      return;
+    }
+  } catch (e) {
+    alert('Error adding video: ' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'Add Video'; }
+    return;
+  }
   // Reload everything to pick up new video in player
   location.reload();
 }

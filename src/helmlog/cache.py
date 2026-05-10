@@ -254,15 +254,12 @@ class WebCache:
 
     async def t2_get(self, key_family: str, *, race_id: int, data_hash: str) -> object | None:
         try:
-            row = await self._read_row(key_family, race_id)
+            row = await self._read_row(key_family, race_id, data_hash)
         except Exception as exc:  # pragma: no cover - exercised via monkeypatch
             logger.warning("web cache read failed ({}): {}", key_family, exc)
             self._bump(key_family, "miss")
             return None
         if row is None:
-            self._bump(key_family, "miss")
-            return None
-        if row["data_hash"] != data_hash:
             self._bump(key_family, "miss")
             return None
         # v74+ schema: expires_utc is always present (NULL for race-keyed
@@ -274,7 +271,7 @@ class WebCache:
             except ValueError:
                 exp_dt = None
             if exp_dt is not None and exp_dt <= datetime.now(UTC):
-                await self._delete_row(key_family, race_id)
+                await self._delete_row(key_family, race_id, data_hash)
                 self._bump(key_family, "miss")
                 return None
         try:
@@ -288,7 +285,7 @@ class WebCache:
                 race_id,
                 exc,
             )
-            await self._delete_row(key_family, race_id)
+            await self._delete_row(key_family, race_id, data_hash)
             self._bump(key_family, "miss")
             return None
 
@@ -382,12 +379,14 @@ class WebCache:
     # Internal DB helpers (patched in tests to simulate failures)
     # ------------------------------------------------------------------
 
-    async def _read_row(self, key_family: str, race_id: int) -> aiosqlite.Row | None:
+    async def _read_row(
+        self, key_family: str, race_id: int, data_hash: str
+    ) -> aiosqlite.Row | None:
         db = self._storage._conn()  # noqa: SLF001
         cur = await db.execute(
             "SELECT data_hash, blob, expires_utc FROM web_cache"
-            " WHERE key_family = ? AND race_id = ?",
-            (key_family, race_id),
+            " WHERE key_family = ? AND race_id = ? AND data_hash = ?",
+            (key_family, race_id, data_hash),
         )
         return await cur.fetchone()
 
@@ -404,8 +403,7 @@ class WebCache:
         await db.execute(
             "INSERT INTO web_cache (key_family, race_id, data_hash, blob,"
             " created_utc, expires_utc) VALUES (?, ?, ?, ?, ?, ?)"
-            " ON CONFLICT(key_family, race_id) DO UPDATE SET"
-            "   data_hash = excluded.data_hash,"
+            " ON CONFLICT(key_family, race_id, data_hash) DO UPDATE SET"
             "   blob = excluded.blob,"
             "   created_utc = excluded.created_utc,"
             "   expires_utc = excluded.expires_utc",
@@ -413,11 +411,11 @@ class WebCache:
         )
         await db.commit()
 
-    async def _delete_row(self, key_family: str, race_id: int) -> None:
+    async def _delete_row(self, key_family: str, race_id: int, data_hash: str) -> None:
         db = self._storage._conn()  # noqa: SLF001
         await db.execute(
-            "DELETE FROM web_cache WHERE key_family = ? AND race_id = ?",
-            (key_family, race_id),
+            "DELETE FROM web_cache WHERE key_family = ? AND race_id = ? AND data_hash = ?",
+            (key_family, race_id, data_hash),
         )
         await db.commit()
 

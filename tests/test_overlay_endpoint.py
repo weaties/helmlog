@@ -12,6 +12,7 @@ from httpx import ASGITransport
 from helmlog.analysis.maneuvers import (
     ENRICH_CACHE_VERSION,
     build_maneuvers_overlay,
+    enrich_session_maneuvers,
 )
 
 if TYPE_CHECKING:
@@ -193,6 +194,49 @@ class TestBuildManeuversOverlay:
         # t=0 index is 20 (position of 0 in [-20..30]).
         assert bsp[20] is not None
         assert abs(bsp[20] - 6.0) < 0.01
+
+    @pytest.mark.asyncio
+    async def test_overlay_served_from_cache_without_instrument_rescan(
+        self, storage: Storage
+    ) -> None:
+        """The aligned series live on the cached enriched payload, so
+        ``build_maneuvers_overlay`` must keep working after the
+        instrument tables are wiped — proving it does not re-scan them
+        per request. Regression guard for the slow cold path that
+        rebuilt headings/speeds/winds for every overlay request."""
+        await _seed_session(storage, session_id=10, name="cached", htw_offsets_s=[60])
+        # Prime the maneuver_cache with v8 enrichment.
+        await enrich_session_maneuvers(storage, 10)
+
+        db = storage._conn()
+        for table in ("headings", "speeds", "winds", "positions"):
+            await db.execute(f"DELETE FROM {table}")  # noqa: S608
+        await db.commit()
+
+        payload = await build_maneuvers_overlay(storage, [(10, 1000)])
+        assert len(payload["maneuvers"]) == 1
+        m = payload["maneuvers"][0]
+        assert len(m["bsp"]) == 51
+        # Steady BSP=6.0 was seeded; the cache holds the aligned values.
+        assert m["bsp"][20] is not None
+        assert abs(m["bsp"][20] - 6.0) < 0.01
+
+    @pytest.mark.asyncio
+    async def test_enriched_payload_contains_overlay_arrays(self, storage: Storage) -> None:
+        """The enrichment step is the single producer of the aligned
+        overlay arrays; ``build_maneuvers_overlay`` only forwards them.
+        Verify the contract directly so the producer can't quietly
+        drop fields without breaking this test."""
+        await _seed_session(storage, session_id=11, name="enr", htw_offsets_s=[60])
+        enriched, _ = await enrich_session_maneuvers(storage, 11)
+        assert len(enriched) == 1
+        m = enriched[0]
+        assert isinstance(m["overlay_bsp"], list) and len(m["overlay_bsp"]) == 51
+        assert (
+            isinstance(m["overlay_heading_rate_deg_s"], list)
+            and len(m["overlay_heading_rate_deg_s"]) == 51
+        )
+        assert isinstance(m["overlay_twa"], list) and len(m["overlay_twa"]) == 51
 
 
 class TestOverlayEndpoint:

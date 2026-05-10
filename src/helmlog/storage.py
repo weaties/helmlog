@@ -203,7 +203,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 82
+_CURRENT_VERSION: int = 84
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -2002,6 +2002,49 @@ _MIGRATIONS: dict[int, str] = {
         );
         CREATE INDEX IF NOT EXISTS idx_start_line_pings_race
             ON start_line_pings(race_id, end_kind, captured_at);
+    """,
+    83: """
+        -- Dedupe race_videos and enforce one link per (race_id, video_id).
+        -- Double-submits and re-paste-to-edit attempts created duplicate
+        -- rows (no UNIQUE constraint, no idempotency in add_race_video).
+        -- Per-group, keep the row with the latest created_at — that's the
+        -- one most likely to carry the user's most recent sync calibration.
+        DELETE FROM race_videos
+        WHERE id NOT IN (
+            SELECT id FROM race_videos rv
+            WHERE rv.created_at = (
+                SELECT MAX(created_at) FROM race_videos
+                WHERE race_id = rv.race_id AND video_id = rv.video_id
+            )
+            AND rv.id = (
+                SELECT MAX(id) FROM race_videos
+                WHERE race_id = rv.race_id AND video_id = rv.video_id
+                  AND created_at = rv.created_at
+            )
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_race_videos_unique_race_video
+            ON race_videos(race_id, video_id);
+    """,
+    84: """
+        -- Add data_hash to the web_cache PK so global (race_id=0) entries
+        -- with different content hashes can coexist. Previously every
+        -- distinct cross-session overlay URL evicted the previous one
+        -- because the single (key_family, race_id) slot only held one
+        -- row per family. Cache content is fully regenerable, so we
+        -- drop the table outright rather than rewrite columns in place.
+        DROP TABLE IF EXISTS web_cache;
+        CREATE TABLE web_cache (
+            key_family  TEXT NOT NULL,
+            race_id     INTEGER NOT NULL,
+            data_hash   TEXT NOT NULL,
+            blob        TEXT NOT NULL,
+            created_utc TEXT NOT NULL,
+            expires_utc TEXT,
+            PRIMARY KEY (key_family, race_id, data_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_web_cache_race ON web_cache(race_id);
+        CREATE INDEX IF NOT EXISTS idx_web_cache_created ON web_cache(created_utc);
+        CREATE INDEX IF NOT EXISTS idx_web_cache_expires ON web_cache(expires_utc);
     """,
 }
 
@@ -5272,12 +5315,50 @@ class Storage:
         duration_s: float | None = None,
         user_id: int | None = None,
     ) -> int:
-        """Add a YouTube video linked to a race.  Returns the new row id."""
+        """Add or replace a YouTube video link on a race.
+
+        Idempotent on ``(race_id, video_id)``: if a link already exists for
+        the same video on the same race, the mutable fields (label,
+        sync_utc, sync_offset_s, duration_s, title, youtube_url) are
+        updated and the existing row id is returned. Prevents duplicate
+        links from double-submits or re-paste-to-edit attempts.
+        """
         from datetime import UTC
         from datetime import datetime as _datetime
 
         db = self._conn()
         now_str = _datetime.now(UTC).isoformat()
+        existing_cur = await db.execute(
+            "SELECT id FROM race_videos WHERE race_id = ? AND video_id = ?",
+            (race_id, video_id),
+        )
+        existing_row = await existing_cur.fetchone()
+        if existing_row is not None:
+            row_id = int(existing_row["id"])
+            await db.execute(
+                "UPDATE race_videos SET"
+                " youtube_url = ?, title = ?, label = ?,"
+                " sync_utc = ?, sync_offset_s = ?, duration_s = ?"
+                " WHERE id = ?",
+                (
+                    youtube_url,
+                    title,
+                    label,
+                    sync_utc.isoformat(),
+                    sync_offset_s,
+                    duration_s,
+                    row_id,
+                ),
+            )
+            await db.execute("DELETE FROM maneuver_cache WHERE session_id = ?", (race_id,))
+            await db.commit()
+            logger.info(
+                "Race video re-linked (idempotent): id={} race_id={} video_id={}",
+                row_id,
+                race_id,
+                video_id,
+            )
+            return row_id
         cur = await db.execute(
             "INSERT INTO race_videos"
             " (race_id, youtube_url, video_id, title, label,"
