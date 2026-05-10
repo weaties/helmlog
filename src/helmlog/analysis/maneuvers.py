@@ -500,7 +500,12 @@ _ENRICH_PAD_S = 60  # seconds of instrument data to load beyond the session wind
 # v7: distance_loss_m switches from entry-COG projection to the single
 #     ladder-axis projection (upwind for tacks, downwind for gybes).
 #     Positive = ground lost toward the mark. (#619 follow-up.)
-ENRICH_CACHE_VERSION = 7
+# v8: per-maneuver overlay arrays (overlay_bsp, overlay_heading_rate_deg_s,
+#     overlay_twa) are precomputed at enrichment time so the cross-session
+#     overlay endpoint serves from cache instead of rescanning instrument
+#     tables for every request. Untagged sessions with multi-hour windows
+#     made the previous reload path take 20+ s on a Pi.
+ENRICH_CACHE_VERSION = 8
 
 
 def _bucket_positions_per_second(
@@ -790,6 +795,15 @@ async def enrich_session_maneuvers(
     tws.sort(key=lambda p: p[0])
     twd.sort(key=lambda p: p[0])
 
+    # Per-second lookup tables for the overlay alignment below. ``hdg_by_sec``
+    # is already populated above (it's also used for TWD→TWA conversion).
+    bsp_by_sec: dict[str, float] = {}
+    for ts_b, bv in bsp:
+        bsp_by_sec.setdefault(ts_b.isoformat()[:19], bv)
+    twa_by_sec: dict[str, float] = {}
+    for ts_t, tv in twa:
+        twa_by_sec.setdefault(ts_t.isoformat()[:19], tv)
+
     # Video sync for deep-links. Pick the first race video.
     video_cur = await db.execute(
         "SELECT video_id, sync_utc, sync_offset_s, duration_s, youtube_url"
@@ -951,6 +965,23 @@ async def enrich_session_maneuvers(
             d["video_offset_s"] = None
             d["youtube_url"] = None
 
+        # Aligned per-maneuver overlay series (#619 follow-up). Pre-aligning
+        # here means the cross-session overlay endpoint can serve straight
+        # from the maneuver_cache row instead of re-scanning headings/speeds/
+        # winds for every request. Aligned to ``head_to_wind_ts`` over the
+        # fixed ``_OVERLAY_AXIS`` (-20..+30 s); maneuvers without an HTW
+        # (roundings, stalled tacks) get None and are surfaced as excluded
+        # by the overlay endpoint.
+        htw_ts = metrics.head_to_wind_ts
+        if htw_ts is not None:
+            d["overlay_bsp"] = _align_series_at_htw(bsp_by_sec, htw_ts)
+            d["overlay_heading_rate_deg_s"] = _heading_rate_series(hdg_by_sec, htw_ts)
+            d["overlay_twa"] = _align_series_at_htw(twa_by_sec, htw_ts)
+        else:
+            d["overlay_bsp"] = None
+            d["overlay_heading_rate_deg_s"] = None
+            d["overlay_twa"] = None
+
         enriched.append(d)
 
     rank_maneuvers(enriched)
@@ -1084,9 +1115,10 @@ async def build_maneuvers_overlay(storage: Storage, pairs: list[tuple[int, int]]
     missing TWA) are excluded and their ``"<sid>:<mid>"`` string appended
     to ``excluded_ids`` so the UI can show a notice.
 
-    Per-session instrument data is loaded via ``enrich_session_maneuvers``
-    (cached), then aligned here to the fixed overlay axis. No new
-    storage round-trips for repeat calls on the same session ids.
+    The aligned per-maneuver series are precomputed at enrichment time and
+    stored on each maneuver's cached payload (see
+    :func:`enrich_session_maneuvers` and :data:`ENRICH_CACHE_VERSION`), so
+    this function makes no fresh range-scans on the instrument tables.
     """
     if not pairs:
         return {"axis_s": _OVERLAY_AXIS, "channels": [], "maneuvers": [], "excluded_ids": []}
@@ -1109,12 +1141,6 @@ async def build_maneuvers_overlay(storage: Storage, pairs: list[tuple[int, int]]
         session_name = race.name
         session_slug = race.slug or ""
 
-        # Load instrument series once per session for the overlay alignment.
-        series = await _load_session_instrument_series(storage, session_id)
-        hdg_by_sec = series["hdg"]
-        bsp_by_sec = series["bsp"]
-        twa_by_sec = series["twa"]
-
         for m in enriched:
             if m.get("id") not in wanted_ids:
                 continue
@@ -1123,9 +1149,10 @@ async def build_maneuvers_overlay(storage: Storage, pairs: list[tuple[int, int]]
             if not htw_raw:
                 excluded.append(key)
                 continue
-            try:
-                htw_ts = _parse_iso(str(htw_raw))
-            except (ValueError, TypeError):
+            bsp_aligned = m.get("overlay_bsp")
+            hr_aligned = m.get("overlay_heading_rate_deg_s")
+            twa_aligned = m.get("overlay_twa")
+            if bsp_aligned is None or hr_aligned is None or twa_aligned is None:
                 excluded.append(key)
                 continue
 
@@ -1144,10 +1171,10 @@ async def build_maneuvers_overlay(storage: Storage, pairs: list[tuple[int, int]]
                     "rank": m.get("rank"),
                     "loss_percentile": m.get("loss_percentile"),
                     "head_to_wind_ts": m.get("head_to_wind_ts"),
-                    # Aligned time-series for the line charts.
-                    "bsp": _align_series_at_htw(bsp_by_sec, htw_ts),
-                    "heading_rate_deg_s": _heading_rate_series(hdg_by_sec, htw_ts),
-                    "twa": _align_series_at_htw(twa_by_sec, htw_ts),
+                    # Precomputed aligned series for the line charts.
+                    "bsp": bsp_aligned,
+                    "heading_rate_deg_s": hr_aligned,
+                    "twa": twa_aligned,
                     # Wind-up track + ghost reference for the overlay SVG.
                     "track": m.get("track"),
                     "track_vakaros": m.get("track_vakaros"),
@@ -1187,82 +1214,6 @@ async def build_maneuvers_overlay(storage: Storage, pairs: list[tuple[int, int]]
         "maneuvers": out,
         "excluded_ids": excluded,
     }
-
-
-async def _load_session_instrument_series(
-    storage: Storage, session_id: int
-) -> dict[str, dict[str, float]]:
-    """Load per-second hdg / bsp / twa dicts for a session, keyed by
-    ``ts.isoformat()[:19]``. Uses the same race_id-scoped-with-fallback
-    pattern as ``enrich_session_maneuvers`` and builds the folded TWA
-    the same way."""
-    db = storage._conn()
-    race_cur = await db.execute("SELECT start_utc, end_utc FROM races WHERE id = ?", (session_id,))
-    race_row = await race_cur.fetchone()
-    if race_row is None:
-        return {"hdg": {}, "bsp": {}, "twa": {}}
-
-    start = _parse_iso(race_row["start_utc"])
-    end = _parse_iso(race_row["end_utc"]) if race_row["end_utc"] else start + timedelta(hours=24)
-    start_pad = start - timedelta(seconds=_ENRICH_PAD_S)
-    end_pad = end + timedelta(seconds=_ENRICH_PAD_S)
-
-    async def _load(table: str) -> list[dict[str, Any]]:
-        data = await storage.query_range(table, start_pad, end_pad, race_id=session_id)
-        if not data:
-            data = await storage.query_range(table, start_pad, end_pad)
-        return data
-
-    headings_raw = await _load("headings")
-    speeds_raw = await _load("speeds")
-    winds_raw = await _load("winds")
-    cogsog_raw: list[dict[str, Any]] = []
-    if not headings_raw or not speeds_raw:
-        cogsog_raw = await _load("cogsog")
-
-    def _sec(ts_str: str) -> str:
-        return str(ts_str)[:19]
-
-    hdg_by_sec: dict[str, float] = {}
-    if headings_raw:
-        for r in headings_raw:
-            hdg_by_sec.setdefault(_sec(r["ts"]), float(r["heading_deg"]))
-    elif cogsog_raw:
-        for r in cogsog_raw:
-            hdg_by_sec.setdefault(_sec(r["ts"]), float(r["cog_deg"]))
-
-    bsp_by_sec: dict[str, float] = {}
-    if speeds_raw:
-        for r in speeds_raw:
-            bsp_by_sec.setdefault(_sec(r["ts"]), float(r["speed_kts"]))
-    elif cogsog_raw:
-        for r in cogsog_raw:
-            bsp_by_sec.setdefault(_sec(r["ts"]), float(r["sog_kts"]))
-
-    twa_by_sec: dict[str, float] = {}
-    for r in winds_raw:
-        ref_raw = r.get("reference")
-        if ref_raw is None:
-            continue
-        try:
-            ref = int(ref_raw)
-        except (TypeError, ValueError):
-            continue
-        if ref not in (0, 4):
-            continue
-        sec = _sec(r["ts"])
-        if ref == 0:
-            signed = float(r["wind_angle_deg"])
-            folded = abs(signed) % 360.0
-            twa_by_sec.setdefault(sec, folded if folded <= 180.0 else 360.0 - folded)
-        else:
-            twd_val = float(r["wind_angle_deg"]) % 360.0
-            hv = hdg_by_sec.get(sec)
-            if hv is not None:
-                raw = (twd_val - hv + 360.0) % 360.0
-                twa_by_sec.setdefault(sec, raw if raw <= 180.0 else 360.0 - raw)
-
-    return {"hdg": hdg_by_sec, "bsp": bsp_by_sec, "twa": twa_by_sec}
 
 
 # ---------------------------------------------------------------------------
