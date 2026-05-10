@@ -203,7 +203,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 83
+_CURRENT_VERSION: int = 84
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -2024,6 +2024,27 @@ _MIGRATIONS: dict[int, str] = {
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_race_videos_unique_race_video
             ON race_videos(race_id, video_id);
+    """,
+    84: """
+        -- Add data_hash to the web_cache PK so global (race_id=0) entries
+        -- with different content hashes can coexist. Previously every
+        -- distinct cross-session overlay URL evicted the previous one
+        -- because the single (key_family, race_id) slot only held one
+        -- row per family. Cache content is fully regenerable, so we
+        -- drop the table outright rather than rewrite columns in place.
+        DROP TABLE IF EXISTS web_cache;
+        CREATE TABLE web_cache (
+            key_family  TEXT NOT NULL,
+            race_id     INTEGER NOT NULL,
+            data_hash   TEXT NOT NULL,
+            blob        TEXT NOT NULL,
+            created_utc TEXT NOT NULL,
+            expires_utc TEXT,
+            PRIMARY KEY (key_family, race_id, data_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_web_cache_race ON web_cache(race_id);
+        CREATE INDEX IF NOT EXISTS idx_web_cache_created ON web_cache(created_utc);
+        CREATE INDEX IF NOT EXISTS idx_web_cache_expires ON web_cache(expires_utc);
     """,
 }
 
