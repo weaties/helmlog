@@ -27,6 +27,8 @@ from helmlog.routes._helpers import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from helmlog.storage import Storage
 
 router = APIRouter()
@@ -1296,31 +1298,121 @@ async def _compute_session_replay(storage: Storage, session_id: int) -> dict[str
         logger.warning("replay: grading failed for session {}: {}", session_id, e)
         graded = []
 
-    # Enrich each grade with tack + point_of_sail (#534). Cached grades carry
-    # only unsigned TWA, so we re-derive tack from raw wind records. Parse
-    # once, then sweep segments with a single pointer — O(n + m), not O(n*m).
-    start_dt = datetime.fromisoformat(str(start_utc)).replace(tzinfo=UTC)
-    end_dt = datetime.fromisoformat(str(end_utc)).replace(tzinfo=UTC)
-    tack_winds_raw = await storage.query_range("winds", start_dt, end_dt)
-    tack_hdgs_raw = await storage.query_range("headings", start_dt, end_dt)
+    # Single-pass instrument fetch (#757): all the per-second series the HUD
+    # needs, plus the per-segment tack derivation, come from ONE scan per
+    # table over [prestart_start_utc, end_utc]. The previous shape did up to
+    # 8 sequential time-window scans — including 4 separate passes over the
+    # winds table — and re-derived tack at the native sample rate (~100 Hz)
+    # which iterated hundreds of thousands of wind rows in pure Python.
+    #
+    # Each loader prefers race_id-scoped rows (which use idx_*_race_id) and
+    # falls back to the time-window scan when the session is in the
+    # untagged-history corner (every instrument table on the Pi pre-#756 +
+    # backfill of #755). When the data is tagged, a 22 h overnight session
+    # touches only its own rows instead of every adjacent session's.
+    async def _scoped(sql: str) -> list[Any]:
+        # First try race-scoped; fall back to time-window if nothing tagged.
+        # Tables without a race_id column use _windowed instead.
+        scoped_sql = f"{sql} AND race_id = ?"
+        cur_s = await db.execute(scoped_sql, (prestart_start_utc, end_utc, session_id))
+        rows = await cur_s.fetchall()
+        if rows:
+            return list(rows)
+        cur_t = await db.execute(sql, (prestart_start_utc, end_utc))
+        return list(await cur_t.fetchall())
 
-    hdg_by_key: dict[str, float] = {}
-    for hrec in tack_hdgs_raw:
-        hdg_by_key.setdefault(str(hrec["ts"])[:19], float(hrec["heading_deg"]))
+    async def _windowed(sql: str) -> list[Any]:
+        cur_t = await db.execute(sql, (prestart_start_utc, end_utc))
+        return list(await cur_t.fetchall())
 
+    winds_rows = await _scoped(
+        "SELECT ts, wind_speed_kts, wind_angle_deg, reference FROM winds"
+        " WHERE ts >= ? AND ts <= ? ORDER BY ts"
+    )
+    hdg_rows = await _scoped(
+        "SELECT ts, heading_deg FROM headings WHERE ts >= ? AND ts <= ? ORDER BY ts"
+    )
+    speeds_rows = await _scoped(
+        "SELECT ts, speed_kts FROM speeds WHERE ts >= ? AND ts <= ? ORDER BY ts"
+    )
+    cogsog_rows = await _scoped(
+        "SELECT ts, cog_deg, sog_kts FROM cogsog WHERE ts >= ? AND ts <= ? ORDER BY ts"
+    )
+    # ``attitudes`` lacks a race_id column (#622 hasn't been backfilled to
+    # the same tagging scheme); fall back to the time-window scan.
+    att_rows = await _windowed(
+        "SELECT ts, heel_deg, trim_deg FROM attitudes WHERE ts >= ? AND ts <= ? ORDER BY ts"
+    )
+
+    def _by_sec(
+        rows: list[Any], project: Callable[[Any], dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            key = str(r["ts"])[:19]
+            if key not in out:
+                out[key] = project(r)
+        return out
+
+    speeds_by_s = _by_sec(speeds_rows, lambda r: {"speed_kts": r["speed_kts"]})
+    hdgs_by_s = _by_sec(hdg_rows, lambda r: {"heading_deg": r["heading_deg"]})
+    cogsog_by_s = _by_sec(cogsog_rows, lambda r: {"cog_deg": r["cog_deg"], "sog_kts": r["sog_kts"]})
+    attitudes_by_s = _by_sec(
+        att_rows, lambda r: {"heel_deg": r["heel_deg"], "trim_deg": r["trim_deg"]}
+    )
+
+    # Single pass over the winds rows: per-second dedup into true_winds_by_s
+    # (ref 0/4) and app_winds_by_s (ref 2), and per-second tack vote into
+    # wind_tacks. Doing this once means the 4x wind scan from the previous
+    # shape collapses to 1, and the tack loop sees ~1 sample/second instead
+    # of every raw frame — 100x fewer Python iterations for the same
+    # majority-vote result.
+    true_winds_by_s: dict[str, dict[str, Any]] = {}
+    app_winds_by_s: dict[str, dict[str, Any]] = {}
     wind_tacks: list[tuple[datetime, str]] = []
-    for w in tack_winds_raw:
-        ref = int(w.get("reference", -1))
+    seen_tack_keys: set[str] = set()
+    for w in winds_rows:
+        raw_ref = w["reference"]
+        if raw_ref is None:
+            continue
+        try:
+            ref = int(raw_ref)
+        except (TypeError, ValueError):
+            continue
+        key = str(w["ts"])[:19]
+        if ref == 2:
+            if key not in app_winds_by_s:
+                app_winds_by_s[key] = {
+                    "wind_speed_kts": w["wind_speed_kts"],
+                    "wind_angle_deg": w["wind_angle_deg"],
+                    "reference": ref,
+                }
+            continue
         if ref not in (0, 4):
             continue
-        heading = hdg_by_key.get(str(w["ts"])[:19]) if ref == 4 else None
+        if key not in true_winds_by_s:
+            true_winds_by_s[key] = {
+                "wind_speed_kts": w["wind_speed_kts"],
+                "wind_angle_deg": w["wind_angle_deg"],
+                "reference": ref,
+            }
+        if key in seen_tack_keys:
+            continue
+        heading_pair = hdgs_by_s.get(key)
+        heading = (
+            float(heading_pair["heading_deg"])
+            if ref == 4 and heading_pair is not None and heading_pair["heading_deg"] is not None
+            else None
+        )
         result = _polar._compute_twa_with_tack(float(w["wind_angle_deg"]), ref, heading)
         if result is None:
             continue
+        seen_tack_keys.add(key)
         _, tk = result
         wind_tacks.append((datetime.fromisoformat(str(w["ts"])).replace(tzinfo=UTC), tk))
     wind_tacks.sort(key=lambda x: x[0])
 
+    # Per-segment tack: O(n+m) sweep — unchanged from the previous shape.
     grades_sorted = sorted(graded, key=lambda g: g.t_start)
     tacks_by_segment: dict[int, str | None] = {}
     wi = 0
@@ -1363,50 +1455,6 @@ async def _compute_session_replay(storage: Storage, session_id: int) -> dict[str
                 "point_of_sail": pos,
             }
         )
-
-    # Thin instrument series for HUD. 1 Hz dedup by truncated timestamp key.
-    # Lower bound is prestart_start_utc so the scrubber has gauges in the
-    # pre-gun window.
-    async def _series(table: str, fields: list[str]) -> dict[str, dict[str, Any]]:
-        cols = ", ".join(["ts", *fields])
-        q = f"SELECT {cols} FROM {table} WHERE ts >= ? AND ts <= ? ORDER BY ts"
-        qcur = await db.execute(q, (prestart_start_utc, end_utc))
-        rows = await qcur.fetchall()
-        out: dict[str, dict[str, Any]] = {}
-        for r in rows:
-            key = str(r["ts"])[:19]
-            if key in out:
-                continue
-            out[key] = {f: r[f] for f in fields}
-        return out
-
-    # Wind table holds both true (ref 0/4) and apparent (ref 2) rows; keep them
-    # separated so the replay HUD can surface TWS/TWA and AWS/AWA independently.
-    async def _wind_series(where: str) -> dict[str, dict[str, Any]]:
-        q = (
-            "SELECT ts, wind_speed_kts, wind_angle_deg, reference FROM winds "
-            f"WHERE ts >= ? AND ts <= ? AND {where} ORDER BY ts"
-        )
-        qcur = await db.execute(q, (prestart_start_utc, end_utc))
-        rows = await qcur.fetchall()
-        out: dict[str, dict[str, Any]] = {}
-        for r in rows:
-            key = str(r["ts"])[:19]
-            if key in out:
-                continue
-            out[key] = {
-                "wind_speed_kts": r["wind_speed_kts"],
-                "wind_angle_deg": r["wind_angle_deg"],
-                "reference": r["reference"],
-            }
-        return out
-
-    speeds_by_s = await _series("speeds", ["speed_kts"])
-    true_winds_by_s = await _wind_series("reference IN (0, 4)")
-    app_winds_by_s = await _wind_series("reference = 2")
-    hdgs_by_s = await _series("headings", ["heading_deg"])
-    cogsog_by_s = await _series("cogsog", ["cog_deg", "sog_kts"])
-    attitudes_by_s = await _series("attitudes", ["heel_deg", "trim_deg"])
 
     keys = sorted(
         set(speeds_by_s.keys())
