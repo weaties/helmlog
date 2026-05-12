@@ -74,7 +74,10 @@
   <div class="race-name" id="debrief-name">&mdash;</div>
   <div class="label" style="margin-top:12px">Duration</div>
   <div class="duration" id="debrief-duration" style="color:var(--warning)">&mdash;</div>
-  <button class="btn btn-danger" style="margin-top:12px" onclick="stopDebrief()">STOP DEBRIEF</button>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
+    <button class="btn btn-danger" id="btn-complete-session" onclick="confirmCompleteSession()">&#9632; COMPLETE SESSION</button>
+    <button class="btn btn-primary" id="btn-start-next-race" onclick="startNextRace()">&#9654; START NEXT RACE</button>
+  </div>
 </div>
 
 <div class="card" id="setup-card">
@@ -160,8 +163,7 @@
   <button class="btn btn-practice" id="btn-start-practice" onclick="startSession('practice')">&#9654; START PRACTICE</button>
   <button class="btn btn-schedule hidden" id="btn-schedule-toggle" onclick="toggleSchedulePanel()">&#9200; SET START TIME</button>
   <button class="btn btn-synthesize hidden" id="btn-synthesize" onclick="toggleSynthPanel()">&#9881; SYNTHESIZE RACE</button>
-  <button class="btn btn-debrief hidden" id="btn-debrief-last" onclick="startDebriefLast()">DEBRIEF LAST RACE</button>
-  <button class="btn btn-danger hidden" id="btn-end" onclick="confirmEndRace()">&#9632; END RACE</button>
+  <button class="btn btn-danger hidden" id="btn-end" onclick="confirmFinishRace()">&#9632; FINISH RACE</button>
 </div>
 
 <div id="schedule-panel" class="card hidden">

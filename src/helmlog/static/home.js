@@ -148,7 +148,6 @@ function render(s) {
   const btnStartPractice = document.getElementById('btn-start-practice');
 
   const instCard = document.getElementById('instruments-card');
-  const btnDebriefLast = document.getElementById('btn-debrief-last');
   const todaySummary = document.getElementById('today-summary');
   const controlsDiv = document.getElementById('controls');
 
@@ -170,12 +169,11 @@ function render(s) {
     btnEnd.classList.remove('hidden');
     btnStartRace.classList.add('hidden');
     btnStartPractice.classList.add('hidden');
-    btnDebriefLast.classList.add('hidden');
     document.getElementById('cur-name').textContent = cur.name;
     document.getElementById('cur-meta').textContent =
       'Started ' + fmtTime(cur.start_utc);
     curRaceStartMs = new Date(cur.start_utc).getTime();
-    btnEnd.textContent = '■ END ' + cur.name;
+    btnEnd.textContent = '■ FINISH ' + cur.name;
     if(cur.id !== _crewLoadedForRaceId) {
       _crewLoadedForRaceId = cur.id;
       if (_crewMetaLoaded) loadCrewCurrentValues();
@@ -210,7 +208,6 @@ function render(s) {
     // Hide start buttons during debrief
     btnStartRace.classList.add('hidden');
     btnStartPractice.classList.add('hidden');
-    btnDebriefLast.classList.add('hidden');
   } else {
     debriefCard.classList.add('hidden');
     debriefStartMs = null;
@@ -243,16 +240,6 @@ function render(s) {
     schedPanel.classList.add('hidden');
     schedCountdown.classList.add('hidden');
     _stopScheduleCountdown();
-  }
-
-  // --- Debrief last race button: show when idle, has recorder, and finished races exist ---
-  const lastFinished = (s.today_races || []).filter(r => r.end_utc).slice(-1)[0];
-  if (isIdle && s.has_recorder && lastFinished) {
-    btnDebriefLast.classList.remove('hidden');
-    btnDebriefLast.textContent = '🎙 DEBRIEF ' + lastFinished.name;
-    btnDebriefLast.dataset.raceId = lastFinished.id;
-  } else {
-    btnDebriefLast.classList.add('hidden');
   }
 
   // --- Compact today's summary (idle only) ---
@@ -1041,12 +1028,12 @@ let _endConfirmTimer = null;
 let _endCountdownInterval = null;
 const END_CONFIRM_SECONDS = 4;
 
-function confirmEndRace() {
+function confirmFinishRace() {
   const btn = document.getElementById('btn-end');
   if (btn.dataset.confirming === 'true') {
-    // Second tap — actually end the race
+    // Second tap — finish the race and auto-start the debrief (#762)
     _clearEndConfirm(btn);
-    endRace();
+    finishRace();
     return;
   }
   // First tap — start countdown
@@ -1073,29 +1060,73 @@ function _clearEndConfirm(btn) {
   btn.dataset.confirming = '';
   btn.classList.remove('btn-end-confirm');
   if (state && state.current_race) {
-    btn.textContent = '\u25A0 END ' + state.current_race.name;
+    btn.textContent = '\u25A0 FINISH ' + state.current_race.name;
   }
 }
 
-async function endRace() {
+async function finishRace() {
+  // FINISH RACE: end the race recording, then silently start a debrief in
+  // the same session (#762). The /end endpoint runs the post-race side
+  // effects (camera stop, maneuver detect, polar warm, cache warm); the
+  // /debrief/start endpoint opens the new audio session against the same
+  // race row.
   if(!state || !state.current_race) return;
-  await fetch(`/api/races/${state.current_race.id}/end`, {method:'POST'});
+  const raceId = state.current_race.id;
+  await fetch(`/api/races/${raceId}/end`, {method:'POST'});
+  await fetch(`/api/races/${raceId}/debrief/start`, {method:'POST'});
   await loadState();
 }
 
-async function startDebrief(raceId) {
-  await fetch(`/api/races/${raceId}/debrief/start`, {method: 'POST'});
-  await loadState();
+let _completeConfirmTimer = null;
+let _completeCountdownInterval = null;
+
+function confirmCompleteSession() {
+  const btn = document.getElementById('btn-complete-session');
+  if (btn.dataset.confirming === 'true') {
+    _clearCompleteConfirm(btn);
+    completeSession();
+    return;
+  }
+  btn.dataset.confirming = 'true';
+  btn.classList.add('btn-end-confirm');
+  let remaining = END_CONFIRM_SECONDS;
+  btn.textContent = 'TAP TO CONFIRM (' + remaining + ')';
+  _completeCountdownInterval = setInterval(() => {
+    remaining--;
+    if (remaining <= 0) {
+      _clearCompleteConfirm(btn);
+      return;
+    }
+    btn.textContent = 'TAP TO CONFIRM (' + remaining + ')';
+  }, 1000);
+  _completeConfirmTimer = setTimeout(
+    () => _clearCompleteConfirm(btn), END_CONFIRM_SECONDS * 1000
+  );
 }
 
-async function startDebriefLast() {
-  const btn = document.getElementById('btn-debrief-last');
-  const raceId = btn && btn.dataset.raceId;
-  if (raceId) await startDebrief(parseInt(raceId, 10));
+function _clearCompleteConfirm(btn) {
+  clearTimeout(_completeConfirmTimer);
+  clearInterval(_completeCountdownInterval);
+  _completeConfirmTimer = null;
+  _completeCountdownInterval = null;
+  btn.dataset.confirming = '';
+  btn.classList.remove('btn-end-confirm');
+  btn.textContent = '\u25A0 COMPLETE SESSION';
 }
 
-async function stopDebrief() {
+async function completeSession() {
+  // Stop the debrief recording and end the session (#762). Equivalent to
+  // today's STOP DEBRIEF \u2014 the race itself ended at FINISH RACE.
   await fetch('/api/debrief/stop', {method: 'POST'});
+  await loadState();
+}
+
+async function startNextRace() {
+  // Stop the current debrief, then start the next race (#762). Debrief
+  // audio stays attached to the just-finished race; the new race opens
+  // a fresh audio session.
+  await fetch('/api/debrief/stop', {method: 'POST'});
+  await fetch('/api/races/start?session_type=race', {method: 'POST'});
   await loadState();
 }
 
