@@ -514,7 +514,12 @@ _ENRICH_PAD_S = 60  # seconds of instrument data to load beyond the session wind
 #     overlay endpoint serves from cache instead of rescanning instrument
 #     tables for every request. Untagged sessions with multi-hour windows
 #     made the previous reload path take 20+ s on a Pi.
-ENRICH_CACHE_VERSION = 8
+# v9: instrument series (HDG, BSP, TWS, TWA, TWD) are now smoothed with the
+#     same per-channel τ that the live broadcast uses (#749). Per-maneuver
+#     metrics (entry_bsp, min_bsp, turn_rate_deg_s, …) shift to the smoothed
+#     values; cache hash now also folds the active τ map so an admin
+#     τ change busts the cache.
+ENRICH_CACHE_VERSION = 9
 
 
 def _bucket_positions_per_second(
@@ -647,8 +652,17 @@ async def enrich_session_maneuvers(
     or the linked race video changes, and force-rebuilt whenever
     :data:`ENRICH_CACHE_VERSION` is bumped.
     """
+    # Active smoothing τ map — folded into the cache check below so an
+    # admin τ change busts the per-session cache (#749). The same τ map
+    # is applied to the raw series further down so historical metrics
+    # mirror what live smoothing would have produced.
+    from helmlog.smoothing import tau_hash as _tau_hash
+
+    active_taus = storage.current_smoothing_taus()
+    active_tau_hash = _tau_hash(active_taus)
+
     cached = await storage.get_cached_enriched_maneuvers(session_id, ENRICH_CACHE_VERSION)
-    if cached is not None:
+    if cached is not None and cached.get("tau_hash") == active_tau_hash:
         return cached.get("maneuvers", []), cached.get("video_sync")
 
     rows = await storage.get_session_maneuvers(session_id)
@@ -712,17 +726,115 @@ async def enrich_session_maneuvers(
     def _ts_of(row: dict[str, Any]) -> datetime:
         return _parse_iso(str(row["ts"]))
 
-    hdg: list[tuple[datetime, float]] = [(_ts_of(r), float(r["heading_deg"])) for r in headings_raw]
-    if not hdg and cogsog_raw:
-        hdg = [(_ts_of(r), float(r["cog_deg"])) for r in cogsog_raw]
-    bsp: list[tuple[datetime, float]] = [(_ts_of(r), float(r["speed_kts"])) for r in speeds_raw]
-    if not bsp and cogsog_raw:
-        bsp = [(_ts_of(r), float(r["sog_kts"])) for r in cogsog_raw]
+    # --- Smoothing (#749) -------------------------------------------------
+    # Apply the same per-channel τ that the live broadcast uses, so
+    # historical metrics mirror what the gauges showed when sailing.
+    # apply_ema_to_series is stateless per call and uses the sample's
+    # own timestamp for dt, so the smoother adapts to real instrument
+    # rates rather than wall-clock.
+    from helmlog.smoothing import DEFAULT_TAUS as _DEFAULT_TAUS
+    from helmlog.smoothing import apply_ema_to_series as _apply_ema
+
+    _tau_hdg = active_taus.get("heading_deg", _DEFAULT_TAUS["heading_deg"])
+    _tau_bsp = active_taus.get("bsp_kts", _DEFAULT_TAUS["bsp_kts"])
+    _tau_tws = active_taus.get("tws_kts", _DEFAULT_TAUS["tws_kts"])
+    _tau_twa = active_taus.get("twa_deg", _DEFAULT_TAUS["twa_deg"])
+    _tau_twd = active_taus.get("twd_deg", _DEFAULT_TAUS["twd_deg"])
+    _tau_cog = active_taus.get("cog_deg", _DEFAULT_TAUS["cog_deg"])
+    _tau_sog = active_taus.get("sog_kts", _DEFAULT_TAUS["sog_kts"])
+
+    def _smooth_scalar(
+        rows: list[dict[str, Any]], field: str, tau: float
+    ) -> list[tuple[datetime, float]]:
+        if not rows:
+            return []
+        ts_series = [(_ts_of(r).timestamp(), float(r[field])) for r in rows]
+        smoothed = _apply_ema(ts_series, tau, is_angle=False)
+        return [(_parse_iso(str(r["ts"])), v) for r, v in zip(rows, smoothed, strict=True)]
+
+    def _smooth_angle(
+        rows: list[dict[str, Any]], field: str, tau: float
+    ) -> list[tuple[datetime, float]]:
+        if not rows:
+            return []
+        ts_series = [(_ts_of(r).timestamp(), float(r[field])) for r in rows]
+        smoothed = _apply_ema(ts_series, tau, is_angle=True)
+        return [(_parse_iso(str(r["ts"])), v) for r, v in zip(rows, smoothed, strict=True)]
+
+    # HDG: smoothed; fall back to smoothed COG if no compass data.
+    if headings_raw:
+        hdg: list[tuple[datetime, float]] = _smooth_angle(headings_raw, "heading_deg", _tau_hdg)
+    elif cogsog_raw:
+        hdg = _smooth_angle(cogsog_raw, "cog_deg", _tau_cog)
+    else:
+        hdg = []
+
+    # BSP: smoothed; fall back to smoothed SOG if no STW data.
+    if speeds_raw:
+        bsp: list[tuple[datetime, float]] = _smooth_scalar(speeds_raw, "speed_kts", _tau_bsp)
+    elif cogsog_raw:
+        bsp = _smooth_scalar(cogsog_raw, "sog_kts", _tau_sog)
+    else:
+        bsp = []
 
     # Build a heading lookup so we can convert north-referenced TWD to TWA.
     hdg_by_sec: dict[str, float] = {}
     for ts_h, hv in hdg:
         hdg_by_sec.setdefault(ts_h.isoformat()[:19], hv)
+
+    # Wind: smooth raw inputs per reference frame, then derive twa/twd/
+    # signed_twa from the smoothed values. Per #749 we smooth the raw
+    # angle (TWA for ref=0, TWD for ref=4) and the speed, then fold to
+    # TWA last — mirrors the live wind recompute order in
+    # ``Storage._recompute_true_wind``.
+    def _safe_int(v: object) -> int | None:
+        try:
+            return int(v)  # type: ignore[call-overload, no-any-return]
+        except (TypeError, ValueError):
+            return None
+
+    valid_winds = [
+        r
+        for r in winds_raw
+        if r.get("reference") is not None
+        and _safe_int(r.get("reference")) in (0, 4)
+        and r.get("wind_speed_kts") is not None
+        and r.get("wind_angle_deg") is not None
+    ]
+    # TWS smoothed against its own dt scale across all valid wind rows.
+    tws_smoothed = _apply_ema(
+        [(_ts_of(r).timestamp(), float(r["wind_speed_kts"])) for r in valid_winds],
+        _tau_tws,
+        is_angle=False,
+    )
+    # ref=0 rows: raw signed TWA in degrees, can be ±360; AngleEma needs
+    # the value mod 360 for stable wrap-handling on the (sin, cos) pair.
+    ref0_indices = [i for i, r in enumerate(valid_winds) if _safe_int(r["reference"]) == 0]
+    ref0_smoothed_angle = _apply_ema(
+        [
+            (_ts_of(valid_winds[i]).timestamp(), float(valid_winds[i]["wind_angle_deg"]) % 360.0)
+            for i in ref0_indices
+        ],
+        _tau_twa,
+        is_angle=True,
+    )
+    # ref=4 rows: raw TWD already in [0, 360).
+    ref4_indices = [i for i, r in enumerate(valid_winds) if _safe_int(r["reference"]) == 4]
+    ref4_smoothed_angle = _apply_ema(
+        [
+            (_ts_of(valid_winds[i]).timestamp(), float(valid_winds[i]["wind_angle_deg"]) % 360.0)
+            for i in ref4_indices
+        ],
+        _tau_twd,
+        is_angle=True,
+    )
+    # Re-index smoothed-angle outputs back to their parent rows so the
+    # interleaved per-row loop below can pick them up by row index.
+    angle_by_index: dict[int, tuple[int, float]] = {}
+    for slot, idx in enumerate(ref0_indices):
+        angle_by_index[idx] = (0, ref0_smoothed_angle[slot])
+    for slot, idx in enumerate(ref4_indices):
+        angle_by_index[idx] = (4, ref4_smoothed_angle[slot])
 
     twa: list[tuple[datetime, float]] = []
     # Pre-fold signed TWA in [-180, 180] (positive-starboard). Needed for
@@ -734,38 +846,27 @@ async def enrich_session_maneuvers(
     # rotate per-maneuver tracks into a wind-up frame and to compute the
     # "climb the ladder" upwind-progress reference line.
     twd: list[tuple[datetime, float]] = []
-    for r in winds_raw:
-        ref_raw = r.get("reference")
-        if ref_raw is None:
-            continue
-        try:
-            ref = int(ref_raw)
-        except (TypeError, ValueError):
-            continue
-        # 0 = boat-referenced TWA, 4 = north-referenced TWD. Both are "true wind".
-        if ref not in (0, 4):
-            continue
+    for i, r in enumerate(valid_winds):
         ts = _ts_of(r)
-        tws.append((ts, float(r["wind_speed_kts"])))
+        tws.append((ts, tws_smoothed[i]))
+        ref, smoothed_angle = angle_by_index[i]
         if ref == 0:
-            signed_twa = float(r["wind_angle_deg"])
-            # Normalize to [-180, 180].
-            signed_wrapped = ((signed_twa + 180.0) % 360.0) - 180.0
+            # Re-sign the smoothed TWA into [-180, 180]. AngleEma output
+            # is always in [0, 360), so wrap > 180 → negative-port.
+            signed_wrapped = smoothed_angle if smoothed_angle <= 180.0 else smoothed_angle - 360.0
             signed_twa_series.append((ts, signed_wrapped))
-            folded = abs(signed_twa) % 360.0
+            folded = abs(signed_wrapped)
             twa.append((ts, folded if folded <= 180.0 else 360.0 - folded))
-            # TWD = heading + signed TWA (wind_angle_deg is positive-starboard).
             hv_opt = hdg_by_sec.get(ts.isoformat()[:19])
             if hv_opt is not None:
-                twd.append((ts, (hv_opt + signed_twa + 360.0) % 360.0))
+                twd.append((ts, (hv_opt + signed_wrapped + 360.0) % 360.0))
         else:
-            twd_val = float(r["wind_angle_deg"]) % 360.0
+            twd_val = smoothed_angle
             twd.append((ts, twd_val))
             hv_opt = hdg_by_sec.get(ts.isoformat()[:19])
             if hv_opt is not None:
                 raw = (twd_val - hv_opt + 360.0) % 360.0
                 twa.append((ts, raw if raw <= 180.0 else 360.0 - raw))
-                # Signed form: raw > 180 means wind on port (negative).
                 signed_twa_series.append((ts, raw if raw <= 180.0 else raw - 360.0))
 
     positions_unbucketed: list[tuple[datetime, float, float]] = [
@@ -997,7 +1098,7 @@ async def enrich_session_maneuvers(
     await storage.put_cached_enriched_maneuvers(
         session_id,
         ENRICH_CACHE_VERSION,
-        {"maneuvers": enriched, "video_sync": video_sync},
+        {"maneuvers": enriched, "video_sync": video_sync, "tau_hash": active_tau_hash},
     )
     return enriched, video_sync
 

@@ -924,6 +924,12 @@ class TestHeadToWindPersistence:
 
     @pytest.mark.asyncio
     async def test_enrich_writes_head_to_wind_to_table_and_payload(self, storage: Storage) -> None:
+        # Pin smoothing τs near-zero so the zero-crossing detection is
+        # tested in isolation from EMA lag (#749).
+        for ch in ("twa_deg", "twd_deg", "heading_deg", "bsp_kts", "tws_kts"):
+            await storage.set_setting(f"smoothing.{ch}.tau_s", "0.05")
+        await storage.refresh_smoothing()
+
         db = storage._conn()
         start = datetime(2024, 6, 15, 14, 0, 0, tzinfo=UTC)
         end = start + timedelta(seconds=120)

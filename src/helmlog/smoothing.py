@@ -183,11 +183,50 @@ def parse_tau(raw: str | None, default: float) -> float:
         return default
 
 
+def apply_ema_to_series(
+    samples: list[tuple[float, float]],
+    tau_s: float,
+    is_angle: bool = False,
+) -> list[float]:
+    """Apply a variable-dt EMA over ``samples`` (already sorted by ts).
+
+    ``samples`` is a list of ``(epoch_seconds, value)`` tuples; the
+    returned list aligns 1:1 with the inputs. ``is_angle=True`` uses the
+    same (sin, cos) vector smoother as :class:`AngleEma` so values wrap
+    cleanly at 360°.
+
+    This mirrors the live path's per-tick semantics — the analysis path
+    can replay a session and produce identical smoothing to what the
+    live broadcast would have shown if the same τ had been active.
+    Stateless: a fresh smoother is allocated per call, so callers can
+    use it on per-session series without worrying about reuse.
+    """
+    if not samples:
+        return []
+    sm: Ema | AngleEma = AngleEma(tau_s=tau_s) if is_angle else Ema(tau_s=tau_s)
+    return [sm.update(value, t=ts) for ts, value in samples]
+
+
+def tau_hash(taus: dict[str, float]) -> str:
+    """Stable 16-char hex digest of a per-channel tau map (#749).
+
+    Folded into cache keys so a τ change busts both the per-session
+    enrichment cache and the cross-session overlay T2 cache. Sorted
+    keys + fixed float repr keeps the hash deterministic.
+    """
+    import hashlib
+
+    parts = [f"{k}={float(v):.6f}" for k, v in sorted(taus.items())]
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
 __all__ = [
     "ANGLE_CHANNELS",
     "DEFAULT_TAUS",
     "AngleEma",
     "Ema",
     "SmoothingConfig",
+    "apply_ema_to_series",
     "parse_tau",
+    "tau_hash",
 ]

@@ -1987,6 +1987,8 @@ async def api_maneuvers_overlay(
     data_hash: str | None = None
     if cache is not None:
         try:
+            from helmlog.smoothing import tau_hash as _smoothing_tau_hash
+
             session_hashes: dict[int, str] = {}
             for sid in sorted({sid for sid, _ in sorted_pairs}):
                 h = await resolve_race_data_hash(storage, sid)
@@ -1997,6 +1999,10 @@ async def api_maneuvers_overlay(
                     "pairs": sorted_pairs,
                     "session_hashes": session_hashes,
                     "enrich_version": ENRICH_CACHE_VERSION,
+                    # Smoothing τ shifts every derived series + per-maneuver
+                    # metric. Folding it here busts the cache when admin
+                    # updates smoothing.<channel>.tau_s (#749).
+                    "tau_hash": _smoothing_tau_hash(storage.current_smoothing_taus()),
                 },
                 sort_keys=True,
             )

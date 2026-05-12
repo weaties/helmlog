@@ -2208,6 +2208,10 @@ class Storage:
         from helmlog.smoothing import DEFAULT_TAUS, SmoothingConfig
 
         self._smoothing: SmoothingConfig = SmoothingConfig.from_taus(DEFAULT_TAUS)
+        # Snapshot of the active per-channel tau map (#749). Updated by
+        # refresh_smoothing(); used by the analysis path to apply the same
+        # smoothing on historical reads as the live path applied at capture.
+        self._smoothing_taus: dict[str, float] = dict(DEFAULT_TAUS)
         # Leeway coefficient for the live current compute (#730). Loaded from
         # boat_settings.leeway_coefficient on connect; refresh_leeway_k() picks
         # up admin changes. Default 10 is a reasonable starting point for a
@@ -2419,7 +2423,16 @@ class Storage:
             tau = parse_tau(raw, default)
             self._smoothing.set_tau(channel, tau)
             out[channel] = tau
+        self._smoothing_taus = out
         return out
+
+    def current_smoothing_taus(self) -> dict[str, float]:
+        """Return the active per-channel tau map. Empty until
+        :meth:`refresh_smoothing` has run (i.e. before ``connect()``).
+        Used by the analysis path to mirror live smoothing on historical
+        reads (#749).
+        """
+        return dict(getattr(self, "_smoothing_taus", {}))
 
     def live_instruments(self) -> dict[str, float | None]:
         """Return a snapshot of the current in-memory instrument cache."""
