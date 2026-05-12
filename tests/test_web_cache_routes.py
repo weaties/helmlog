@@ -213,7 +213,7 @@ async def test_replay_cache_blob_written_and_invalidated(
     db = storage._conn()
     cur = await db.execute(
         "SELECT COUNT(*) AS n FROM web_cache WHERE race_id = ? AND key_family = ?",
-        (race_id, "session_replay_v2"),
+        (race_id, "session_replay_v3"),
     )
     assert (await cur.fetchone())["n"] == 1
 
@@ -221,7 +221,7 @@ async def test_replay_cache_blob_written_and_invalidated(
     await storage.rename_race(race_id, new_name="After Rename")
     cur = await db.execute(
         "SELECT COUNT(*) AS n FROM web_cache WHERE race_id = ? AND key_family = ?",
-        (race_id, "session_replay_v2"),
+        (race_id, "session_replay_v3"),
     )
     assert (await cur.fetchone())["n"] == 0
 

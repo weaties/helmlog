@@ -22,6 +22,9 @@
 .mv-table{width:100%;border-collapse:collapse;font-size:.78rem}
 .mv-table th,.mv-table td{padding:5px 8px;text-align:left;border-bottom:1px solid var(--border)}
 .mv-table th{font-size:.7rem;font-weight:600;color:var(--text-secondary);background:var(--bg-input);text-transform:uppercase;letter-spacing:.03em;position:sticky;top:0}
+.mv-table th.mv-sortable{cursor:pointer;user-select:none}
+.mv-table th.mv-sortable:hover{color:var(--text-primary)}
+.mv-table th .mv-sort-indicator{display:inline-block;margin-left:4px;font-size:.65rem;color:var(--accent);vertical-align:middle}
 .mv-table tbody tr{cursor:pointer}
 .mv-table tbody tr:hover{background:var(--bg-input)}
 .mv-table tbody tr.selected{background:rgba(var(--accent-rgb,100,140,200),.12)}
@@ -51,6 +54,8 @@
 <h1 style="margin-bottom:8px">Maneuvers</h1>
 <div style="font-size:.78rem;color:var(--text-secondary);margin-bottom:12px">
   Browse maneuvers across sessions, filter by wind, then compare videos side-by-side.
+  &middot;
+  <a href="/analysis/maneuver-compare" style="color:var(--accent)">Best vs median picker →</a>
 </div>
 
 <div class="card">
@@ -89,9 +94,19 @@
         <div style="font-size:.72rem;color:var(--text-secondary);margin:10px 0 4px">Race phase</div>
         <div style="display:flex;gap:4px;flex-wrap:wrap" id="mv-phase-pills"></div>
         <div style="font-size:.72rem;color:var(--text-secondary);margin:10px 0 4px">
-          Wind (TWS kts) <span style="opacity:.6">— click multiple to combine</span>
+          Wind (TWS kts) <span style="opacity:.6">— click pills, type a range, or both</span>
         </div>
-        <div style="display:flex;gap:4px;flex-wrap:wrap" id="mv-tws-pills"></div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center" id="mv-tws-pills"></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:4px">
+          <input type="number" id="mv-tws-min" step="0.5" min="0" placeholder="min"
+            style="width:70px;background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:.8rem"
+            oninput="mvOnTwsRangeChange()"/>
+          <span style="font-size:.78rem;color:var(--text-secondary)">to</span>
+          <input type="number" id="mv-tws-max" step="0.5" min="0" placeholder="max"
+            style="width:70px;background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:.8rem"
+            oninput="mvOnTwsRangeChange()"/>
+          <button type="button" class="mv-pill" onclick="mvClearTwsRange()" style="font-size:.7rem">clear range</button>
+        </div>
       </div>
     </div>
   </div>
@@ -102,6 +117,16 @@
     <strong id="mv-count">0 maneuvers</strong>
     <span id="mv-selected-count" style="font-size:.75rem;color:var(--text-secondary)"></span>
     <span class="spacer"></span>
+    <label style="font-size:.72rem;color:var(--text-secondary);display:flex;align-items:center;gap:5px">
+      Rank by
+      <select id="mv-rank-by" onchange="mvOnRankByChange()"
+        style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:.78rem">
+        <option value="distance_loss_m">Distance lost</option>
+        <option value="time_to_recover_s">Recovery time</option>
+        <option value="time_to_head_to_wind_s">Time to HTW</option>
+        <option value="loss_kts">Speed loss</option>
+      </select>
+    </label>
     <button id="mv-overlay-btn" onclick="mvOpenOverlay()" disabled>Overlay Selected</button>
     <button id="mv-compare-btn" onclick="mvOpenCompare()" disabled>Compare Selected</button>
   </div>
@@ -111,16 +136,16 @@
       <thead>
         <tr>
           <th style="width:28px"><input type="checkbox" id="mv-check-all" onchange="mvToggleAll(this.checked)"/></th>
-          <th>Session</th>
-          <th>Time</th>
-          <th>Type</th>
-          <th>Dir</th>
-          <th class="mv-num">TWS</th>
-          <th class="mv-num" title="Turn angle in degrees (heading change through the maneuver)">&Delta;&deg;</th>
-          <th class="mv-num">Duration</th>
-          <th class="mv-num" title="Turn phase (entry &rarr; head-to-wind). Long turn = helm slow.">Turn</th>
-          <th class="mv-num" title="Recovery phase (head-to-wind &rarr; exit). Long recovery = trim slow.">Recovery</th>
-          <th>Rank</th>
+          <th class="mv-sortable" data-sort="session_start_utc" title="Click to sort, shift-click to add as secondary sort">Session</th>
+          <th class="mv-sortable" data-sort="ts">Time</th>
+          <th class="mv-sortable" data-sort="type">Type</th>
+          <th class="mv-sortable" data-sort="direction" title="Direction P&rarr;S or S&rarr;P">Dir</th>
+          <th class="mv-num mv-sortable" data-sort="entry_tws" data-numeric="1">TWS</th>
+          <th class="mv-num mv-sortable" data-sort="turn_angle_abs" data-numeric="1" title="Turn angle in degrees (heading change through the maneuver)">&Delta;&deg;</th>
+          <th class="mv-num mv-sortable" data-sort="duration_sec" data-numeric="1">Duration</th>
+          <th class="mv-num mv-sortable" data-sort="time_to_head_to_wind_s" data-numeric="1" title="Turn phase (entry &rarr; head-to-wind). Long turn = helm slow.">Turn</th>
+          <th class="mv-num mv-sortable" data-sort="time_to_recover_s" data-numeric="1" title="Recovery phase (head-to-wind &rarr; exit). Long recovery = trim slow.">Recovery</th>
+          <th class="mv-sortable" data-sort="loss_percentile" data-numeric="1" title="Sorts by underlying percentile; label reflects chosen Rank by metric">Rank</th>
           <th>Video</th>
           <th>Tags</th>
         </tr>

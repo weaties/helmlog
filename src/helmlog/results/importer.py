@@ -9,7 +9,7 @@ the same data produces zero net changes (R15, R16, R17).
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime, tzinfo
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -26,6 +26,44 @@ if TYPE_CHECKING:
         SeriesStanding,
     )
     from helmlog.storage import Storage
+
+
+def _own_sail_number() -> str | None:
+    """Return the Pi's own sail number from boat identity, or None.
+
+    Wraps every conceivable failure (no identity, malformed json, missing
+    attr) and returns None — callers fall back to importing every race
+    when the sail is unknown.
+    """
+    try:
+        from helmlog.federation import load_identity
+
+        _, card = load_identity()
+        sail = card.sail_number
+    except Exception:  # noqa: BLE001
+        return None
+    sail = (sail or "").strip()
+    return sail or None
+
+
+def _filter_races_for_own_sail(
+    races: tuple[RaceData, ...],
+    own_sail: str | None,
+) -> tuple[RaceData, ...]:
+    """Drop races whose finishes don't contain *own_sail*.
+
+    STYC publishes a separate race row per division for each race
+    number, and helmlog's value comes from the one division the boat
+    actually competed in — every other division is noise. Filter to
+    races that actually contain the own sail.
+
+    If *own_sail* is unknown OR every race lacks it (spectator regatta),
+    return *races* unchanged so we don't accidentally drop everything.
+    """
+    if not own_sail:
+        return races
+    kept = tuple(r for r in races if any(f.sail_number == own_sail for f in r.finishes))
+    return kept if kept else races
 
 
 def _assign_places(finishes: tuple[BoatFinish, ...]) -> list[tuple[int, BoatFinish]]:
@@ -53,8 +91,18 @@ async def import_results(
     results: RegattaResults,
     *,
     user_id: int | None = None,
+    own_sail: str | None = None,
 ) -> dict[str, int]:
     """Upsert a ``RegattaResults`` into the database.
+
+    When the boat's own sail number is known (loaded from
+    ``boat_identity`` if not explicitly provided), races that don't
+    contain that sail are filtered out before persisting — STYC and
+    similar sources publish every division for every race-night, and
+    most are irrelevant to the boat running this Pi (#735). The filter
+    only applies when at least one race contains the own sail; if the
+    sail is absent from the entire regatta (e.g. an admin imported a
+    spectator regatta), every race is persisted as before.
 
     Returns a summary dict with counts: ``races_upserted``,
     ``results_upserted``, ``boats_upserted``, ``standings_upserted``.
@@ -69,11 +117,22 @@ async def import_results(
         "standings_upserted": 0,
     }
 
+    if own_sail is None:
+        own_sail = _own_sail_number()
+    races_to_import = _filter_races_for_own_sail(results.races, own_sail)
+    if own_sail and len(races_to_import) < len(results.races):
+        logger.info(
+            "Filtered {} → {} races for own sail {!r} (skipped foreign divisions)",
+            len(results.races),
+            len(races_to_import),
+            own_sail,
+        )
+
     regatta_id = await _upsert_regatta(db, reg, now)
 
     boat_cache: dict[str, int] = {}
 
-    for race_data in results.races:
+    for race_data in races_to_import:
         if not race_data.date:
             logger.warning(
                 "Skipping race {} — no date (provider returned null)",
@@ -91,7 +150,10 @@ async def import_results(
 
         counts["races_upserted"] += 1
 
-    _linked, touched_sessions = await _link_regatta_races_to_local_sessions(db, regatta_id)
+    venue_tz = _resolve_venue_tz(reg.venue_tz)
+    _linked, touched_sessions = await _link_regatta_races_to_local_sessions(
+        db, regatta_id, venue_tz=venue_tz
+    )
 
     for standing in results.standings:
         boat_id = await _upsert_boat_minimal(db, standing.sail_number, boat_cache)
@@ -171,15 +233,23 @@ async def _link_regatta_races_to_local_sessions(
     db: aiosqlite.Connection,
     regatta_id: int,
     *,
+    venue_tz: tzinfo | None = None,
     force: bool = False,
 ) -> tuple[int, set[int]]:
-    """Link imported races to local race sessions on the same date.
+    """Link imported races to local race sessions on the same venue-local date.
 
-    When the number of local race-type sessions on a date is greater
-    than or equal to the number of imported races on that date, imported
-    races are zipped 1:1 with local sessions in order (imported by
-    ``race_num``, local by ``start_utc``). This handles beer-can nights
-    where race 1 and race 2 are each their own logged session.
+    The imported race's ``date`` is in the regatta's venue-local timezone
+    (e.g. STYC publishes "2026-05-04" for a Wed-night race that ends
+    near 8 PM PDT, even though the local session's ``start_utc`` reads
+    as "2026-05-05T01:27Z"). Candidate local sessions are pulled from a
+    ±1-day window and converted to venue-local date for comparison, so
+    after-midnight-UTC starts still match the published date (#734).
+
+    When the number of local race-type sessions on a venue-local date
+    is greater than or equal to the number of imported races on that
+    date, imported races are zipped 1:1 with local sessions in order
+    (imported by ``race_num``, local by ``start_utc``). This handles
+    beer-can nights where race 1 and race 2 are each their own session.
 
     Otherwise (fewer local sessions than imported races, i.e. a single
     local session covered the whole sailing day), every imported race is
@@ -192,11 +262,16 @@ async def _link_regatta_races_to_local_sessions(
     endpoint to fix up data that was linked before zip-in-order was
     implemented.
 
+    ``venue_tz`` is the regatta's local timezone (resolved via
+    ``_resolve_venue_tz``). When ``None``, falls back to system local
+    tz — which is correct on a Pi located at the venue.
+
     Returns ``(count_linked, touched_local_session_ids)`` — the second
     value is the union of every local session id written as a new link
     plus every prior link replaced by ``force=True``. Callers use it to
     drop cached session_summary blobs keyed on those session ids (#666).
     """
+    tz = venue_tz if venue_tz is not None else _resolve_venue_tz(None)
     cur = await db.execute(
         "SELECT id, date, race_num, local_session_id FROM races"
         " WHERE regatta_id = ? AND source IS NOT NULL AND source != 'live'"
@@ -218,7 +293,7 @@ async def _link_regatta_races_to_local_sessions(
     linked_count = 0
     touched: set[int] = set()
     for d, imported in by_date.items():
-        local_sessions = await _list_local_race_sessions_on_date(db, d)
+        local_sessions = await _list_local_race_sessions_on_date(db, d, tz)
         if not local_sessions:
             continue
 
@@ -253,25 +328,43 @@ async def _link_regatta_races_to_local_sessions(
 async def _list_local_race_sessions_on_date(
     db: aiosqlite.Connection,
     target_date: date,
+    venue_tz: tzinfo,
 ) -> list[int]:
-    """Return local race-type session ids whose ``date`` column is *target_date*.
+    """Return local race-type session ids whose venue-local start date is *target_date*.
 
-    Compares the stored ``date`` column directly — both helmlog's local
-    race date and the importer's race date are derived from UTC, so
-    matching on the string avoids venue-tz conversion bugs where a
-    session near midnight could shift to a different local date than
-    the imported race reports.
+    The local ``races.date`` column is derived from ``start_utc``, so
+    West-coast evening races crossing UTC midnight have a stored date
+    one day ahead of the venue-local date the importer reports. Pull a
+    ±1-day window of candidates and convert each session's
+    ``start_utc`` to venue-local date to filter — that way a 18:27 PDT
+    start (= 01:27Z next day, stored as date X+1) still matches the
+    imported race's date X.
     """
+    prev_d = (target_date - timedelta(days=1)).isoformat()
+    next_d = (target_date + timedelta(days=1)).isoformat()
     cur = await db.execute(
         "SELECT id, start_utc FROM races"
         " WHERE (source IS NULL OR source = 'live')"
         " AND session_type = 'race'"
-        " AND date = ?"
+        " AND date BETWEEN ? AND ?"
         " ORDER BY start_utc",
-        (target_date.isoformat(),),
+        (prev_d, next_d),
     )
     rows = await cur.fetchall()
-    return [r[0] for r in rows]
+    out: list[int] = []
+    for r in rows:
+        start_str = r[1]
+        if not start_str:
+            continue
+        try:
+            dt = datetime.fromisoformat(start_str)
+        except (ValueError, TypeError):
+            continue
+        if dt.tzinfo is None:
+            continue
+        if dt.astimezone(venue_tz).date() == target_date:
+            out.append(r[0])
+    return out
 
 
 async def _upsert_regatta(db: aiosqlite.Connection, reg: Regatta, now: str) -> int:

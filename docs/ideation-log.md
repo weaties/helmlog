@@ -2148,7 +2148,8 @@ data-licensing policy (co-op data is view-only, no bulk export).
 
 - **Date captured:** 2026-04-06
 - **Origin:** Conversation about needing offline analysis when the boat's Pi isn't online, plus backup
-- **Status:** `raw`
+- **Status:** `promoted`
+- **Promoted to:** combined with IDX-038 into issue #757 (off-Pi viewing & analysis — replication + read-only mode); this entry covers Phase 0 (read-only mode) + Phase 1 (`helmlog sync` to owner-controlled hosts)
 - **Related:** SQLite storage (`storage.py`), audio recording (`audio.py`), ArUco images, federation
 
 **Description:**
@@ -2455,7 +2456,8 @@ make HelmLog the helm/tactician's primary start tool.
   reachable over Tailscale. The aspiration: turn the Pi into a pure
   data-gathering appliance and serve the historical/replay UI from
   always-on cloud infrastructure.
-- **Status:** `raw`
+- **Status:** `promoted`
+- **Promoted to:** combined with IDX-034 into issue #757 (off-Pi viewing & analysis — replication + read-only mode); this entry covers Phase 2 (cloud-hosted viewer, layered on the Phase 1 sync primitive)
 - **Related:** **IDX-034** (Pi → Mac/test-Pi DB replication — narrower
   precursor of the same plumbing), IDX-007 (centralized-vs-federated
   tension, already settled in favor of centralized for the social feed),

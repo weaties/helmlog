@@ -143,7 +143,7 @@ class TestLLMClientAsk:
         client = LLMClient(cfg)
         captured: dict[str, Any] = {}
 
-        async def fake_post(url: str, **kwargs: Any) -> MagicMock:
+        async def fake_post(url: str, **kwargs: Any) -> MagicMock:  # noqa: ANN401
             captured["url"] = url
             captured["headers"] = kwargs.get("headers")
             captured["json"] = kwargs.get("json")
@@ -215,7 +215,10 @@ class TestLLMClientDetectCallbacks:
             cache_write_usd_per_mtok=1.25,
         )
         client = LLMClient(cfg)
-        body = '[{"anchor_ts":"12:05","speaker":"helm","excerpt":"come back to this","rationale":"explicit revisit"}]'
+        body = (
+            '[{"anchor_ts":"12:05","speaker":"helm",'
+            '"excerpt":"come back to this","rationale":"explicit revisit"}]'
+        )
         with patch("helmlog.llm_client.httpx.AsyncClient") as mock_cls:
             ctx = AsyncMock()
             ctx.post = AsyncMock(

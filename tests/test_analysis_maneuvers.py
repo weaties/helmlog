@@ -1195,3 +1195,54 @@ class TestRankManeuvers:
         ranked = rank_maneuvers(items)
         worst = max(ranked, key=lambda m: m["loss_kts"] or 0)
         assert worst["rank"] == "bad"
+
+    def test_explicit_metric_recovery_time(self) -> None:
+        """Passing metric='time_to_recover_s' should rank by that field
+        instead of the distance_loss_m fallback."""
+        items = [
+            {"type": "tack", "distance_loss_m": 100.0, "time_to_recover_s": 1.0},
+            {"type": "tack", "distance_loss_m": 90.0, "time_to_recover_s": 5.0},
+            {"type": "tack", "distance_loss_m": 80.0, "time_to_recover_s": 10.0},
+            {"type": "tack", "distance_loss_m": 70.0, "time_to_recover_s": 30.0},
+            {"type": "tack", "distance_loss_m": 60.0, "time_to_recover_s": 50.0},
+            {"type": "tack", "distance_loss_m": 50.0, "time_to_recover_s": 80.0},
+            {"type": "tack", "distance_loss_m": 40.0, "time_to_recover_s": 120.0},
+            {"type": "tack", "distance_loss_m": 30.0, "time_to_recover_s": 200.0},
+        ]
+        rank_maneuvers(items, metric="time_to_recover_s")
+        # Worst distance_loss has the FASTEST recovery → should be 'good'
+        # under the recovery metric, even though it has the most distance loss.
+        fastest_recovery = next(m for m in items if m["time_to_recover_s"] == 1.0)
+        slowest_recovery = next(m for m in items if m["time_to_recover_s"] == 200.0)
+        assert fastest_recovery["rank"] == "good"
+        assert slowest_recovery["rank"] == "bad"
+
+    def test_unknown_metric_falls_back_to_default(self) -> None:
+        """An unknown metric name should not crash; items get rank=None."""
+        items = [
+            {"type": "tack", "distance_loss_m": 1.0, "loss_kts": 0.1},
+            {"type": "tack", "distance_loss_m": 2.0, "loss_kts": 0.5},
+        ]
+        rank_maneuvers(items, metric="not_a_real_field")
+        # No items have a non-None value for 'not_a_real_field' → all unranked.
+        assert all(m["rank"] is None for m in items)
+
+    def test_metric_skips_absolute_floor_for_non_distance(self) -> None:
+        """The 3m absolute spread floor only gates distance_loss_m ranking.
+        For other metrics, only the relative-stdev test applies."""
+        # Tight cluster of recovery times — 0.5s spread — would fail the
+        # absolute floor (3m) if it were applied. But it isn't, so the
+        # relative test gets to decide.
+        items = [
+            {"type": "tack", "distance_loss_m": 50.0, "time_to_recover_s": 5.0},
+            {"type": "tack", "distance_loss_m": 50.0, "time_to_recover_s": 5.1},
+            {"type": "tack", "distance_loss_m": 50.0, "time_to_recover_s": 5.2},
+            {"type": "tack", "distance_loss_m": 50.0, "time_to_recover_s": 5.3},
+            {"type": "tack", "distance_loss_m": 50.0, "time_to_recover_s": 5.4},
+            {"type": "tack", "distance_loss_m": 50.0, "time_to_recover_s": 5.5},
+        ]
+        rank_maneuvers(items, metric="time_to_recover_s")
+        # stdev/median ≈ 0.17/5.25 ≈ 0.03, below the 0.5 threshold,
+        # so the spread-aware path should label everything 'consistent'.
+        labels = {m["rank"] for m in items}
+        assert labels == {"consistent"}

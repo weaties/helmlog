@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+{% block title %}Best vs Median Maneuvers — HelmLog{% endblock %}
+
+{% block extra_css %}
+<style>
+.mc-form{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:12px}
+.mc-form label{display:flex;flex-direction:column;font-size:.72rem;color:var(--text-secondary);gap:4px}
+.mc-form select,.mc-form input[type=number]{background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:5px 8px;font-size:.85rem;min-width:120px}
+.mc-form button{background:var(--accent-strong);color:var(--bg-primary);border:none;border-radius:4px;padding:7px 16px;font-size:.85rem;font-weight:600;cursor:pointer}
+.mc-form button:disabled{opacity:.4;cursor:not-allowed}
+.mc-summary{display:flex;gap:18px;flex-wrap:wrap;font-size:.78rem;color:var(--text-secondary);margin-bottom:10px}
+.mc-summary b{color:var(--text-primary)}
+.mc-section-title{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin:14px 0 6px}
+.mc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+.mc-card{border:1px solid var(--border);border-radius:4px;padding:8px 10px;background:var(--bg-secondary);font-size:.78rem}
+.mc-card .mc-date{color:var(--text-secondary);font-size:.7rem}
+.mc-card .mc-metric{font-size:1.1rem;font-weight:600;margin:4px 0}
+.mc-card .mc-meta{color:var(--text-secondary);font-size:.72rem;line-height:1.4}
+.mc-card .mc-yt{color:var(--accent);text-decoration:none;font-size:.72rem}
+.mc-actions{margin:14px 0;display:flex;gap:10px;flex-wrap:wrap}
+.mc-actions a{background:var(--accent);color:var(--bg-primary);border:none;border-radius:4px;padding:7px 14px;font-size:.85rem;font-weight:600;text-decoration:none}
+.mc-empty{padding:18px;text-align:center;color:var(--text-secondary);font-size:.85rem;border:1px dashed var(--border);border-radius:4px}
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="font-size:.74rem;margin-bottom:4px">
+  <a href="/analysis" style="color:var(--text-secondary);text-decoration:none">← Analysis</a>
+</div>
+<h1 style="margin-bottom:6px">Best vs Median Maneuvers</h1>
+<div style="font-size:.78rem;color:var(--text-secondary);margin-bottom:14px">
+  Pull the 3 best and 3 typical maneuvers matching your filters, then open a side-by-side video / track comparison.
+</div>
+
+<div class="card">
+  <form id="mc-form" class="mc-form" onsubmit="mcSubmit(event)">
+    <label>Maneuver type
+      <select id="mc-type" required>
+        <option value="tack">Tack</option>
+        <option value="gybe">Gybe</option>
+        <option value="weather_rounding">Weather rounding</option>
+        <option value="leeward_rounding">Leeward rounding</option>
+      </select>
+    </label>
+    <label>Success metric
+      <select id="mc-metric" required>
+        <option value="distance_loss_m">Distance lost (m)</option>
+        <option value="time_to_recover_s">Recovery time (s)</option>
+        <option value="time_to_head_to_wind_s">Time to head-to-wind (s)</option>
+        <option value="loss_kts">Speed loss (kt)</option>
+      </select>
+    </label>
+    <label>TWS min (kt)
+      <input id="mc-tws-min" type="number" step="0.5" min="0" placeholder="e.g. 8" style="max-width:100px"/>
+    </label>
+    <label>TWS max (kt)
+      <input id="mc-tws-max" type="number" step="0.5" min="0" placeholder="e.g. 12" style="max-width:100px"/>
+    </label>
+    <label>Direction
+      <select id="mc-direction">
+        <option value="">Either</option>
+        <option value="PS">P→S</option>
+        <option value="SP">S→P</option>
+      </select>
+    </label>
+    <label style="flex-direction:row;align-items:center;gap:6px">
+      <input type="checkbox" id="mc-post-start"/>
+      Post-start only
+    </label>
+    <label>Per group
+      <input id="mc-n" type="number" min="1" max="6" value="3" style="max-width:70px"/>
+    </label>
+    <button type="submit" id="mc-submit">Find</button>
+  </form>
+</div>
+
+<div id="mc-status" style="margin-top:12px"></div>
+<div id="mc-results" style="margin-top:12px"></div>
+
+<script>
+const _METRIC_LABELS = {
+  distance_loss_m: 'Distance lost',
+  time_to_recover_s: 'Recovery time',
+  time_to_head_to_wind_s: 'Time to HTW',
+  loss_kts: 'Speed loss'
+};
+const _METRIC_UNITS = {
+  distance_loss_m: 'm',
+  time_to_recover_s: 's',
+  time_to_head_to_wind_s: 's',
+  loss_kts: 'kt'
+};
+
+function _qs(p){
+  const u = new URLSearchParams(window.location.search);
+  return u.get(p);
+}
+
+function _esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function _fmtMetric(v, unit){
+  if (v == null) return '—';
+  return Number(v).toFixed(unit === 'm' ? 1 : 1) + ' ' + unit;
+}
+
+function _sessionDeepLink(m){
+  // Build /session/{id}/{slug}?t=<offset-seconds> so the session page
+  // seeks to the maneuver moment on load (uses the existing ?t= mechanism
+  // already wired up in session.js _applyDeepLink).
+  if (!m.session_id || !m.session_start_utc || !m.ts) return null;
+  const start = Date.parse(m.session_start_utc);
+  const at = Date.parse(m.ts);
+  if (isNaN(start) || isNaN(at)) return null;
+  const offsetSec = Math.max(0, Math.floor((at - start) / 1000));
+  const slug = m.session_slug ? '/' + encodeURIComponent(m.session_slug) : '';
+  return '/session/' + m.session_id + slug + '?t=' + offsetSec;
+}
+
+function _renderCard(m, metric){
+  const unit = _METRIC_UNITS[metric] || '';
+  const date = (m.session_start_utc || '').slice(0,10);
+  const tws = m.entry_tws == null ? '—' : Number(m.entry_tws).toFixed(1) + ' kt';
+  const turn = m.turn_angle_deg == null ? '—' : Math.abs(Number(m.turn_angle_deg)).toFixed(0) + '°';
+  const yt = m.youtube_url
+    ? '<a class="mc-yt" href="' + _esc(m.youtube_url) + '" target="_blank" rel="noopener">▶ YouTube</a>'
+    : '<span style="color:var(--text-secondary);opacity:.5">no video</span>';
+  const deepLink = _sessionDeepLink(m);
+  const sessionLink = deepLink
+    ? '<a class="mc-yt" href="' + _esc(deepLink) + '" target="_blank" rel="noopener">View in session →</a>'
+    : '';
+  return ''
+    + '<div class="mc-card">'
+    + '<div class="mc-date">' + _esc(date) + ' · ' + _esc(m.session_name || '') + '</div>'
+    + '<div class="mc-metric">' + _fmtMetric(m[metric], unit) + '</div>'
+    + '<div class="mc-meta">'
+    +   'TWS ' + tws + ' · turn ' + turn
+    +   '<br/>entry BSP ' + (m.entry_bsp == null ? '—' : Number(m.entry_bsp).toFixed(1) + ' kt')
+    +   ' · exit BSP ' + (m.exit_bsp == null ? '—' : Number(m.exit_bsp).toFixed(1) + ' kt')
+    + '</div>'
+    + '<div style="margin-top:6px;display:flex;gap:10px;flex-wrap:wrap">'
+    +   yt
+    +   (sessionLink ? sessionLink : '')
+    + '</div>'
+    + '</div>';
+}
+
+function _idTuple(m){
+  return m.session_id + ':' + m.id;
+}
+
+async function mcSubmit(e){
+  e.preventDefault();
+  const params = new URLSearchParams();
+  params.set('type', document.getElementById('mc-type').value);
+  params.set('metric', document.getElementById('mc-metric').value);
+  const tmin = document.getElementById('mc-tws-min').value;
+  const tmax = document.getElementById('mc-tws-max').value;
+  if (tmin) params.set('tws_min', tmin);
+  if (tmax) params.set('tws_max', tmax);
+  const dir = document.getElementById('mc-direction').value;
+  if (dir) params.set('direction', dir);
+  if (document.getElementById('mc-post-start').checked) params.set('post_start', '1');
+  params.set('n', document.getElementById('mc-n').value || '3');
+
+  // Persist filters in the URL for shareable permalinks.
+  const newUrl = window.location.pathname + '?' + params.toString();
+  window.history.replaceState({}, '', newUrl);
+
+  const status = document.getElementById('mc-status');
+  const results = document.getElementById('mc-results');
+  const submit = document.getElementById('mc-submit');
+  submit.disabled = true;
+  status.innerHTML = '<div style="color:var(--text-secondary);font-size:.78rem">Loading…</div>';
+  results.innerHTML = '';
+
+  try {
+    const resp = await fetch('/api/analysis/maneuver-compare?' + params.toString());
+    if (!resp.ok) {
+      let msg = 'Request failed (' + resp.status + ')';
+      try { const j = await resp.json(); if (j.detail) msg += ': ' + j.detail; } catch(_){}
+      status.innerHTML = '<div style="color:var(--danger);font-size:.85rem">' + _esc(msg) + '</div>';
+      return;
+    }
+    const data = await resp.json();
+    _render(data);
+  } catch (err) {
+    status.innerHTML = '<div style="color:var(--danger);font-size:.85rem">' + _esc(err.message || err) + '</div>';
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+function _render(data){
+  const status = document.getElementById('mc-status');
+  const results = document.getElementById('mc-results');
+  const metric = data.filters.metric;
+  const unit = _METRIC_UNITS[metric] || '';
+
+  status.innerHTML = ''
+    + '<div class="mc-summary">'
+    +   '<span>Pool: <b>' + data.pool_size + '</b> maneuvers</span>'
+    +   '<span>Median ' + _METRIC_LABELS[metric] + ': <b>' + _fmtMetric(data.median_value, unit) + '</b></span>'
+    + '</div>';
+
+  if (!data.best.length && !data.median.length) {
+    results.innerHTML = '<div class="mc-empty">No maneuvers match these filters. Widen the wind range or pick a different type.</div>';
+    return;
+  }
+
+  // Build the side-by-side comparison link.
+  const allIds = data.best.map(_idTuple).concat(data.median.map(_idTuple));
+  const compareHref = '/compare?ids=' + encodeURIComponent(allIds.join(','));
+  const overlayHref = '/maneuvers/overlay?ids=' + encodeURIComponent(allIds.join(','));
+
+  results.innerHTML = ''
+    + '<div class="mc-actions">'
+    +   '<a href="' + compareHref + '" target="_blank" rel="noopener">Open side-by-side videos</a>'
+    +   '<a href="' + overlayHref + '" target="_blank" rel="noopener" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border)">Open track overlay</a>'
+    + '</div>'
+    + '<div class="mc-section-title">Best ' + data.best.length + ' (lowest ' + _METRIC_LABELS[metric] + ')</div>'
+    + '<div class="mc-grid">' + data.best.map(m => _renderCard(m, metric)).join('') + '</div>'
+    + (data.median.length
+        ? '<div class="mc-section-title">Median ' + data.median.length + ' (typical ' + _METRIC_LABELS[metric] + ')</div>'
+          + '<div class="mc-grid">' + data.median.map(m => _renderCard(m, metric)).join('') + '</div>'
+        : ''
+      );
+}
+
+// Hydrate filters from the URL on first load (permalink support).
+(function(){
+  const t = _qs('type'); if (t) document.getElementById('mc-type').value = t;
+  const m = _qs('metric'); if (m) document.getElementById('mc-metric').value = m;
+  const tmin = _qs('tws_min'); if (tmin) document.getElementById('mc-tws-min').value = tmin;
+  const tmax = _qs('tws_max'); if (tmax) document.getElementById('mc-tws-max').value = tmax;
+  const dir = _qs('direction'); if (dir) document.getElementById('mc-direction').value = dir;
+  if (_qs('post_start')) document.getElementById('mc-post-start').checked = true;
+  const n = _qs('n'); if (n) document.getElementById('mc-n').value = n;
+  if (t) document.getElementById('mc-form').dispatchEvent(new Event('submit', {cancelable:true}));
+})();
+</script>
+{% endblock %}

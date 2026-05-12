@@ -47,6 +47,8 @@ def compute_race_data_hash(
     start_utc: datetime,
     end_utc: datetime | None,
     row_count: int,
+    linked_imported_id: int | None = None,
+    linked_imported_results: int = 0,
 ) -> str:
     """Stable 16-char hex digest of the race's cache-relevant inputs.
 
@@ -54,12 +56,19 @@ def compute_race_data_hash(
     race row. No TTL is needed: any mutation to the underlying race flows
     through the storage invalidation hook, which drops all entries for the
     race id.
+
+    ``linked_imported_id`` and ``linked_imported_results`` fold the
+    imported-results link into the hash so ETag revalidation flips when
+    a session's results are linked, unlinked, or rewritten — otherwise
+    browsers that cached an empty-results response keep getting 304s.
     """
     payload = {
         "race_id": race_id,
         "start_utc": start_utc.isoformat(),
         "end_utc": end_utc.isoformat() if end_utc is not None else None,
         "row_count": row_count,
+        "linked_imported_id": linked_imported_id,
+        "linked_imported_results": linked_imported_results,
     }
     raw = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
@@ -82,7 +91,10 @@ async def resolve_race_data_hash(storage: Storage, race_id: int) -> str | None:
     start_iso = str(race["start_utc"])
     end_iso = str(race["end_utc"]) if race["end_utc"] is not None else None
 
-    # Row count: prefer race_id tagging, fall back to time window.
+    # Row count: prefer race_id tagging, fall back to time window. For an
+    # active race (end_iso is None), use "now" as the upper bound so the
+    # count grows as positions stream in — otherwise the hash would be
+    # frozen and the cache would serve stale track blobs forever.
     rid_cur = await db.execute(
         "SELECT COUNT(*) AS cnt FROM positions WHERE race_id = ?", (race_id,)
     )
@@ -91,7 +103,7 @@ async def resolve_race_data_hash(storage: Storage, race_id: int) -> str | None:
     if n_tagged > 0:
         row_count = n_tagged
     else:
-        window_end = end_iso or start_iso
+        window_end = end_iso or datetime.now(UTC).isoformat()
         win_cur = await db.execute(
             "SELECT COUNT(*) AS cnt FROM positions WHERE ts >= ? AND ts <= ?",
             (start_iso, window_end),
@@ -99,10 +111,36 @@ async def resolve_race_data_hash(storage: Storage, race_id: int) -> str | None:
         win_row = await win_cur.fetchone()
         row_count = int(win_row["cnt"]) if win_row else 0
 
+    # Imported-results link: which (if any) imported race points here, and
+    # how many results it carries. Folded into the hash so ETag flips on
+    # link/unlink even though the live race row itself hasn't changed.
+    link_cur = await db.execute(
+        "SELECT id FROM races"
+        " WHERE local_session_id = ? AND source IS NOT NULL AND source != 'live'"
+        " ORDER BY COALESCE(start_utc, date) LIMIT 1",
+        (race_id,),
+    )
+    link_row = await link_cur.fetchone()
+    linked_imported_id: int | None = None
+    linked_imported_results = 0
+    if link_row is not None:
+        linked_imported_id = int(link_row["id"])
+        rr_cur = await db.execute(
+            "SELECT COUNT(*) AS cnt FROM race_results WHERE race_id = ?",
+            (linked_imported_id,),
+        )
+        rr_row = await rr_cur.fetchone()
+        linked_imported_results = int(rr_row["cnt"]) if rr_row else 0
+
     start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
     end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00")) if end_iso else None
     return compute_race_data_hash(
-        race_id=race_id, start_utc=start_dt, end_utc=end_dt, row_count=row_count
+        race_id=race_id,
+        start_utc=start_dt,
+        end_utc=end_dt,
+        row_count=row_count,
+        linked_imported_id=linked_imported_id,
+        linked_imported_results=linked_imported_results,
     )
 
 
@@ -216,15 +254,12 @@ class WebCache:
 
     async def t2_get(self, key_family: str, *, race_id: int, data_hash: str) -> object | None:
         try:
-            row = await self._read_row(key_family, race_id)
+            row = await self._read_row(key_family, race_id, data_hash)
         except Exception as exc:  # pragma: no cover - exercised via monkeypatch
             logger.warning("web cache read failed ({}): {}", key_family, exc)
             self._bump(key_family, "miss")
             return None
         if row is None:
-            self._bump(key_family, "miss")
-            return None
-        if row["data_hash"] != data_hash:
             self._bump(key_family, "miss")
             return None
         # v74+ schema: expires_utc is always present (NULL for race-keyed
@@ -236,7 +271,7 @@ class WebCache:
             except ValueError:
                 exp_dt = None
             if exp_dt is not None and exp_dt <= datetime.now(UTC):
-                await self._delete_row(key_family, race_id)
+                await self._delete_row(key_family, race_id, data_hash)
                 self._bump(key_family, "miss")
                 return None
         try:
@@ -250,7 +285,7 @@ class WebCache:
                 race_id,
                 exc,
             )
-            await self._delete_row(key_family, race_id)
+            await self._delete_row(key_family, race_id, data_hash)
             self._bump(key_family, "miss")
             return None
 
@@ -344,12 +379,14 @@ class WebCache:
     # Internal DB helpers (patched in tests to simulate failures)
     # ------------------------------------------------------------------
 
-    async def _read_row(self, key_family: str, race_id: int) -> aiosqlite.Row | None:
+    async def _read_row(
+        self, key_family: str, race_id: int, data_hash: str
+    ) -> aiosqlite.Row | None:
         db = self._storage._conn()  # noqa: SLF001
         cur = await db.execute(
             "SELECT data_hash, blob, expires_utc FROM web_cache"
-            " WHERE key_family = ? AND race_id = ?",
-            (key_family, race_id),
+            " WHERE key_family = ? AND race_id = ? AND data_hash = ?",
+            (key_family, race_id, data_hash),
         )
         return await cur.fetchone()
 
@@ -366,8 +403,7 @@ class WebCache:
         await db.execute(
             "INSERT INTO web_cache (key_family, race_id, data_hash, blob,"
             " created_utc, expires_utc) VALUES (?, ?, ?, ?, ?, ?)"
-            " ON CONFLICT(key_family, race_id) DO UPDATE SET"
-            "   data_hash = excluded.data_hash,"
+            " ON CONFLICT(key_family, race_id, data_hash) DO UPDATE SET"
             "   blob = excluded.blob,"
             "   created_utc = excluded.created_utc,"
             "   expires_utc = excluded.expires_utc",
@@ -375,11 +411,11 @@ class WebCache:
         )
         await db.commit()
 
-    async def _delete_row(self, key_family: str, race_id: int) -> None:
+    async def _delete_row(self, key_family: str, race_id: int, data_hash: str) -> None:
         db = self._storage._conn()  # noqa: SLF001
         await db.execute(
-            "DELETE FROM web_cache WHERE key_family = ? AND race_id = ?",
-            (key_family, race_id),
+            "DELETE FROM web_cache WHERE key_family = ? AND race_id = ? AND data_hash = ?",
+            (key_family, race_id, data_hash),
         )
         await db.commit()
 

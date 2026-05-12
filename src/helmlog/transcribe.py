@@ -499,17 +499,21 @@ async def _run_llm_callback_detection(
             cache_write_usd_per_mtok=1.25,
         )
         result = await maybe_run_after_transcription(
-            storage, audio_session_id=audio_session_id, client=LLMClient(cfg),
+            storage,
+            audio_session_id=audio_session_id,
+            client=LLMClient(cfg),
         )
         if result is not None:
             logger.info(
                 "LLM callback detection: audio_session_id={} result={}",
-                audio_session_id, result,
+                audio_session_id,
+                result,
             )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "LLM callback detection failed for audio_session_id={}: {}",
-            audio_session_id, exc,
+            audio_session_id,
+            exc,
         )
 
 

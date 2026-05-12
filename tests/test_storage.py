@@ -382,6 +382,86 @@ _START2 = datetime(2025, 8, 10, 14, 5, 30, tzinfo=UTC)
 _END1 = datetime(2025, 8, 10, 14, 5, 0, tzinfo=UTC)
 
 
+class TestRaceIdTagging:
+    """Live instrument writes should pick up the active race_id (#755)."""
+
+    async def _hdg(self, ts: datetime) -> HeadingRecord:
+        return HeadingRecord(
+            pgn=PGN_VESSEL_HEADING,
+            source_addr=5,
+            timestamp=ts,
+            heading_deg=42.0,
+            deviation_deg=None,
+            variation_deg=None,
+        )
+
+    async def _pos(self, ts: datetime) -> PositionRecord:
+        return PositionRecord(
+            pgn=PGN_POSITION_RAPID,
+            source_addr=5,
+            timestamp=ts,
+            latitude_deg=37.0,
+            longitude_deg=-122.0,
+        )
+
+    async def test_writes_outside_race_have_null_race_id(self, storage: Storage) -> None:
+        before = _START1 - timedelta(seconds=30)
+        await storage.write(await self._hdg(before))
+        await storage.write(await self._pos(before))
+        rows = await storage.query_range("headings", before, before + timedelta(seconds=1))
+        assert rows[0]["race_id"] is None
+        rows = await storage.query_range("positions", before, before + timedelta(seconds=1))
+        assert rows[0]["race_id"] is None
+
+    async def test_writes_during_active_race_are_tagged(self, storage: Storage) -> None:
+        race = await storage.start_race("BallardCup", _START1, _DATE, 1, "20250810-BallardCup-1")
+        during = _START1 + timedelta(seconds=10)
+        await storage.write(await self._hdg(during))
+        await storage.write(await self._pos(during))
+
+        for table in ("headings", "positions"):
+            rows = await storage.query_range(table, during, during + timedelta(seconds=1))
+            assert len(rows) == 1
+            assert rows[0]["race_id"] == race.id
+
+    async def test_writes_after_end_race_are_untagged_again(self, storage: Storage) -> None:
+        race = await storage.start_race("BallardCup", _START1, _DATE, 1, "20250810-BallardCup-1")
+        await storage.end_race(race.id, _END1)
+        after = _END1 + timedelta(seconds=10)
+        await storage.write(await self._hdg(after))
+        rows = await storage.query_range("headings", after, after + timedelta(seconds=1))
+        assert rows[0]["race_id"] is None
+
+    async def test_query_range_can_scope_by_race_id_for_tagged_writes(
+        self, storage: Storage
+    ) -> None:
+        """End-to-end: tagging plus race_id filter on query_range returns
+        only the tagged rows. Pre-#755 every instrument row was untagged,
+        so this query path was a no-op for live data.
+
+        Tagging is based on whether a race is active *at write time*, not
+        the record timestamp — sailing data streams in live and we don't
+        retroactively tag earlier buffered rows when the race starts.
+        """
+        # Pre-race write: untagged because no race is active yet.
+        before = _START1 - timedelta(seconds=10)
+        await storage.write(await self._pos(before))
+        # Race active: write gets tagged.
+        race = await storage.start_race("BallardCup", _START1, _DATE, 1, "20250810-BallardCup-1")
+        during = _START1 + timedelta(seconds=10)
+        await storage.write(await self._pos(during))
+
+        # Wide time window catches both rows; race_id filter keeps just one.
+        rows = await storage.query_range(
+            "positions",
+            before - timedelta(seconds=1),
+            during + timedelta(seconds=1),
+            race_id=race.id,
+        )
+        assert len(rows) == 1
+        assert rows[0]["race_id"] == race.id
+
+
 class TestSessionGate:
     async def test_session_active_false_initially(self, storage: Storage) -> None:
         assert storage.session_active is False
@@ -1137,8 +1217,8 @@ class TestRaceVideos:
     async def test_list_ordered_by_created_at(self, storage: Storage) -> None:
         """Videos are returned in insertion order."""
         race_id = await self._make_race(storage)
-        id1 = await self._add_video(storage, race_id, label="Bow cam")
-        id2 = await self._add_video(storage, race_id, label="Cockpit cam")
+        id1 = await self._add_video(storage, race_id, video_id="aaaaaaaaaaa", label="Bow cam")
+        id2 = await self._add_video(storage, race_id, video_id="bbbbbbbbbbb", label="Cockpit cam")
         rows = await storage.list_race_videos(race_id)
         assert [r["id"] for r in rows] == [id1, id2]
 
@@ -1181,6 +1261,32 @@ class TestRaceVideos:
         await db.execute("DELETE FROM races WHERE id = ?", (race_id,))
         await db.commit()
         assert await storage.list_race_videos(race_id) == []
+
+    async def test_add_race_video_is_idempotent_on_race_id_video_id(self, storage: Storage) -> None:
+        """Re-adding the same (race_id, video_id) updates the existing row.
+
+        Prevents duplicate-link rows on double-submit. The second call
+        returns the same row id and the new sync values overwrite the old.
+        """
+        race_id = await self._make_race(storage)
+        first_id = await self._add_video(storage, race_id, sync_offset_s=0.0, label="Bow cam")
+        second_id = await self._add_video(
+            storage, race_id, sync_offset_s=243.0, label="Bow cam (resynced)"
+        )
+        assert second_id == first_id
+        rows = await storage.list_race_videos(race_id)
+        assert len(rows) == 1
+        assert rows[0]["sync_offset_s"] == 243.0
+        assert rows[0]["label"] == "Bow cam (resynced)"
+
+    async def test_add_race_video_distinct_video_ids_coexist(self, storage: Storage) -> None:
+        """Different video_ids on the same race remain as separate rows."""
+        race_id = await self._make_race(storage)
+        a = await self._add_video(storage, race_id, video_id="aaaaaaaaaaa", label="A")
+        b = await self._add_video(storage, race_id, video_id="bbbbbbbbbbb", label="B")
+        assert a != b
+        rows = await storage.list_race_videos(race_id)
+        assert {r["video_id"] for r in rows} == {"aaaaaaaaaaa", "bbbbbbbbbbb"}
 
 
 # ---------------------------------------------------------------------------

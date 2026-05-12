@@ -60,7 +60,7 @@ class FakeLLMClient:
     def estimate_input_cost(self, text: str) -> float:
         return self._estimate
 
-    async def ask(self, *, transcript_text: str, question: str, **kwargs: Any) -> LLMResponse:
+    async def ask(self, *, transcript_text: str, question: str, **kwargs: object) -> LLMResponse:
         self.ask_calls.append({"transcript_text": transcript_text, "question": question})
         return self.ask_response
 
@@ -68,7 +68,7 @@ class FakeLLMClient:
         self,
         *,
         transcript_text: str,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> tuple[list[dict[str, Any]], float]:
         return self.callbacks, self.callback_cost
 

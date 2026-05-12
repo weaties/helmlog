@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -12,6 +13,8 @@ from helmlog.deploy import DeployConfig, in_deploy_window
 from helmlog.web import create_app
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from helmlog.storage import Storage
 
 
@@ -74,6 +77,60 @@ class TestDeployWindow:
         hour = datetime.now(UTC).hour
         expected = hour >= 22 or hour < 6
         assert in_deploy_window(config) is expected
+
+
+class TestUvBin:
+    def test_finds_uv_in_owner_home_when_path_home_misses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When systemd HOME=/var/cache/helmlog has no uv, the owner home is consulted."""
+        import helmlog.deploy as deploy_mod
+
+        fake_owner_home = tmp_path / "owner"
+        owner_uv = fake_owner_home / ".local" / "bin" / "uv"
+        owner_uv.parent.mkdir(parents=True)
+        owner_uv.write_text("#!/bin/sh\nexit 0\n")
+        owner_uv.chmod(0o755)
+
+        empty_home = tmp_path / "empty_systemd_home"
+        empty_home.mkdir()
+
+        original_iterdir = Path.iterdir
+
+        def fake_iterdir(self: Path) -> Iterator[Path]:
+            if str(self) == "/home":
+                return iter([fake_owner_home])
+            return original_iterdir(self)
+
+        monkeypatch.setattr(deploy_mod.shutil, "which", lambda _: None)
+        monkeypatch.setattr(deploy_mod.Path, "home", staticmethod(lambda: empty_home))
+        monkeypatch.setattr(deploy_mod, "_repo_owner", lambda: "no_such_user_xyz")
+        monkeypatch.setattr(Path, "iterdir", fake_iterdir)
+
+        assert deploy_mod._uv_bin() == str(owner_uv)
+
+    def test_does_not_raise_when_home_iter_denied(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unreadable /home (PermissionError on iterdir) must not crash _uv_bin."""
+        import helmlog.deploy as deploy_mod
+
+        empty_home = tmp_path / "empty"
+        empty_home.mkdir()
+
+        monkeypatch.setattr(deploy_mod.shutil, "which", lambda _: None)
+        monkeypatch.setattr(deploy_mod.Path, "home", staticmethod(lambda: empty_home))
+        monkeypatch.setattr(deploy_mod, "_repo_owner", lambda: "nonexistent_user_xyz")
+
+        def boom_iterdir(self: Path) -> Iterator[Path]:
+            if str(self) == "/home":
+                raise PermissionError("simulated")
+            return iter(())
+
+        monkeypatch.setattr(Path, "iterdir", boom_iterdir)
+
+        # Falls through to the "uv" sentinel instead of raising.
+        assert deploy_mod._uv_bin() == "uv"
 
 
 class TestRepoOwner:

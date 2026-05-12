@@ -121,13 +121,21 @@ async def test_t2_stale_hash_returns_none(storage: Storage) -> None:
 
 
 @pytest.mark.asyncio
-async def test_t2_put_replaces_stale_entry(storage: Storage) -> None:
+async def test_t2_put_keeps_distinct_hashes_until_invalidation(storage: Storage) -> None:
+    """Post-v84 the PK includes data_hash, so two writes with different
+    hashes leave both rows in place. The old hash can never be looked up
+    by anyone who already has the new data — it stays until the race
+    mutation invalidation hook drops everything for the race id, or the
+    row-cap evictor sweeps it out."""
     cache = WebCache(storage)
     await cache.t2_put("session_summary", race_id=1, data_hash="abc", value={"v": 1})
     await cache.t2_put("session_summary", race_id=1, data_hash="def", value={"v": 2})
-    # Old hash is gone, new one is present
-    assert await cache.t2_get("session_summary", race_id=1, data_hash="abc") is None
+    assert await cache.t2_get("session_summary", race_id=1, data_hash="abc") == {"v": 1}
     assert await cache.t2_get("session_summary", race_id=1, data_hash="def") == {"v": 2}
+    # An invalidate flushes both.
+    await cache.invalidate(1)
+    assert await cache.t2_get("session_summary", race_id=1, data_hash="abc") is None
+    assert await cache.t2_get("session_summary", race_id=1, data_hash="def") is None
 
 
 # ---------------------------------------------------------------------------
@@ -395,3 +403,57 @@ async def test_t2_put_round_trip_preserves_json(storage: Storage) -> None:
     got = await cache.t2_get("session_track", race_id=1, data_hash="h")
     assert got == value
     assert json.dumps(got, sort_keys=True) == json.dumps(value, sort_keys=True)
+
+
+# ---------------------------------------------------------------------------
+# v84 — multiple distinct hashes coexist for the same global key_family
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_t2_global_distinct_hashes_coexist(storage: Storage) -> None:
+    """Two cross-session overlay selections with different content hashes
+    must not evict each other. Pre-v84 the (key_family, race_id=0) PK
+    held only one row, so any new selection blew away the previous
+    cached payload."""
+    cache = WebCache(storage)
+    await cache.t2_put_global(
+        "maneuvers_overlay", data_hash="h_a", value={"sel": "A"}, ttl_seconds=3600
+    )
+    await cache.t2_put_global(
+        "maneuvers_overlay", data_hash="h_b", value={"sel": "B"}, ttl_seconds=3600
+    )
+
+    a = await cache.t2_get_global("maneuvers_overlay", data_hash="h_a")
+    b = await cache.t2_get_global("maneuvers_overlay", data_hash="h_b")
+    assert a == {"sel": "A"}
+    assert b == {"sel": "B"}
+
+
+@pytest.mark.asyncio
+async def test_t2_race_keyed_distinct_hashes_coexist(storage: Storage) -> None:
+    """Race-keyed entries also benefit: writing a new hash for a race
+    that hasn't been invalidated yet leaves the prior hash readable
+    until the race-mutation hook drops everything for that race."""
+    cache = WebCache(storage)
+    await cache.t2_put("session_summary", race_id=42, data_hash="h_old", value={"v": 1})
+    await cache.t2_put("session_summary", race_id=42, data_hash="h_new", value={"v": 2})
+
+    old = await cache.t2_get("session_summary", race_id=42, data_hash="h_old")
+    new = await cache.t2_get("session_summary", race_id=42, data_hash="h_new")
+    assert old == {"v": 1}
+    assert new == {"v": 2}
+
+
+@pytest.mark.asyncio
+async def test_invalidate_race_drops_all_hashes_for_that_race(storage: Storage) -> None:
+    """Race-mutation invalidation still works as before — every cached
+    hash for the touched race id is dropped."""
+    cache = WebCache(storage)
+    await cache.t2_put("session_summary", race_id=99, data_hash="h_a", value={"v": 1})
+    await cache.t2_put("session_summary", race_id=99, data_hash="h_b", value={"v": 2})
+
+    await cache.invalidate(99)
+
+    assert await cache.t2_get("session_summary", race_id=99, data_hash="h_a") is None
+    assert await cache.t2_get("session_summary", race_id=99, data_hash="h_b") is None

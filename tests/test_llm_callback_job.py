@@ -42,7 +42,7 @@ class FakeClient:
         self,
         *,
         transcript_text: str,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> tuple[list[dict[str, Any]], float]:
         self.calls += 1
         return self.callbacks, self.cost

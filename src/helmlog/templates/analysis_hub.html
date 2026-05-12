@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Analysis — HelmLog{% endblock %}
+
+{% block extra_css %}
+<style>
+.ah-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-top:14px}
+.ah-card{display:block;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:6px;padding:14px 16px;background:var(--bg-secondary)}
+.ah-card:hover{border-color:var(--accent);background:var(--bg-input)}
+.ah-card h2{font-size:.95rem;font-weight:600;margin:0 0 6px;color:var(--accent)}
+.ah-card p{font-size:.8rem;color:var(--text-secondary);margin:0;line-height:1.45}
+.ah-section{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin:18px 0 4px}
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom:6px">Analysis</h1>
+<div style="font-size:.78rem;color:var(--text-secondary);margin-bottom:6px">
+  Cross-session tools for reviewing performance and finding patterns.
+</div>
+
+<div class="ah-section">Maneuvers</div>
+<div class="ah-grid">
+  <a class="ah-card" href="/analysis/maneuver-compare">
+    <h2>Best vs Median Maneuvers</h2>
+    <p>Pull the 3 best and 3 typical maneuvers matching your filters (type, wind range, direction, post-start), then open a side-by-side video / track comparison.</p>
+  </a>
+  <a class="ah-card" href="/maneuvers">
+    <h2>Maneuver Browser</h2>
+    <p>Browse every detected maneuver across sessions, filter by wind / direction / phase / tags, then hand-pick a set to overlay or compare.</p>
+  </a>
+</div>
+{% endblock %}

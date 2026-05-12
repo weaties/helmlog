@@ -93,8 +93,21 @@ async def api_delete_event_rule(
 # ------------------------------------------------------------------
 
 
+#: How many seconds before the scheduled gun the system auto-starts the
+#: race + arms the race-start FSM. Pursuit starts (#714) want the helm
+#: hands-off ahead of the gun, so we lead by a full 5-4-1-0 sequence
+#: plus a margin for setup.
+SCHEDULE_LEAD_S: int = 15 * 60
+
+
 async def _schedule_fire_loop(app: FastAPI) -> None:
-    """Background task: poll for a pending scheduled start and fire when due."""
+    """Background task: poll for a pending scheduled start and fire when due.
+
+    Fires ``SCHEDULE_LEAD_S`` seconds before the configured gun time so the
+    race recording starts in time and the FSM arms automatically with
+    ``t0 = scheduled_start_utc``. The 5-4-1-0 sequence then plays out
+    against the real wall clock without any helm action.
+    """
     storage = app.state.storage
     ss = app.state.session_state
     while True:
@@ -105,16 +118,18 @@ async def _schedule_fire_loop(app: FastAPI) -> None:
                 if fire_at.tzinfo is None:
                     fire_at = fire_at.replace(tzinfo=UTC)
                 now = datetime.now(UTC)
-                if now >= fire_at:
-                    if not ss.schedule_first_check_done:
-                        # First check after startup — missed start, don't fire
+                lead_threshold = fire_at - timedelta(seconds=SCHEDULE_LEAD_S)
+                if now >= lead_threshold:
+                    if not ss.schedule_first_check_done and now > fire_at:
+                        # System was off through the lead window AND past the
+                        # gun — can't recover, drop the schedule.
                         logger.warning(
                             "Scheduled start at {} was missed — system was not running",
                             row["scheduled_start_utc"],
                         )
                         await storage.cancel_scheduled_start()
                     else:
-                        # Normal operation — fire the scheduled start
+                        # Normal operation: fire + arm with t0 = the gun.
                         current = await storage.get_current_race()
                         if current is not None:
                             await storage.cancel_scheduled_start()
@@ -124,7 +139,12 @@ async def _schedule_fire_loop(app: FastAPI) -> None:
                             )
                         else:
                             await storage.cancel_scheduled_start()
-                            await _do_scheduled_start(app, row["event"], row["session_type"])
+                            await _do_scheduled_start(
+                                app,
+                                row["event"],
+                                row["session_type"],
+                                gun_at=fire_at,
+                            )
             ss.schedule_first_check_done = True
         except asyncio.CancelledError:
             raise
@@ -133,8 +153,19 @@ async def _schedule_fire_loop(app: FastAPI) -> None:
         await asyncio.sleep(1)
 
 
-async def _do_scheduled_start(app: FastAPI, event: str, session_type: str) -> None:
-    """Fire a scheduled start — equivalent to pressing Start."""
+async def _do_scheduled_start(
+    app: FastAPI,
+    event: str,
+    session_type: str,
+    gun_at: datetime | None = None,
+) -> None:
+    """Fire a scheduled start — equivalent to pressing Start.
+
+    When *gun_at* is supplied (the schedule's authoritative gun time), the
+    race-start FSM is also armed with ``t0 = gun_at`` so the helmsman gets
+    a hands-off countdown to the actual gun. Used by the auto-fire path
+    that runs ``SCHEDULE_LEAD_S`` seconds before the gun.
+    """
     storage = app.state.storage
     ss = app.state.session_state
     from helmlog.races import build_race_name, local_today
@@ -147,6 +178,28 @@ async def _do_scheduled_start(app: FastAPI, event: str, session_type: str) -> No
     try:
         race = await storage.start_race(event, now, date_str, race_num, name, session_type)
         logger.info("Scheduled start fired: {} (id={})", race.name, race.id)
+
+        # Auto-arm the race-start FSM with the authoritative gun time so
+        # the page transitions straight into a 5-4-1-0 countdown without
+        # the helm needing to tap Arm.
+        if gun_at is not None:
+            try:
+                await storage.upsert_race_start_state(
+                    phase="armed",
+                    kind="5-4-1-0",
+                    t0_utc=gun_at,
+                    sync_offset_s=0.0,
+                    last_sync_at_utc=None,
+                    started_at_utc=None,
+                    classes_json="[]",
+                    now_utc=now,
+                )
+                logger.info(
+                    "Race-start FSM auto-armed for scheduled gun at {}",
+                    gun_at.isoformat(),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Race-start auto-arm failed for scheduled race {}: {}", name, exc)
 
         # Auto-apply sail defaults
         try:

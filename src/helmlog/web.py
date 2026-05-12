@@ -232,6 +232,8 @@ def create_app(
         notifications,
         pages,
         polar,
+        race_start,
+        race_start_sim,
         races,
         results,
         sails,
@@ -261,6 +263,7 @@ def create_app(
         device_cameras,
         aruco,
         controls,
+        race_start,
         network,
         videos,
         boat_settings,
@@ -278,6 +281,12 @@ def create_app(
         ws,
     ):
         app.include_router(module.router)
+
+    # Race-start simulator (#690). Routes are always mounted but gated on
+    # the developer flag (users.is_developer = 1). RACE_START_SIMULATOR=false
+    # is a hard kill switch that turns the routes into 404s for defense in
+    # depth on production boats.
+    app.include_router(race_start_sim.router)
 
     # -- Register results providers (#459) --
     from helmlog.results.base import register_provider
@@ -301,5 +310,20 @@ def create_app(
             pass  # no event loop running (e.g., during tests)
 
     storage.set_live_callback(_on_live_update)
+
+    def _on_position_update(payload: dict) -> None:  # type: ignore[type-arg]
+        """Sync callback from Storage.update_live() for PositionRecord → broadcast.
+
+        Throttled to 1 Hz inside Storage so the wire stays predictable
+        regardless of GPS fix rate. Frontend appends each fix to its track
+        polyline so the live page extends in real time without polling.
+        """
+        try:
+            loop = _asyncio.get_running_loop()
+            loop.create_task(broadcast(app.state.ws_clients, {"type": "position", "data": payload}))
+        except RuntimeError:
+            pass
+
+    storage.set_position_callback(_on_position_update)
 
     return app

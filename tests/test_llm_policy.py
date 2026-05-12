@@ -40,7 +40,8 @@ async def _race(storage: Storage, *, n: int = 1) -> int:
 async def _admin(storage: Storage) -> int:
     db = storage._conn()
     cur = await db.execute(
-        "INSERT INTO users (email, role, created_at) VALUES ('a@x', 'admin', '2026-01-01T00:00:00+00:00')",
+        "INSERT INTO users (email, role, created_at) "
+        "VALUES ('a@x', 'admin', '2026-01-01T00:00:00+00:00')",
     )
     await db.commit()
     return int(cur.lastrowid)  # type: ignore[arg-type]

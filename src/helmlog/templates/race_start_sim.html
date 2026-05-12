@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Race-start simulator — HelmLog{% endblock %}
+
+{% block extra_css %}
+<style>
+  .sim-banner { background: var(--warning, #fef3c7); color: #78350f;
+                padding: .5rem 1rem; text-align: center; font-weight: 600;
+                letter-spacing: .1em; text-transform: uppercase; }
+  .sim-grid { display: grid; gap: 1rem; padding: 1rem; max-width: 960px; margin: 0 auto; }
+  .sim-section { padding: .75rem; border: 1px solid var(--border); border-radius: .5rem; }
+  .sim-section h3 { margin: 0 0 .5rem; font-size: .9rem;
+                     text-transform: uppercase; letter-spacing: .1em;
+                     color: var(--text-muted); }
+  .sim-row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  .sim-row label { display: flex; flex-direction: column; gap: .25rem; min-width: 6rem; }
+  .sim-row input { padding: .25rem .5rem; }
+  .sim-row button { padding: .5rem .75rem; cursor: pointer; }
+  .sim-clock { font-size: 2rem; font-variant-numeric: tabular-nums; }
+  .sim-status { color: var(--text-muted); font-size: .85rem; }
+  .sim-log { font-family: monospace; font-size: .8rem; max-height: 12rem;
+             overflow-y: auto; padding: .5rem; background: var(--bg-elev);
+             border-radius: .25rem; border: 1px solid var(--border); }
+  .sim-log .row { padding: .15rem 0; border-bottom: 1px dashed var(--border); }
+  .sim-log .row:last-child { border-bottom: none; }
+  .sim-row .preset { background: var(--accent, #2563eb); color: #fff;
+                      border: 0; border-radius: .25rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="sim-banner">⚠ Simulator — offline validation only ⚠</div>
+<div class="sim-grid">
+
+  <div class="sim-section">
+    <h3>Virtual clock</h3>
+    <div class="sim-clock" id="sim-clock-display">+0s</div>
+    <div class="sim-status" id="sim-clock-status">at real time</div>
+    <div class="sim-row" style="margin-top: .5rem">
+      <button onclick="sim.setOffset(-300)">−5 min</button>
+      <button onclick="sim.setOffset(-180)">−3 min</button>
+      <button onclick="sim.setOffset(-60)">−1 min</button>
+      <button onclick="sim.setOffset(-30)">−30 s</button>
+      <button onclick="sim.setOffset(-5)">−5 s</button>
+      <button onclick="sim.setOffset(0)">real</button>
+      <button onclick="sim.setOffset(5)">+5 s</button>
+      <button onclick="sim.setOffset(60)">+1 min</button>
+    </div>
+    <div class="sim-row" style="margin-top: .5rem">
+      <label>custom offset_s
+        <input type="number" id="sim-clock-input" value="0" step="1"/>
+      </label>
+      <button onclick="sim.setOffset(parseFloat(document.getElementById('sim-clock-input').value))">
+        Apply
+      </button>
+    </div>
+  </div>
+
+  <div class="sim-section">
+    <h3>Synthetic boat state</h3>
+    <div class="sim-row">
+      <label>lat <input type="number" id="sim-lat" value="47.6500" step="0.0001"/></label>
+      <label>lon <input type="number" id="sim-lon" value="-122.4000" step="0.0001"/></label>
+      <label>SOG kn <input type="number" id="sim-sog" value="5.0" step="0.1"/></label>
+      <label>COG ° <input type="number" id="sim-cog" value="0" step="1"/></label>
+      <label>TWD ° <input type="number" id="sim-twd" value="180" step="1"/></label>
+      <label>TWS kn <input type="number" id="sim-tws" value="10" step="0.5"/></label>
+      <button onclick="sim.writeBoat()">Write boat state</button>
+    </div>
+  </div>
+
+  <div class="sim-section">
+    <h3>Scenario presets</h3>
+    <div class="sim-row" id="sim-scenarios">Loading…</div>
+    <div class="sim-status" id="sim-step-status" style="margin-top: .5rem"></div>
+  </div>
+
+  <div class="sim-section">
+    <h3>Prestart drill (auto-walk)</h3>
+    <div class="sim-status" style="margin-bottom: .5rem">
+      Walks the boat in a circle around a synthetic start line for the
+      configured duration, writing one position per second. Stamps the
+      boat-end + pin-end pings so the line draws on the session map
+      immediately. Start a race in /control first so positions land in
+      the active session window.
+    </div>
+    <div class="sim-row">
+      <label>center lat <input type="number" id="sim-drill-lat" value="47.6500" step="0.0001"/></label>
+      <label>center lon <input type="number" id="sim-drill-lon" value="-122.4000" step="0.0001"/></label>
+      <label>line bearing ° <input type="number" id="sim-drill-bearing" value="90" step="1"/></label>
+      <label>line length m <input type="number" id="sim-drill-len" value="100" step="10"/></label>
+      <label>TWD ° <input type="number" id="sim-drill-twd" value="180" step="1"/></label>
+      <label>SOG kn <input type="number" id="sim-drill-sog" value="4" step="0.5"/></label>
+      <label>duration s <input type="number" id="sim-drill-dur" value="30" step="5"/></label>
+      <button onclick="sim.runDrill()">Run drill</button>
+    </div>
+  </div>
+
+  <div class="sim-section">
+    <h3>Action log</h3>
+    <div class="sim-log" id="sim-log"></div>
+    <div class="sim-row" style="margin-top: .5rem">
+      <button onclick="sim.reset()">Reset (clock=0, clear FSM)</button>
+      <a href="/race-start" target="_blank"><button>Open /race-start</button></a>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/race_start_sim.js?v={{ git_sha }}"></script>
+{% endblock %}

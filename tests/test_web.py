@@ -4064,6 +4064,49 @@ async def test_maneuver_browse_rejects_bad_direction(storage: Storage) -> None:
 
 
 @pytest.mark.asyncio
+async def test_maneuver_browse_rejects_bad_rank_by(storage: Storage) -> None:
+    """Unknown rank_by metric returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/maneuvers/browse?rank_by=vibes")
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_maneuver_browse_default_rank_by_in_response(
+    storage: Storage,
+) -> None:
+    """Response carries rank_by so the client knows which metric is rendered."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id, _ = await _seed_maneuvers(storage, client, event="RankDefault", count=2)
+        resp = await client.get(f"/api/maneuvers/browse?session_ids={race_id}")
+    assert resp.status_code == 200
+    assert resp.json()["rank_by"] == "distance_loss_m"
+
+
+@pytest.mark.asyncio
+async def test_maneuver_browse_accepts_rank_by_alternative(
+    storage: Storage,
+) -> None:
+    """A valid alternate metric round-trips and labels the response."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        race_id, _ = await _seed_maneuvers(storage, client, event="RankAlt", count=2)
+        resp = await client.get(
+            f"/api/maneuvers/browse?session_ids={race_id}&rank_by=time_to_recover_s"
+        )
+    assert resp.status_code == 200
+    assert resp.json()["rank_by"] == "time_to_recover_s"
+
+
+@pytest.mark.asyncio
 async def test_maneuver_browse_sessions_filters_by_session_type(storage: Storage) -> None:
     """session_type=race hides practice sessions from the picker (and vice versa)."""
     app = create_app(storage)

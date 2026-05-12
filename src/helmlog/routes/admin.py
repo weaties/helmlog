@@ -572,3 +572,66 @@ async def admin_cache_stats_reset(
         cache.reset_stats()
     await audit(request, action="cache_stats_reset")
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Instrument smoothing (#727)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/admin/instrument-smoothing", response_class=JSONResponse, include_in_schema=False)
+async def admin_instrument_smoothing_get(
+    request: Request,
+    _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+) -> JSONResponse:
+    """Return the currently-effective tau (seconds) for each smoothed
+    channel. Falls back to defaults when a channel hasn't been overridden
+    in app_settings."""
+    from helmlog.smoothing import DEFAULT_TAUS, parse_tau
+
+    storage = get_storage(request)
+    out: dict[str, dict[str, float]] = {}
+    for channel, default in DEFAULT_TAUS.items():
+        raw = await storage.get_setting(f"smoothing.{channel}.tau_s")
+        out[channel] = {"tau_s": parse_tau(raw, default), "default": default}
+    return JSONResponse(out)
+
+
+@router.put("/api/admin/instrument-smoothing", status_code=204, include_in_schema=False)
+async def admin_instrument_smoothing_put(
+    request: Request,
+    _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+) -> Response:
+    """Persist new tau values for one or more channels then refresh the
+    live smoothers. Body: ``{channel: tau_seconds, ...}``. Unknown
+    channels are rejected; tau<=0 or NaN are rejected."""
+    from helmlog.smoothing import DEFAULT_TAUS
+
+    storage = get_storage(request)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    for channel, tau in body.items():
+        if channel not in DEFAULT_TAUS:
+            raise HTTPException(status_code=400, detail=f"Unknown channel: {channel}")
+        try:
+            v = float(tau)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=f"{channel}: not a number") from e
+        if not (v > 0) or v != v:  # rejects 0, negatives, NaN
+            raise HTTPException(status_code=400, detail=f"{channel}: tau must be > 0")
+        await storage.set_setting(f"smoothing.{channel}.tau_s", str(v))
+    await storage.refresh_smoothing()
+    await audit(request, action="instrument_smoothing_update", detail=str(body))
+    return Response(status_code=204)
+
+
+@router.get("/admin/instruments", response_class=HTMLResponse, include_in_schema=False)
+async def admin_instruments_page(
+    request: Request,
+    _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+) -> Response:
+    """Admin page with a slider per smoothed channel."""
+    return templates.TemplateResponse(
+        request, "admin/instruments.html", tpl_ctx(request, "/admin/instruments")
+    )
