@@ -106,6 +106,9 @@ ignore = []
 [tool.ruff.lint.per-file-ignores]
 "src/helmlog/web.py" = ["E501"]  # HTML strings contain long lines that can't be wrapped
 "src/helmlog/routes/*.py" = ["E501"]  # HTML strings inherited from web.py split
+# Standalone post-race analysis scripts — written ad-hoc for one-off
+# end-of-season debriefs. Not production code; not type-annotated.
+"scripts/analysis/*.py" = ["ANN", "E501", "B", "E7", "SIM", "C401", "F401", "F541", "I001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["helmlog"]
