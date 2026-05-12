@@ -95,6 +95,11 @@ def _parse_callback_array(text: str) -> list[dict[str, Any]] | None:
     bracket_match = re.search(r"\[.*\]", text, re.DOTALL)
     if bracket_match:
         candidates.append(bracket_match.group(0))
+    # Models routinely emit `\'` inside JSON strings around contractions
+    # ("They\'re", "I\'m"). That's not a valid JSON escape, so json.loads
+    # rejects every otherwise-fine candidate above. Strip the bogus
+    # backslash before trying each candidate again.
+    candidates += [c.replace(r"\'", "'") for c in list(candidates)]
     for cand in candidates:
         try:
             parsed = json.loads(cand)

@@ -39,6 +39,16 @@ class TestParseCallbackArray:
     def test_returns_none_for_garbage(self) -> None:
         assert _parse_callback_array("I cannot find any callbacks.") is None
 
+    def test_recovers_from_illegal_apostrophe_escape(self) -> None:
+        # Models commonly emit `\'` inside JSON strings around contractions
+        # ("They\'re"). That's not a valid JSON escape — without the
+        # unescape pass, every candidate fails and the whole response is
+        # dropped. Race 146 on the Pi hit this on the first real run.
+        body = r'[{"anchor_ts":"01:05","excerpt":"They\'re fiddling"}]'
+        text = "```json\n" + body + "\n```"
+        result = _parse_callback_array(text)
+        assert result == [{"anchor_ts": "01:05", "excerpt": "They're fiddling"}]
+
 
 def _mock_response(payload: dict[str, Any], status: int = 200) -> MagicMock:
     resp = MagicMock()
