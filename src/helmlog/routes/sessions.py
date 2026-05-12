@@ -2067,6 +2067,14 @@ async def api_maneuver_browse_regattas(
     return JSONResponse({"regattas": regattas})
 
 
+_BROWSE_RANK_METRICS: set[str] = {
+    "distance_loss_m",
+    "time_to_recover_s",
+    "time_to_head_to_wind_s",
+    "loss_kts",
+}
+
+
 @router.get("/api/maneuvers/browse")
 async def api_maneuver_browse(
     request: Request,
@@ -2083,6 +2091,7 @@ async def api_maneuver_browse(
     session_limit: int = 20,
     tags: str | None = None,
     tag_mode: str = "and",
+    rank_by: str | None = None,
     _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
 ) -> JSONResponse:
     """Cross-session maneuver browser feed (#584).
@@ -2112,6 +2121,11 @@ async def api_maneuver_browse(
         raise HTTPException(status_code=422, detail="direction must be PS|SP")
     if session_type is not None and session_type not in ("race", "practice"):
         raise HTTPException(status_code=422, detail="session_type must be race|practice")
+    if rank_by is not None and rank_by not in _BROWSE_RANK_METRICS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"rank_by must be one of {sorted(_BROWSE_RANK_METRICS)}",
+        )
 
     # Parse optional multi-band wind filter. Each band is "min-max" (e.g.
     # "8-10") or "min-" for an open-ended upper bound (e.g. "15-" for 15+
@@ -2338,11 +2352,22 @@ async def api_maneuver_browse(
 
             filtered = [m for m in filtered if _tag_match(m)]
 
+    # Re-rank the filtered set against the requested metric. The cached
+    # rank attached during enrichment is always distance_loss_m-based, so
+    # rank_by recomputes the good/avg/bad/consistent buckets across the
+    # *visible* set only — comparing a tight wind band to itself, not to
+    # the boat's all-time distribution.
+    if rank_by is not None:
+        from helmlog.analysis.maneuvers import rank_maneuvers
+
+        rank_maneuvers(filtered, metric=rank_by)
+
     return JSONResponse(
         {
             "maneuvers": filtered,
             "session_ids": resolved_session_ids,
             "available_tags": available_tags,
+            "rank_by": rank_by or "distance_loss_m",
         }
     )
 

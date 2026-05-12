@@ -31,6 +31,8 @@ const state = {
   direction: null,         // 'PS'|'SP'|null
   postStart: false,        // drop pre-gun maneuvers when true
   twsBands: new Set(),     // indices into TWS_BANDS — empty = any
+  twsMin: null,            // typed wind range floor; null = unset
+  twsMax: null,            // typed wind range ceiling; null = unset
   hasVideo: false,
   tagFilter: new Set(),    // tag ids
   tagMode: 'and',          // 'and'|'or'
@@ -38,6 +40,11 @@ const state = {
   maneuvers: [],
   selected: new Set(),     // composite keys "sid:mid"
   loading: false,
+  rankBy: 'distance_loss_m', // metric driving the server-side Rank column
+  // Multi-column sort: ordered list of { key, dir }. Click toggles
+  // asc → desc → off; shift-click appends as secondary. Empty = natural
+  // (server) order, which is chronological ascending.
+  sortKeys: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -46,6 +53,7 @@ const state = {
 
 (async function init() {
   renderPills();
+  _wireHeaderClicks();
   await Promise.all([loadRegattas(), loadSessions()]);
   await reload();
 })();
@@ -180,6 +188,37 @@ function mvToggleTws(i) {
   reload();
 }
 function mvClearTws() { state.twsBands.clear(); renderPills(); reload(); }
+
+function _parseTwsField(id) {
+  const raw = (document.getElementById(id).value || '').trim();
+  if (raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+let _twsRangeDebounce = null;
+function mvOnTwsRangeChange() {
+  // Debounce typing so each keystroke doesn't fire a fetch.
+  state.twsMin = _parseTwsField('mv-tws-min');
+  state.twsMax = _parseTwsField('mv-tws-max');
+  clearTimeout(_twsRangeDebounce);
+  _twsRangeDebounce = setTimeout(reload, 250);
+}
+
+function mvClearTwsRange() {
+  document.getElementById('mv-tws-min').value = '';
+  document.getElementById('mv-tws-max').value = '';
+  state.twsMin = null;
+  state.twsMax = null;
+  reload();
+}
+
+function mvOnRankByChange() {
+  const sel = document.getElementById('mv-rank-by');
+  state.rankBy = sel ? sel.value : 'distance_loss_m';
+  reload();
+}
+
 function mvSetPhase(on) { state.postStart = !!on; renderPills(); reload(); }
 function mvSetSessionType(t) {
   state.sessionType = t;
@@ -219,8 +258,13 @@ async function reload() {
       });
       params.set('tws_bands', bands.join(','));
     }
+    if (state.twsMin != null) params.set('tws_min', String(state.twsMin));
+    if (state.twsMax != null) params.set('tws_max', String(state.twsMax));
     if (state.hasVideo) params.set('has_video', '1');
     if (state.postStart) params.set('post_start', '1');
+    if (state.rankBy && state.rankBy !== 'distance_loss_m') {
+      params.set('rank_by', state.rankBy);
+    }
     if (state.tagFilter.size) {
       params.set('tags', [...state.tagFilter].join(','));
       params.set('tag_mode', state.tagMode);
@@ -246,6 +290,116 @@ function mvReload() {
   reload();
 }
 
+// ---------------------------------------------------------------------------
+// Multi-column sort
+// ---------------------------------------------------------------------------
+
+function _sortValue(m, key) {
+  // Synthesized keys we expose as sort targets that don't map 1:1 to a
+  // field on the maneuver dict.
+  if (key === 'turn_angle_abs') {
+    return m.turn_angle_deg == null ? null : Math.abs(Number(m.turn_angle_deg));
+  }
+  if (key === 'direction') {
+    // Map turn-angle sign to its label, then sort lex (PS < SP).
+    return m.turn_angle_deg == null ? null
+      : (m.turn_angle_deg < 0 ? 'PS' : 'SP');
+  }
+  if (key === 'session_start_utc') {
+    return m.session_start_utc || '';
+  }
+  const v = m[key];
+  return v === undefined ? null : v;
+}
+
+function _compareForSort(a, b, key, dir, numeric) {
+  const va = _sortValue(a, key);
+  const vb = _sortValue(b, key);
+  // Nulls always sort to the end, regardless of direction — keeps "no
+  // data" rows from polluting the top when you sort ascending.
+  if (va == null && vb == null) return 0;
+  if (va == null) return 1;
+  if (vb == null) return -1;
+  let cmp;
+  if (numeric) {
+    cmp = Number(va) - Number(vb);
+  } else {
+    cmp = String(va).localeCompare(String(vb));
+  }
+  return dir === 'desc' ? -cmp : cmp;
+}
+
+function _sortedManeuvers() {
+  if (!state.sortKeys.length) return state.maneuvers;
+  // Stable sort: walk the keys in priority order, breaking ties downstream.
+  const out = state.maneuvers.slice();
+  // We need to know numeric vs lex for each key — pull from the header DOM
+  // so the truth lives next to the column it describes.
+  const numericByKey = {};
+  document.querySelectorAll('th.mv-sortable').forEach(th => {
+    numericByKey[th.dataset.sort] = th.dataset.numeric === '1';
+  });
+  out.sort((a, b) => {
+    for (const sk of state.sortKeys) {
+      const c = _compareForSort(a, b, sk.key, sk.dir, !!numericByKey[sk.key]);
+      if (c !== 0) return c;
+    }
+    return 0;
+  });
+  return out;
+}
+
+function mvOnHeaderClick(ev, key) {
+  const existing = state.sortKeys.findIndex(k => k.key === key);
+  if (ev.shiftKey) {
+    // Add or cycle a secondary key without clearing others.
+    if (existing === -1) {
+      state.sortKeys.push({ key, dir: 'asc' });
+    } else if (state.sortKeys[existing].dir === 'asc') {
+      state.sortKeys[existing].dir = 'desc';
+    } else {
+      state.sortKeys.splice(existing, 1);
+    }
+  } else {
+    // Plain click — replace the whole sort with this key, cycling dir
+    // if it was already the only key.
+    if (state.sortKeys.length === 1 && state.sortKeys[0].key === key) {
+      if (state.sortKeys[0].dir === 'asc') state.sortKeys[0].dir = 'desc';
+      else state.sortKeys = [];
+    } else {
+      state.sortKeys = [{ key, dir: 'asc' }];
+    }
+  }
+  _renderHeaderIndicators();
+  renderResults();
+}
+
+function _renderHeaderIndicators() {
+  document.querySelectorAll('th.mv-sortable').forEach(th => {
+    const key = th.dataset.sort;
+    const idx = state.sortKeys.findIndex(k => k.key === key);
+    // Strip any existing indicator span.
+    const existing = th.querySelector('.mv-sort-indicator');
+    if (existing) existing.remove();
+    if (idx === -1) return;
+    const sk = state.sortKeys[idx];
+    const arrow = sk.dir === 'asc' ? '↑' : '↓';
+    const label = state.sortKeys.length > 1
+      ? arrow + (idx + 1)  // show priority when there are multiple keys
+      : arrow;
+    const span = document.createElement('span');
+    span.className = 'mv-sort-indicator';
+    span.textContent = label;
+    th.appendChild(span);
+  });
+}
+
+function _wireHeaderClicks() {
+  document.querySelectorAll('th.mv-sortable').forEach(th => {
+    th.addEventListener('click', (ev) => mvOnHeaderClick(ev, th.dataset.sort));
+  });
+}
+
 function renderResults() {
   const tbody = document.getElementById('mv-tbody');
   const empty = document.getElementById('mv-empty');
@@ -260,7 +414,7 @@ function renderResults() {
   }
   empty.style.display = 'none';
 
-  tbody.innerHTML = state.maneuvers.map(m => {
+  tbody.innerHTML = _sortedManeuvers().map(m => {
     const k = m.session_id + ':' + m.id;
     const sel = state.selected.has(k);
     const date = (m.session_start_utc || '').slice(0, 10);

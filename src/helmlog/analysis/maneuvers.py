@@ -403,25 +403,33 @@ _CONSISTENT_STDEV_FRAC = 0.5
 _CONSISTENT_ABS_SPREAD_M = 3.0
 
 
-def rank_maneuvers(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def rank_maneuvers(
+    items: list[dict[str, Any]],
+    *,
+    metric: str | None = None,
+) -> list[dict[str, Any]]:
     """Attach a ``rank`` label and ``loss_percentile`` in-place (#616).
 
-    Ranking is by ``distance_loss_m`` when available, else ``loss_kts``.
-    When the set's loss spread is too small to be meaningful (low
-    relative stdev OR small absolute range), every rankable item gets
-    rank ``consistent`` instead of the quartile split. Otherwise top
-    quartile (lowest loss) → ``good``, bottom quartile → ``bad``,
-    middle half → ``avg``. Entries with no loss data get rank ``None``.
+    Ranking is by ``metric`` when supplied, else ``distance_loss_m`` falling
+    back to ``loss_kts``. When the set's loss spread is too small to be
+    meaningful (low relative stdev OR — for ``distance_loss_m`` only — small
+    absolute range), every rankable item gets rank ``consistent`` instead
+    of the quartile split. Otherwise top quartile (lowest value) → ``good``,
+    bottom quartile → ``bad``, middle half → ``avg``. Entries with no value
+    for the chosen metric get rank ``None``.
 
-    ``loss_percentile`` is the 0–100 within-set rank (lowest loss = 0)
-    on every rankable item, regardless of bucket. The UI renders it
-    as a tooltip number so a user can see the underlying ordering
-    even when the bucket label is ``consistent``.
+    ``loss_percentile`` is the 0–100 within-set rank (lowest value = 0)
+    on every rankable item, regardless of bucket. The UI renders it as a
+    tooltip number so a user can see the underlying ordering even when the
+    bucket label is ``consistent``.
     """
     if not items:
         return items
 
     def _key(m: dict[str, Any]) -> float | None:
+        if metric is not None:
+            v = m.get(metric)
+            return float(v) if v is not None else None
         v = m.get("distance_loss_m")
         if v is not None:
             return float(v)
@@ -449,10 +457,11 @@ def rank_maneuvers(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     stdev_loss = statistics.pstdev(losses) if n > 1 else 0.0
     relative_passes = median_loss > 0 and (stdev_loss / median_loss) >= _CONSISTENT_STDEV_FRAC
     # The 3 m floor is unit-specific (GPS positional noise on
-    # ``distance_loss_m``). When falling back to ``loss_kts`` we can't
-    # apply it — knots aren't meters — so only the relative test gates
-    # the spread call on those rows.
-    using_distance = all(m.get("distance_loss_m") is not None for m in sorted_items)
+    # ``distance_loss_m``). For any other metric (knots, seconds) it would
+    # be meaningless, so only the relative test gates those rows.
+    using_distance = metric is None and all(
+        m.get("distance_loss_m") is not None for m in sorted_items
+    )
     absolute_passes = (not using_distance) or spread >= _CONSISTENT_ABS_SPREAD_M
 
     if not (relative_passes and absolute_passes):
