@@ -56,7 +56,78 @@ they open the session detail page.
    - **Crew weight:** lookup default crew (1,070 lb on Corvo as of May
      2026) — note if a per-race override exists in `crew_defaults`.
 
-3. **Synthesize the debrief.** A short markdown summary, ~250–400
+3. **Pull and analyze the audio transcripts.** Each race has audio in
+   one or more `audio_sessions` rows linked by `race_id`:
+
+   - `session_type='race'` — the on-water mic capture (helm + crew chatter)
+   - `session_type='debrief'` — post-race recorded debrief (only present
+     for some races)
+
+   Both can have multiple sibling rows when more than one mic was
+   running (different `capture_group_id` per session_type, ordered by
+   `capture_ordinal`). For each audio_session, check `transcripts.status`:
+
+   ```sql
+   SELECT a.id, a.session_type, a.capture_ordinal, t.id AS transcript_id,
+          t.status, length(t.text) AS text_len
+   FROM audio_sessions a
+   LEFT JOIN transcripts t ON t.audio_session_id = a.id
+   WHERE a.race_id = {race_id}
+   ORDER BY a.session_type, a.capture_ordinal;
+   ```
+
+   Status handling:
+
+   - **`done`** with non-empty text → fetch `text` and `segments_json`
+     (the latter has speaker labels + timestamps) and feed into the
+     analysis below.
+   - **`running` or `pending`** → note that transcript is in progress,
+     skip the analysis section, tell the user to re-run /debrief once
+     it completes (typical wait: 1–5 min for a race, 30s–2min for a
+     debrief).
+   - **No transcript row exists** for an audio_session → kick off
+     transcription via the helmlog API:
+     ```
+     curl -X POST -b ~/.helmlog-cookie \
+          https://corvo105.helmlog.org/api/audio/{audio_session_id}/transcribe
+     ```
+     This returns 202 Accepted and the worker on the user's Mac
+     (com.helmlog.transcribe-worker, Tailscale 100.127.219.117:8321)
+     picks up the job. **The auth cookie file must exist; if it
+     doesn't, prompt the user to log in once and save it.**
+   - **`error`** → show the error_msg field, don't auto-retry. Suggest
+     the user retranscribes manually if appropriate.
+
+   **What to look for in the transcript:**
+
+   - **Tactical calls vs reactions.** Sailing language is brief —
+     "pressure right!", "two boat lengths", "tack", "hold". A good
+     race has crisp anticipatory calls; a bad race has lots of
+     reactive "watch out!" or "we got rolled" comments.
+   - **Specific moments worth flagging back into the analysis:**
+     - Mark roundings (counted)
+     - Tacks/jibes (count vs the maneuvers table — should match)
+     - OCS recall calls ("come back!", "we're over!") — cross-reference
+       with the OCS detection
+     - Pressure/wind callouts ("big puff coming", "lift on the right")
+     - Boat-on-boat ("Moose to leeward", "got rolled by LiftOff")
+     - Sail trim ("more vang", "kite collapse", "we're stalled")
+   - **Tone trajectory.** Compare debrief audio (post-race calm
+     reflection) to race audio (in-the-moment reactions). The debrief
+     usually surfaces what went wrong in the team's own words —
+     prioritize quoting the crew's own language over your own
+     speculation.
+   - **Segment-level speaker tracking.** `segments_json` has
+     `speaker` labels (or anonymized IDs); per-position quotes are more
+     useful than aggregate. If `position_name` is set on
+     `transcript_segments`, group by position (helm/main/pit/bow/tac).
+
+   **Add a TRANSCRIPT section to the debrief synthesized in step 4**
+   (not as a transcription dump — as a curated 3–6 bullet list of
+   notable callouts with timestamps, drawn from the actual transcript
+   text). Always cite a specific quote and timestamp.
+
+4. **Synthesize the debrief.** A short markdown summary, ~250–400
    words, with this structure:
 
    ```markdown
@@ -79,14 +150,27 @@ they open the session detail page.
    ## Shifts
    - Tacked on header: {g}, on lift: {b}, neutral: {n}
 
+   ## From the transcript
+   {3-6 bullets of notable callouts with timestamps and speakers,
+   drawn from the actual transcript text. Always quote — don't
+   paraphrase. Example:
+     - 02:14:55 (helm): "we're getting rolled by Moose"
+     - 02:18:30 (tac): "pressure on the right, hold this tack"
+   If the transcript is in progress: "Transcript still processing
+   ({status}); re-run /debrief in a few minutes for transcript notes."
+   If no audio captured for this race: "No race audio recorded."}
+
    ## What we did well / what to look at
-   {1-2 bullets each, drawn from the data — be specific, cite
-   numbers, and tie to the season patterns where relevant
-   (e.g., "we sailed 135° TWA in 7 kt — the season optimum is 145°,
-   the same gap we've seen all spring")}
+   {1-2 bullets each, drawn from BOTH the data AND the transcript —
+   be specific, cite numbers, tie to the season patterns where
+   relevant (e.g., "we sailed 135° TWA in 7 kt — the season optimum
+   is 145°, the same gap we've seen all spring") and to the crew's
+   own words from the transcript ("the helm called out 'we're slow'
+   at 02:30 — the data shows we were 0.5 kt below polar at that
+   moment")}
    ```
 
-4. **Attach to the session.** Insert the debrief as a moment on the
+6. **Attach to the session.** Insert the debrief as a moment on the
    session via direct SQL on the live DB (the API requires a session
    cookie that's awkward to wire up from the Mac).
 
@@ -119,7 +203,7 @@ they open the session detail page.
    supported); the moment **subject** stays a one-line summary so the
    moment list is scannable.
 
-5. **Report the URL.** Tell the user the moment was created and give
+7. **Report the URL.** Tell the user the moment was created and give
    them the deep link:
    `https://corvo105.helmlog.org/session/{race_id}/{slug}?moment={moment_id}`
    (or just `/session/{id}/{slug}` if the `?moment=` deep-link param
@@ -151,6 +235,14 @@ they open the session detail page.
   the comment body instead).
 - Do not run this against practice sessions unless explicitly asked.
 - Do not write to the DB if the user hasn't confirmed in step 1.
+- Do not paraphrase transcript content. If you quote a crewmember,
+  use their exact words and timestamp. If you can't find a clean
+  quote that supports a claim, drop the claim instead of inventing
+  one.
+- Do not include the full transcript text in the debrief — it'll be
+  thousands of words. Curate to 3–6 high-signal callouts.
+- Do not auto-trigger transcription for sessions with `error` status —
+  the user may have a reason (e.g., bad audio).
 
 ## Why this skill (and not a script)
 
