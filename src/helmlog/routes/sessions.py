@@ -1510,6 +1510,8 @@ async def _compute_session_replay(storage: Storage, session_id: int) -> dict[str
             hdg=hdg_v,
             heel_deg=heel_v,
             leeway_k=storage._leeway_k,
+            compass_offset_port=storage._compass_offset_port,
+            compass_offset_stbd=storage._compass_offset_stbd,
         )
         set_v: float | None = sd[0] if sd is not None else None
         drift_v: float | None = sd[1] if sd is not None else None

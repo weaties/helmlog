@@ -97,6 +97,20 @@ PARAMETERS: tuple[ParameterDef, ...] = (
         "number",
         "instrument_calibration",
     ),
+    ParameterDef(
+        "compass_offset_port",
+        "Compass offset (port tack)",
+        "°",
+        "number",
+        "instrument_calibration",
+    ),
+    ParameterDef(
+        "compass_offset_stbd",
+        "Compass offset (stbd tack)",
+        "°",
+        "number",
+        "instrument_calibration",
+    ),
     ParameterDef("mast_height", "Mast height", "m", "number", "instrument_calibration"),
 )
 

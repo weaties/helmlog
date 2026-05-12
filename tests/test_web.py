@@ -3005,7 +3005,7 @@ async def test_instrument_calibration_in_parameters(storage: Storage) -> None:
     # Should be the last category
     assert cats[-1] == "instrument_calibration"
 
-    # All 15 calibration params present
+    # All 17 calibration params present
     cal_params = next(c for c in data["categories"] if c["category"] == "instrument_calibration")
     param_names = [p["name"] for p in cal_params["parameters"]]
     expected = [
@@ -3023,6 +3023,8 @@ async def test_instrument_calibration_in_parameters(storage: Storage) -> None:
         "trim_offset",
         "leeway_coefficient",
         "rudder_angle_offset",
+        "compass_offset_port",
+        "compass_offset_stbd",
         "mast_height",
     ]
     assert param_names == expected

@@ -26,6 +26,8 @@ def compute_set_drift(
     hdg: float | None,
     heel_deg: float | None = None,
     leeway_k: float | None = None,
+    compass_offset_port: float = 0.0,
+    compass_offset_stbd: float = 0.0,
 ) -> tuple[float, float] | None:
     """Return (set_deg, drift_kts) or None if any required input is missing.
 
@@ -55,6 +57,20 @@ def compute_set_drift(
 
     ``leeway_k`` is boat-specific (typically 8–15 for a 30–40 ft
     sailboat). On HelmLog it lives in ``boat_settings.leeway_coefficient``.
+
+    Per-tack compass offset
+    -----------------------
+    Magnetic deviation curves are direction-dependent: a flat-deck
+    compass swing rarely matches deviation seen at race heel. The
+    residual is roughly tack-symmetric and not captured by a single
+    global ``heading_offset``. When non-zero, ``compass_offset_port``
+    is added to HDG while ``heel_deg > 0`` (port tack), and
+    ``compass_offset_stbd`` while ``heel_deg < 0`` (starboard tack).
+    Both default to 0.0 so behavior is unchanged for callers that
+    don't pass them. The offsets live in
+    ``boat_settings.compass_offset_port`` /
+    ``boat_settings.compass_offset_stbd`` and are typically derived
+    from a joint-fit against a session's maneuvers.
     """
     if sog is None or cog is None or stw is None or hdg is None:
         return None
@@ -62,6 +78,10 @@ def compute_set_drift(
     if heel_deg is not None and leeway_k is not None and leeway_k != 0.0:
         lee_deg = leeway_k * heel_deg / (max(abs(stw), 1.0) ** 2)
         hdg = (hdg + lee_deg) % 360.0
+
+    if heel_deg is not None and (compass_offset_port or compass_offset_stbd):
+        delta = compass_offset_port if heel_deg > 0 else compass_offset_stbd
+        hdg = (hdg + delta) % 360.0
 
     n_g, e_g = _polar_to_ne(sog, cog)
     n_w, e_w = _polar_to_ne(stw, hdg)

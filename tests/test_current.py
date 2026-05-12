@@ -177,3 +177,96 @@ class TestLeewayCorrection:
         set_v, drift_v = sd
         assert 0.0 <= set_v < 360.0
         assert math.isfinite(drift_v)
+
+
+class TestCompassOffsets:
+    """Per-tack compass offset correction (#711). Magnetic deviation is
+    direction-dependent; a flat-deck swing won't catch what the heeled
+    boat sees on each tack. Two scalar offsets close that gap."""
+
+    def test_zero_offsets_no_op(self) -> None:
+        """Default-zero kwargs preserve behavior for boats that haven't tuned."""
+        sd_zero = compute_set_drift(
+            sog=5.0,
+            cog=10.0,
+            stw=5.0,
+            hdg=0.0,
+            heel_deg=20.0,
+            compass_offset_port=0.0,
+            compass_offset_stbd=0.0,
+        )
+        sd_default = compute_set_drift(sog=5.0, cog=10.0, stw=5.0, hdg=0.0, heel_deg=20.0)
+        assert sd_zero == sd_default
+
+    def test_port_offset_applied_when_heel_positive(self) -> None:
+        """Heel > 0 selects the port-tack offset."""
+        # With heel=+20 and port offset of -9°, effective hdg shifts by -9.
+        # Compare against the same scenario with hdg shifted -9 manually,
+        # offsets zero.
+        sd_with = compute_set_drift(
+            sog=5.0,
+            cog=10.0,
+            stw=5.0,
+            hdg=100.0,
+            heel_deg=20.0,
+            compass_offset_port=-9.0,
+            compass_offset_stbd=5.0,
+        )
+        sd_manual = compute_set_drift(sog=5.0, cog=10.0, stw=5.0, hdg=91.0, heel_deg=20.0)
+        assert sd_with is not None and sd_manual is not None
+        assert sd_with[0] == pytest.approx(sd_manual[0], abs=1e-6)
+        assert sd_with[1] == pytest.approx(sd_manual[1], abs=1e-6)
+
+    def test_stbd_offset_applied_when_heel_negative(self) -> None:
+        """Heel < 0 selects the starboard-tack offset."""
+        sd_with = compute_set_drift(
+            sog=5.0,
+            cog=10.0,
+            stw=5.0,
+            hdg=100.0,
+            heel_deg=-20.0,
+            compass_offset_port=-9.0,
+            compass_offset_stbd=5.0,
+        )
+        sd_manual = compute_set_drift(sog=5.0, cog=10.0, stw=5.0, hdg=105.0, heel_deg=-20.0)
+        assert sd_with is not None and sd_manual is not None
+        assert sd_with[0] == pytest.approx(sd_manual[0], abs=1e-6)
+        assert sd_with[1] == pytest.approx(sd_manual[1], abs=1e-6)
+
+    def test_offsets_skipped_when_heel_missing(self) -> None:
+        """Without heel, neither offset can be selected — keeps the
+        function safe to call on samples where attitudes aren't logged."""
+        sd_with = compute_set_drift(
+            sog=5.0,
+            cog=10.0,
+            stw=5.0,
+            hdg=100.0,
+            heel_deg=None,
+            compass_offset_port=-9.0,
+            compass_offset_stbd=5.0,
+        )
+        sd_without = compute_set_drift(sog=5.0, cog=10.0, stw=5.0, hdg=100.0)
+        assert sd_with == sd_without
+
+    def test_offsets_compose_with_leeway(self) -> None:
+        """Both corrections shift the same hdg in sequence — verify the
+        composed effect matches an equivalent manual shift."""
+        K = 12.0
+        STW = 6.0
+        heel = 20.0
+        port_offset = -9.0
+        lee = K * heel / max(STW, 1.0) ** 2
+        eff_hdg = (100.0 + lee + port_offset) % 360.0
+        sd_with = compute_set_drift(
+            sog=5.0,
+            cog=10.0,
+            stw=STW,
+            hdg=100.0,
+            heel_deg=heel,
+            leeway_k=K,
+            compass_offset_port=port_offset,
+        )
+        sd_manual = compute_set_drift(sog=5.0, cog=10.0, stw=STW, hdg=eff_hdg)
+        assert sd_with is not None and sd_manual is not None
+        assert sd_with[0] == pytest.approx(sd_manual[0], abs=1e-6)
+        assert sd_with[1] == pytest.approx(sd_manual[1], abs=1e-6)
