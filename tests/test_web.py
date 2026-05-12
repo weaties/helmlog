@@ -3029,8 +3029,8 @@ async def test_instrument_calibration_in_parameters(storage: Storage) -> None:
 
 
 @pytest.mark.asyncio
-async def test_instrument_calibration_h5000_labels(storage: Storage) -> None:
-    """H5000-only parameters include (H5000) in the label."""
+async def test_instrument_calibration_labels_no_h5000_suffix(storage: Storage) -> None:
+    """Calibration parameter labels do not carry a vendor-specific suffix."""
     app = create_app(storage)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -3041,10 +3041,6 @@ async def test_instrument_calibration_h5000_labels(storage: Storage) -> None:
     by_name = {p["name"]: p for p in cal_params["parameters"]}
 
     for name in ("heel_offset", "trim_offset", "leeway_coefficient", "rudder_angle_offset"):
-        assert "H5000" in by_name[name]["label"], f"{name} should have H5000 in label"
-
-    # Non-H5000 params should NOT have H5000 in label
-    for name in ("speed_correction", "heading_offset", "wind_angle_offset", "mast_height"):
         assert "H5000" not in by_name[name]["label"], f"{name} should not have H5000 in label"
 
 
