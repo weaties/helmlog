@@ -17,6 +17,7 @@ from helmlog.audio import (
     AudioRecorder,
     AudioRecorderGroup,
     _resolve_device,
+    capture_start,
 )
 from helmlog.usb_audio import DetectedDevice
 
@@ -554,3 +555,58 @@ def test_audio_recorder_group_start_cleans_up_on_sibling_failure(tmp_path: Path)
     assert mock_first_stream.stop.called
     assert mock_first_stream.close.called
     assert not group.is_recording
+
+
+def test_capture_start_retries_device_detection_after_stop(tmp_path: Path) -> None:
+    """#762: when /debrief/start fires right after /end's capture_stop,
+    the USB capture devices may briefly enumerate to [] before the
+    kernel releases them. capture_start retries detection a few times
+    before failing — covers the chained finish-race → debrief flow."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    config = AudioConfig(device=None, sample_rate=48000, channels=1, output_dir=str(tmp_path))
+
+    # First three detection calls return empty (devices still busy), then
+    # the fourth returns a single device.
+    fake_device = DetectedDevice(
+        vendor_id=0x1234,
+        product_id=0x5678,
+        serial="serialX",
+        usb_port_path="usb-0",
+        max_channels=2,
+        sounddevice_index=0,
+        name="usb-pcm-card",
+    )
+    detect_calls: list[list] = [[], [], [], [fake_device]]
+    real_detect = lambda *_a, **_kw: detect_calls.pop(0)  # noqa: E731
+
+    group = MagicMock(spec=AudioRecorderGroup)
+    group.start = AsyncMock(
+        return_value=[
+            # mimic AudioSession enough that write_audio_session is called once
+            MagicMock(file_path="x.wav", channel_count=2, ordinal=0)
+        ]
+    )
+
+    storage = MagicMock()
+    storage.write_audio_session = AsyncMock(return_value=42)
+
+    with patch("helmlog.usb_audio.detect_all_capture_devices", side_effect=real_detect):
+        primary = asyncio.run(
+            capture_start(
+                group,
+                config,
+                storage,
+                name="race-1-debrief",
+                race_id=1,
+                session_type="debrief",
+            )
+        )
+
+    assert primary == 42
+    # Detection retried until devices came back; recorder.start got the device.
+    assert group.start.await_count == 1
+    _args, kwargs = group.start.await_args
+    assert kwargs["devices"] == [fake_device]
+    assert len(detect_calls) == 0  # all four detection responses were consumed
