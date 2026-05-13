@@ -2608,9 +2608,15 @@ class Storage:
         if current < 41:
             await self._migrate_v41_sail_changes()
 
-        # Post-DDL data migration for v55 (unified controls)
+        # Post-DDL data migration for v55 (unified controls).
         if current < 55:
             await self._migrate_v55_controls()
+
+        # PARAMETERS-as-source-of-truth sync (#711 follow-up). Always called;
+        # idempotent INSERT OR IGNORE means new ParameterDef additions to
+        # boat_settings.PARAMETERS auto-flow into the controls table on the
+        # next service start without needing a new migration each time.
+        await self._sync_controls_from_parameters()
 
         # Post-DDL data migration for v56 (seed categories)
         if current < 56:
@@ -2919,6 +2925,33 @@ class Storage:
             len(PARAMETERS) + len(aruco_rows),
             len(aruco_rows),
         )
+
+    async def _sync_controls_from_parameters(self) -> None:
+        """Ensure every ParameterDef in ``boat_settings.PARAMETERS`` is
+        present in the ``controls`` table (#711 follow-up).
+
+        Runs every connect. ``INSERT OR IGNORE`` against the UNIQUE(name)
+        constraint makes it idempotent — existing rows aren't touched
+        (admins may have customized label/sort_order), and new
+        PARAMETERS entries appear on /admin/controls without needing a
+        per-addition migration.
+        """
+        from helmlog.boat_settings import PARAMETERS
+
+        db = self._conn()
+        added = 0
+        for order, p in enumerate(PARAMETERS):
+            cur = await db.execute(
+                "INSERT OR IGNORE INTO controls"
+                " (name, label, unit, input_type, category, sort_order)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (p.name, p.label, p.unit, p.input_type, p.category, order),
+            )
+            if cur.rowcount > 0:
+                added += 1
+        if added:
+            await db.commit()
+            logger.info("Synced {} new ParameterDef(s) into controls table", added)
 
     async def _migrate_v56_categories(self) -> None:
         """Data migration for v56: seed control_categories from CATEGORY_ORDER."""

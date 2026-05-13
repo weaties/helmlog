@@ -3047,6 +3047,26 @@ async def test_instrument_calibration_labels_no_h5000_suffix(storage: Storage) -
 
 
 @pytest.mark.asyncio
+async def test_compass_offsets_seeded_into_controls_table(storage: Storage) -> None:
+    """#711 follow-up: migration v86 seeds the per-tack compass offsets
+    into the controls table so they appear on /admin/controls alongside
+    the rest of the instrument-calibration controls."""
+    cur = await storage._conn().execute(
+        "SELECT name, label, unit, category FROM controls"
+        " WHERE name IN ('compass_offset_port', 'compass_offset_stbd')"
+        " ORDER BY name"
+    )
+    rows = [dict(r) for r in await cur.fetchall()]
+    assert len(rows) == 2, f"expected both compass-offset rows, got {rows}"
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["compass_offset_port"]["label"] == "Compass offset (port tack)"
+    assert by_name["compass_offset_stbd"]["label"] == "Compass offset (stbd tack)"
+    for r in rows:
+        assert r["unit"] == "°"
+        assert r["category"] == "instrument_calibration"
+
+
+@pytest.mark.asyncio
 async def test_instrument_calibration_create_and_retrieve(storage: Storage) -> None:
     """POST/GET boat-settings works for calibration parameters."""
     app = create_app(storage)
