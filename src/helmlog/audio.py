@@ -474,16 +474,14 @@ async def capture_start(
     if isinstance(recorder, AudioRecorderGroup):
         import asyncio as _asyncio
 
-        from helmlog.usb_audio import detect_all_capture_devices
+        from helmlog.usb_audio import DetectedDevice, detect_all_capture_devices
 
         # Chained race-end → debrief-start (#762) immediately re-acquires
         # the USB capture devices that capture_stop just released. On
         # Linux the kernel holds the handles for a fraction of a second,
         # so detect_all_capture_devices can briefly return [] right after
         # the stop. Retry a few times with short backoff before failing.
-        from helmlog.usb_audio import DetectedDevice as _DetectedDevice
-
-        devices: list[_DetectedDevice] = []
+        devices: list[DetectedDevice] = []
         for _attempt in range(6):
             devices = detect_all_capture_devices(min_channels=1)
             if devices:
