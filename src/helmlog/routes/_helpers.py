@@ -455,6 +455,17 @@ class PasswordChange(BaseModel):
 
 class WeightUpdate(BaseModel):
     weight_lbs: float | None = None
+    gear_default_lbs: float | None = None
+
+
+class BulkCrewBackfillEntry(BaseModel):
+    race_id: int
+    crew: list[CrewEntry]
+    gear_preset: str | None = None
+
+
+class BulkCrewBackfill(BaseModel):
+    updates: list[BulkCrewBackfillEntry]
 
 
 class PositionEntry(BaseModel):

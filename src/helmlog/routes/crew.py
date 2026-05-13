@@ -11,6 +11,7 @@ from helmlog.auth import require_auth
 from helmlog.routes._helpers import (
     BoatCreate,
     BoatUpdate,
+    BulkCrewBackfill,
     CrewEntry,
     PositionEntry,
     RaceResultEntry,
@@ -26,8 +27,16 @@ async def api_set_crew(
     request: Request,
     race_id: int,
     body: list[CrewEntry],
+    gear_preset: str | None = None,
     _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
 ) -> None:
+    """Write a verified per-race crew lineup (#761).
+
+    Calling this endpoint is treated as confirmation: ``races.crew_assumed``
+    flips to 0 and ``races.gear_preset`` is recorded. Pass ``?gear_preset=
+    dry|wet|foulies`` to fill in missing per-entry gear_weight values from
+    the preset.
+    """
     storage = get_storage(request)
     cur = await storage._conn().execute("SELECT id FROM races WHERE id = ?", (race_id,))
     if await cur.fetchone() is None:
@@ -54,10 +63,13 @@ async def api_set_crew(
         for e in body
     ]
     try:
-        await storage.set_crew_defaults(race_id, crew)
+        await storage.confirm_race_crew(race_id, crew, gear_preset=gear_preset)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    await audit(request, "crew.set", detail=str(race_id), user=_user)
+    detail = f"race={race_id} verified n={len(crew)}"
+    if gear_preset is not None:
+        detail += f" gear={gear_preset}"
+    await audit(request, "crew.set", detail=detail, user=_user)
 
 
 @router.get("/api/races/{race_id}/crew")
@@ -72,7 +84,77 @@ async def api_get_crew(
         raise HTTPException(status_code=404, detail="Race not found")
 
     crew = await storage.resolve_crew(race_id)
-    return JSONResponse({"crew": crew})
+    summary = await storage.get_race_crew_summary(race_id)
+    return JSONResponse(
+        {
+            "crew": crew,
+            "crew_assumed": summary["crew_assumed"],
+            "gear_preset": summary["gear_preset"],
+            "total_body_weight_lb": summary["total_body_weight_lb"],
+            "total_gear_weight_lb": summary["total_gear_weight_lb"],
+            "total_crew_weight_lb": summary["total_crew_weight_lb"],
+        }
+    )
+
+
+@router.post("/api/admin/crew-backfill", status_code=200)
+async def api_crew_backfill(
+    request: Request,
+    body: BulkCrewBackfill,
+    _user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
+) -> JSONResponse:
+    """Bulk-edit per-race crew + gear for historical races (#761 PR-C).
+
+    Emits one ``crew.set`` audit_log row per race (data-licensing §11
+    protest readiness — the trail must show who set crew weight per race,
+    not a single batch row).
+    """
+    storage = get_storage(request)
+    positions = await storage.get_crew_positions()
+    valid_ids = {p["id"] for p in positions}
+
+    updates: list[dict[str, Any]] = []
+    for entry in body.updates:
+        cur = await storage._conn().execute("SELECT id FROM races WHERE id = ?", (entry.race_id,))
+        if await cur.fetchone() is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Race {entry.race_id} not found",
+            )
+        invalid = [c.position_id for c in entry.crew if c.position_id not in valid_ids]
+        if invalid:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown position_id(s) in race {entry.race_id}: {invalid}",
+            )
+        updates.append(
+            {
+                "race_id": entry.race_id,
+                "gear_preset": entry.gear_preset,
+                "crew": [
+                    {
+                        "position_id": c.position_id,
+                        "user_id": c.user_id,
+                        "attributed": c.attributed,
+                        "body_weight": c.body_weight,
+                        "gear_weight": c.gear_weight,
+                    }
+                    for c in entry.crew
+                ],
+            }
+        )
+
+    try:
+        applied = await storage.bulk_confirm_race_crew(updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    for u in updates:
+        detail = f"race={u['race_id']} verified n={len(u['crew'])} backfill"
+        if u.get("gear_preset"):
+            detail += f" gear={u['gear_preset']}"
+        await audit(request, "crew.set", detail=detail, user=_user)
+    return JSONResponse({"applied": applied})
 
 
 @router.post("/api/crew/defaults", status_code=204)

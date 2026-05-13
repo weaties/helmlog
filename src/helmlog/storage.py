@@ -203,7 +203,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 85
+_CURRENT_VERSION: int = 86
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -2119,6 +2119,19 @@ _MIGRATIONS: dict[int, str] = {
             at           TEXT
         );
         INSERT OR IGNORE INTO llm_consent (id, acknowledged) VALUES (1, 0);
+    """,
+    86: """
+        -- Per-race crew capture (#761).
+        -- races.crew_assumed: 1 = lineup is the boat default (unverified for
+        -- this race), 0 = a user explicitly confirmed the lineup. Default 1
+        -- so every historical race shows up as 'assumed' until backfilled.
+        -- races.gear_preset: one preset per race ("dry"/"wet"/"foulies"),
+        -- applied to entries without an explicit gear_weight at confirm time.
+        -- users.gear_default_lbs: per-user fallback when a race entry doesn't
+        -- override gear_weight (e.g. somebody always sails dry).
+        ALTER TABLE races ADD COLUMN crew_assumed INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE races ADD COLUMN gear_preset TEXT;
+        ALTER TABLE users ADD COLUMN gear_default_lbs REAL;
     """,
 }
 
@@ -5121,6 +5134,171 @@ class Storage:
         await db.execute("UPDATE users SET weight_lbs = ? WHERE id = ?", (weight_lbs, user_id))
         await db.commit()
 
+    async def update_user_gear_default(self, user_id: int, gear_default_lbs: float | None) -> None:
+        """Update a user's default per-race gear weight (#761)."""
+        db = self._conn()
+        await db.execute(
+            "UPDATE users SET gear_default_lbs = ? WHERE id = ?",
+            (gear_default_lbs, user_id),
+        )
+        await db.commit()
+
+    # ------------------------------------------------------------------
+    # Per-race crew confirmation (#761)
+    # ------------------------------------------------------------------
+
+    # Gear preset → per-person lbs. From the /spec; folded here rather than
+    # config because the values are a starting point — admin override per
+    # user lives on users.gear_default_lbs.
+    GEAR_PRESET_LBS: dict[str, float] = {
+        "dry": 0.0,
+        "wet": 8.0,
+        "foulies": 18.0,
+    }
+
+    async def confirm_race_crew(
+        self,
+        race_id: int,
+        crew: list[dict[str, Any]],
+        *,
+        gear_preset: str | None = None,
+    ) -> None:
+        """Write a verified per-race crew lineup.
+
+        Stores rows in crew_defaults (race_id=race_id) via the existing
+        set_crew_defaults plumbing, flips races.crew_assumed to 0, and
+        records the gear preset on the race. When *gear_preset* is set and
+        an entry omits gear_weight, the preset's per-person lbs is filled
+        in so the totals on the analysis API are consistent.
+
+        Raises ValueError on an unknown gear_preset or the duplicate-user-id
+        check that set_crew_defaults already performs.
+        """
+        if gear_preset is not None and gear_preset not in self.GEAR_PRESET_LBS:
+            valid = ", ".join(sorted(self.GEAR_PRESET_LBS))
+            raise ValueError(f"gear_preset must be one of: {valid}")
+
+        if gear_preset is not None:
+            preset_lbs = self.GEAR_PRESET_LBS[gear_preset]
+            for entry in crew:
+                if entry.get("gear_weight") is None:
+                    entry["gear_weight"] = preset_lbs
+
+        await self.set_crew_defaults(race_id, crew)
+        db = self._conn()
+        await db.execute(
+            "UPDATE races SET crew_assumed = 0, gear_preset = ? WHERE id = ?",
+            (gear_preset, race_id),
+        )
+        await db.commit()
+        await self._invalidate_race_cache(race_id)
+        logger.debug(
+            "Race {} crew confirmed: {} entries, gear_preset={}",
+            race_id,
+            len(crew),
+            gear_preset,
+        )
+
+    async def get_race_crew_summary(self, race_id: int) -> dict[str, Any]:
+        """Return resolved lineup + assumption flag + weight totals.
+
+        Per-entry weights win; if absent, fall through to users.weight_lbs
+        and users.gear_default_lbs. None totals when no weight is known.
+        """
+        db = self._read_conn()
+        cur = await db.execute(
+            "SELECT crew_assumed, gear_preset FROM races WHERE id = ?",
+            (race_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            raise ValueError(f"Race {race_id} not found")
+
+        resolved = await self.resolve_crew(race_id)
+
+        total_body: float = 0.0
+        total_gear: float = 0.0
+        body_count = 0
+        gear_count = 0
+        lineup: list[dict[str, Any]] = []
+        for entry in resolved:
+            body_w = entry.get("body_weight")
+            gear_w = entry.get("gear_weight")
+            user_weight_lbs: float | None = None
+            user_gear_lbs: float | None = None
+            if entry.get("user_id") is not None and (body_w is None or gear_w is None):
+                ucur = await db.execute(
+                    "SELECT weight_lbs, gear_default_lbs FROM users WHERE id = ?",
+                    (entry["user_id"],),
+                )
+                urow = await ucur.fetchone()
+                if urow is not None:
+                    user_weight_lbs = urow["weight_lbs"]
+                    user_gear_lbs = urow["gear_default_lbs"]
+            if body_w is None:
+                body_w = user_weight_lbs
+            if gear_w is None:
+                gear_w = user_gear_lbs
+            if body_w is not None:
+                total_body += body_w
+                body_count += 1
+            if gear_w is not None:
+                total_gear += gear_w
+                gear_count += 1
+            lineup.append(
+                {
+                    "position": entry["position"],
+                    "user_id": entry.get("user_id"),
+                    "user_name": entry.get("user_name"),
+                    "attributed": entry.get("attributed"),
+                    "body_weight_lb": body_w,
+                    "gear_weight_lb": gear_w,
+                    "source": entry.get("source"),
+                }
+            )
+
+        body_total = total_body if body_count else None
+        gear_total = total_gear if gear_count else None
+        crew_total: float | None
+        if body_total is not None and gear_total is not None:
+            crew_total = body_total + gear_total
+        elif body_total is not None:
+            crew_total = body_total
+        elif gear_total is not None:
+            crew_total = gear_total
+        else:
+            crew_total = None
+
+        return {
+            "crew_assumed": bool(row["crew_assumed"]),
+            "gear_preset": row["gear_preset"],
+            "lineup": lineup,
+            "total_body_weight_lb": body_total,
+            "total_gear_weight_lb": gear_total,
+            "total_crew_weight_lb": crew_total,
+        }
+
+    async def bulk_confirm_race_crew(
+        self,
+        updates: list[dict[str, Any]],
+    ) -> list[int]:
+        """Apply confirm_race_crew to a batch of races.
+
+        *updates* entries: ``{race_id, crew, gear_preset?}``. Returns the
+        list of race_ids that were updated (in input order). Caller is
+        responsible for emitting one audit_events row per race_id so the
+        protest-readiness trail is per-race.
+        """
+        applied: list[int] = []
+        for u in updates:
+            await self.confirm_race_crew(
+                u["race_id"],
+                u["crew"],
+                gear_preset=u.get("gear_preset"),
+            )
+            applied.append(u["race_id"])
+        return applied
+
     # ------------------------------------------------------------------
     # Boat registry
     # ------------------------------------------------------------------
@@ -6620,7 +6798,7 @@ class Storage:
 
     _USER_COLS = (
         "id, email, name, role, created_at, last_seen,"
-        " avatar_path, is_developer, is_active, weight_lbs, color_scheme"
+        " avatar_path, is_developer, is_active, weight_lbs, gear_default_lbs, color_scheme"
     )
 
     async def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
@@ -6675,7 +6853,7 @@ class Storage:
     async def list_users(self) -> list[dict[str, Any]]:
         cur = await self._read_conn().execute(
             "SELECT id, email, name, role, created_at, last_seen, is_developer,"
-            " weight_lbs"
+            " weight_lbs, gear_default_lbs"
             " FROM users WHERE email NOT LIKE 'deleted_%@redacted'"
             " ORDER BY created_at"
         )
@@ -9041,13 +9219,20 @@ class Storage:
         db = self._conn()
         anon_email = f"deleted_{user_id}@redacted"
         await db.execute(
-            "UPDATE users SET email = ?, name = NULL, avatar_path = NULL WHERE id = ?",
+            "UPDATE users SET email = ?, name = NULL, avatar_path = NULL,"
+            " weight_lbs = NULL, gear_default_lbs = NULL WHERE id = ?",
             (anon_email, user_id),
         )
         await db.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
         await db.execute("DELETE FROM user_credentials WHERE user_id = ?", (user_id,))
         await db.execute(
             "UPDATE invitations SET invited_by = NULL WHERE invited_by = ?", (user_id,)
+        )
+        # data-licensing §1: per-race weight overrides referencing this user
+        # must not survive deletion.
+        await db.execute(
+            "UPDATE crew_defaults SET body_weight = NULL, gear_weight = NULL WHERE user_id = ?",
+            (user_id,),
         )
         await db.commit()
         logger.info("User {} anonymized and sessions deleted", user_id)
@@ -9170,15 +9355,24 @@ class Storage:
         return rows
 
     async def anonymize_sailor(self, user_id: int, replacement: str = "Anonymous") -> int:
-        """Anonymize a crew member by updating their user name. Returns rows updated."""
+        """Anonymize a crew member by updating their user name. Returns rows updated.
+
+        Also clears health-adjacent weight data: users.weight_lbs,
+        users.gear_default_lbs, and any per-race body/gear weight overrides
+        in crew_defaults that reference this user (data-licensing §1).
+        """
         db = self._conn()
         cur = await db.execute(
-            "UPDATE users SET name = ? WHERE id = ?",
+            "UPDATE users SET name = ?, weight_lbs = NULL, gear_default_lbs = NULL WHERE id = ?",
             (replacement, user_id),
         )
         count = cur.rowcount or 0
+        await db.execute(
+            "UPDATE crew_defaults SET body_weight = NULL, gear_weight = NULL WHERE user_id = ?",
+            (user_id,),
+        )
         await db.commit()
-        logger.info("User {} anonymized to {!r}", user_id, replacement)
+        logger.info("User {} anonymized to {!r}; weights cleared", user_id, replacement)
         return count
 
     # ------------------------------------------------------------------

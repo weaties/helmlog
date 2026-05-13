@@ -1245,6 +1245,121 @@ async def test_post_crew_non_attributed(storage: Storage) -> None:
 
 
 # ---------------------------------------------------------------------------
+# #761 — per-race crew, gear preset, bulk backfill
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_crew_flips_assumed_and_surfaces_summary(storage: Storage) -> None:
+    """POST /api/races/{id}/crew flips crew_assumed; GET returns it + totals."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _set_event(client)
+        race_id = (await client.post("/api/races/start")).json()["id"]
+
+        # Before any crew is set: assumed=True.
+        before = (await client.get(f"/api/races/{race_id}/crew")).json()
+        assert before["crew_assumed"] is True
+        assert before["gear_preset"] is None
+
+        pos_ids = await _get_pos_ids(client)
+        mark_id = await _make_crew_user(client, "Mark")
+        resp = await client.post(
+            f"/api/races/{race_id}/crew",
+            params={"gear_preset": "wet"},
+            json=[
+                {
+                    "position_id": pos_ids["helm"],
+                    "user_id": mark_id,
+                    "body_weight": 180.0,
+                }
+            ],
+        )
+        assert resp.status_code == 204
+
+        after = (await client.get(f"/api/races/{race_id}/crew")).json()
+        assert after["crew_assumed"] is False
+        assert after["gear_preset"] == "wet"
+        # 180 lb body + 8 lb wet preset
+        assert after["total_body_weight_lb"] == 180.0
+        assert after["total_gear_weight_lb"] == 8.0
+        assert after["total_crew_weight_lb"] == 188.0
+
+
+@pytest.mark.asyncio
+async def test_post_crew_bad_gear_preset_422(storage: Storage) -> None:
+    """An unknown gear_preset value returns 422."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _set_event(client)
+        race_id = (await client.post("/api/races/start")).json()["id"]
+        pos_ids = await _get_pos_ids(client)
+        resp = await client.post(
+            f"/api/races/{race_id}/crew",
+            params={"gear_preset": "lederhosen"},
+            json=[{"position_id": pos_ids["helm"]}],
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_crew_backfill_emits_per_race_audit(storage: Storage) -> None:
+    """Bulk backfill applies updates and writes one audit row per race
+    (data-licensing §11 protest readiness)."""
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _set_event(client)
+        r1 = (await client.post("/api/races/start")).json()["id"]
+        await client.post(f"/api/races/{r1}/end")
+        r2 = (await client.post("/api/races/start")).json()["id"]
+        await client.post(f"/api/races/{r2}/end")
+        pos_ids = await _get_pos_ids(client)
+        alice_id = await _make_crew_user(client, "Alice")
+
+        # Audit baseline.
+        db = storage._conn()
+        cur = await db.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'crew.set'")
+        before_n = (await cur.fetchone())["n"]
+
+        resp = await client.post(
+            "/api/admin/crew-backfill",
+            json={
+                "updates": [
+                    {
+                        "race_id": r1,
+                        "crew": [{"position_id": pos_ids["helm"], "user_id": alice_id}],
+                        "gear_preset": "dry",
+                    },
+                    {
+                        "race_id": r2,
+                        "crew": [{"position_id": pos_ids["helm"], "user_id": alice_id}],
+                    },
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["applied"] == [r1, r2]
+
+        # Both races verified.
+        s1 = (await client.get(f"/api/races/{r1}/crew")).json()
+        s2 = (await client.get(f"/api/races/{r2}/crew")).json()
+        assert s1["crew_assumed"] is False
+        assert s1["gear_preset"] == "dry"
+        assert s2["crew_assumed"] is False
+
+        # One audit_events row per race, not a single batch row.
+        cur = await db.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'crew.set'")
+        after_n = (await cur.fetchone())["n"]
+        assert after_n - before_n == 2
+
+
+# ---------------------------------------------------------------------------
 # Issue #30: debrief auto-stop + crew carry-forward
 # ---------------------------------------------------------------------------
 

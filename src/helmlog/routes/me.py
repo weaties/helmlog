@@ -59,7 +59,15 @@ async def api_update_my_weight(
                 status_code=403,
                 detail="Biometric consent required before storing weight data",
             )
-    await storage.update_user_weight(_user["id"], weight)
+    # Only touch fields the caller explicitly sent — avoids clearing one
+    # value when the other is being updated.
+    fields_set = body.model_fields_set
+    if "weight_lbs" in fields_set:
+        await storage.update_user_weight(_user["id"], weight)
+    # Gear weight is a clothing/equipment preference, not biometric — no
+    # consent gate.
+    if "gear_default_lbs" in fields_set:
+        await storage.update_user_gear_default(_user["id"], body.gear_default_lbs)
 
 
 @router.patch("/api/me/password", status_code=204)

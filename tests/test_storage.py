@@ -962,6 +962,197 @@ class TestCrewStorage:
         assert consents[0]["granted"] == 0
         assert consents[0]["revoked_at"] is not None
 
+    # ------------------------------------------------------------------
+    # #761 per-race crew confirmation
+    # ------------------------------------------------------------------
+
+    async def test_race_starts_with_crew_assumed(self, storage: Storage) -> None:
+        """New races start with crew_assumed=1 — the boat default is unverified."""
+        race_id = await self._make_race(storage)
+        summary = await storage.get_race_crew_summary(race_id)
+        assert summary["crew_assumed"] is True
+        assert summary["gear_preset"] is None
+
+    async def test_confirm_race_crew_flips_assumed(self, storage: Storage) -> None:
+        """Calling confirm_race_crew flips the flag to 0 and records the preset."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        alice_id = await storage.create_placeholder_user("Alice")
+        await storage.confirm_race_crew(
+            race_id,
+            [{"position_id": helm_id, "user_id": alice_id, "body_weight": 155.0}],
+            gear_preset="wet",
+        )
+        summary = await storage.get_race_crew_summary(race_id)
+        assert summary["crew_assumed"] is False
+        assert summary["gear_preset"] == "wet"
+
+    async def test_gear_preset_fills_missing_gear_weight(self, storage: Storage) -> None:
+        """Entries without explicit gear_weight inherit the preset's lb/person."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        main_id = await self._pos_id(storage, "main")
+        alice_id = await storage.create_placeholder_user("Alice")
+        bob_id = await storage.create_placeholder_user("Bob")
+        await storage.confirm_race_crew(
+            race_id,
+            [
+                # Alice has explicit gear — preset must NOT overwrite it.
+                {
+                    "position_id": helm_id,
+                    "user_id": alice_id,
+                    "body_weight": 155.0,
+                    "gear_weight": 5.0,
+                },
+                # Bob has no gear — preset fills "wet" = 8 lb.
+                {
+                    "position_id": main_id,
+                    "user_id": bob_id,
+                    "body_weight": 180.0,
+                },
+            ],
+            gear_preset="wet",
+        )
+        summary = await storage.get_race_crew_summary(race_id)
+        gear_by_pos = {entry["position"]: entry["gear_weight_lb"] for entry in summary["lineup"]}
+        assert gear_by_pos["helm"] == 5.0
+        assert gear_by_pos["main"] == 8.0
+
+    async def test_invalid_gear_preset_rejected(self, storage: Storage) -> None:
+        """Unknown gear_preset raises ValueError so the route can 422."""
+        race_id = await self._make_race(storage)
+        with pytest.raises(ValueError, match="gear_preset must be one of"):
+            await storage.confirm_race_crew(race_id, [], gear_preset="lederhosen")
+
+    async def test_summary_totals_use_user_fallbacks(self, storage: Storage) -> None:
+        """When a per-race row omits weights, fall through to users.weight_lbs
+        and users.gear_default_lbs (R8 — users.weight_lbs is source of truth)."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        alice_id = await storage.create_placeholder_user("Alice")
+        await storage.update_user_weight(alice_id, 145.0)
+        await storage.update_user_gear_default(alice_id, 12.0)
+        await storage.confirm_race_crew(
+            race_id,
+            [{"position_id": helm_id, "user_id": alice_id}],
+        )
+        summary = await storage.get_race_crew_summary(race_id)
+        assert summary["total_body_weight_lb"] == 145.0
+        assert summary["total_gear_weight_lb"] == 12.0
+        assert summary["total_crew_weight_lb"] == 157.0
+
+    async def test_summary_totals_prefer_explicit_over_user(self, storage: Storage) -> None:
+        """Per-race weight wins over users.weight_lbs."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        alice_id = await storage.create_placeholder_user("Alice")
+        await storage.update_user_weight(alice_id, 145.0)  # User default
+        await storage.confirm_race_crew(
+            race_id,
+            [
+                # Different weight this race (Alice borrowed weights from a friend?
+                # The point is the per-race row overrides the user default.)
+                {"position_id": helm_id, "user_id": alice_id, "body_weight": 160.0},
+            ],
+        )
+        summary = await storage.get_race_crew_summary(race_id)
+        assert summary["total_body_weight_lb"] == 160.0
+
+    async def test_bulk_confirm_race_crew(self, storage: Storage) -> None:
+        """bulk_confirm_race_crew applies updates to multiple races (PR-C)."""
+        race1 = await self._make_race(storage)
+        # Need a second race — start_race uses UNIQUE on (name, date, race_num)
+        # so bump race_num.
+        from datetime import datetime as _dt
+
+        race2_obj = await storage.start_race(
+            "Regatta",
+            _dt(2025, 9, 1, 15, 0, 0, tzinfo=UTC),
+            _CREW_DATE,
+            2,
+            "20250901-Regatta-2",
+        )
+        race2 = race2_obj.id
+        helm_id = await self._pos_id(storage, "helm")
+        alice_id = await storage.create_placeholder_user("Alice")
+
+        applied = await storage.bulk_confirm_race_crew(
+            [
+                {
+                    "race_id": race1,
+                    "crew": [{"position_id": helm_id, "user_id": alice_id}],
+                    "gear_preset": "dry",
+                },
+                {
+                    "race_id": race2,
+                    "crew": [{"position_id": helm_id, "user_id": alice_id}],
+                },
+            ]
+        )
+        assert applied == [race1, race2]
+        s1 = await storage.get_race_crew_summary(race1)
+        s2 = await storage.get_race_crew_summary(race2)
+        assert s1["crew_assumed"] is False
+        assert s1["gear_preset"] == "dry"
+        assert s2["crew_assumed"] is False
+        assert s2["gear_preset"] is None
+
+    async def test_anonymize_sailor_clears_weights(self, storage: Storage) -> None:
+        """anonymize_sailor wipes weight_lbs, gear_default_lbs, and per-race
+        weight overrides (data-licensing §1)."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        alice_id = await storage.create_placeholder_user("Alice")
+        await storage.update_user_weight(alice_id, 175.0)
+        await storage.update_user_gear_default(alice_id, 18.0)
+        await storage.confirm_race_crew(
+            race_id,
+            [
+                {
+                    "position_id": helm_id,
+                    "user_id": alice_id,
+                    "body_weight": 160.0,
+                    "gear_weight": 12.0,
+                }
+            ],
+        )
+        await storage.anonymize_sailor(alice_id)
+        user = await storage.get_user_by_id(alice_id)
+        assert user is not None
+        assert user["weight_lbs"] is None
+        assert user["gear_default_lbs"] is None
+        entries = await storage.get_crew_defaults(race_id)
+        assert entries[0]["body_weight"] is None
+        assert entries[0]["gear_weight"] is None
+
+    async def test_delete_user_clears_weights(self, storage: Storage) -> None:
+        """delete_user (soft-delete) wipes weight columns and per-race overrides
+        (data-licensing §1)."""
+        race_id = await self._make_race(storage)
+        helm_id = await self._pos_id(storage, "helm")
+        alice_id = await storage.create_placeholder_user("Alice")
+        await storage.update_user_weight(alice_id, 175.0)
+        await storage.update_user_gear_default(alice_id, 18.0)
+        await storage.confirm_race_crew(
+            race_id,
+            [
+                {
+                    "position_id": helm_id,
+                    "user_id": alice_id,
+                    "body_weight": 160.0,
+                    "gear_weight": 12.0,
+                }
+            ],
+        )
+        await storage.delete_user(alice_id)
+        user = await storage.get_user_by_id(alice_id)
+        assert user is not None
+        assert user["weight_lbs"] is None
+        assert user["gear_default_lbs"] is None
+        entries = await storage.get_crew_defaults(race_id)
+        assert entries[0]["body_weight"] is None
+        assert entries[0]["gear_weight"] is None
+
 
 # ---------------------------------------------------------------------------
 # Boat registry tests

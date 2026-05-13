@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -608,11 +609,26 @@ async def _compute_session_summary(storage: Storage, session_id: int) -> dict[st
     if own_result and not any(str(row.get("sail_number") or "") == str(own_sail) for row in top3):
         results.append(own_result)
 
+    # Crew + gear summary (#761) — let analysis consumers and the session
+    # detail badge distinguish 'verified' from 'assumed default' lineups.
+    crew_summary: dict[str, Any] = {
+        "crew_assumed": True,
+        "gear_preset": None,
+        "lineup": [],
+        "total_body_weight_lb": None,
+        "total_gear_weight_lb": None,
+        "total_crew_weight_lb": None,
+    }
+    # Race row may not be present for non-race session types (debriefs).
+    with contextlib.suppress(ValueError):
+        crew_summary = await storage.get_race_crew_summary(session_id)
+
     return {
         "track": track,
         "events": events,
         "wind": wind,
         "results": results,
+        "crew": crew_summary,
     }
 
 

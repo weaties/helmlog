@@ -1,5 +1,44 @@
 # Release Notes
 
+## Per-Race Crew, Body Weight, and Gear Weight (2026-05-13)
+
+Crew weight is now a first-class part of every race rather than a
+boat-wide default that never moves. Setting the crew for a race flips
+the lineup from "assumed default" to "verified", a new gear preset
+(dry/wet/foulies) fills in clothing weight for the session, and the
+analysis API now reports verified-vs-assumed and total crew weight so
+debrief findings can finally tell apart "we sailed underweight" from
+"we sailed badly."
+
+- **Verified-vs-assumed flag on every race** — new `races.crew_assumed`
+  column defaults to 1 (the boat default is unverified for this race)
+  and flips to 0 the moment a crew or admin saves a per-race crew via
+  `POST /api/races/{race_id}/crew`. Existing historical races stay
+  flagged as `assumed` until a backfill confirms them.
+- **Gear preset per race** — `races.gear_preset` records one of
+  `dry`/`wet`/`foulies` (free-form NULL allowed). Confirming a crew
+  with a preset fills in any per-entry `gear_weight` that wasn't set
+  explicitly, so totals stay consistent without the user having to
+  re-enter clothing weight for every position.
+- **Per-user gear default** — new `users.gear_default_lbs` so a sailor
+  who always shows up in heavy foulies (or never does) doesn't get
+  surprised by the preset on every race. The analysis API falls
+  through to this when a per-race row omits gear weight.
+- **Admin backfill endpoint** —
+  `POST /api/admin/crew-backfill` accepts a list of
+  `{race_id, crew, gear_preset}` and applies them in one batch, with
+  one audit-trail row per race for protest readiness (data-licensing
+  §11).
+- **Anonymisation now clears weight data** —
+  `anonymize_sailor` and the user soft-delete path both NULL out
+  `users.weight_lbs`, `users.gear_default_lbs`, and any per-race body
+  and gear weights referencing the user (data-licensing §1).
+- **Analysis API surfaces it all** —
+  `/api/sessions/{id}/summary` now includes a `crew` block with the
+  resolved lineup, the assumed flag, the gear preset, and totals for
+  body, gear, and crew weight. `/api/races/{id}/crew` returns the
+  same fields alongside the existing crew list. Closes #761.
+
 ## Moments Unified, Sharper Debriefs, Safer Backups (2026-04-24)
 
 Bookmarks, comment threads, and notes are now one thing — "Moments" —

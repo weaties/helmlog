@@ -252,6 +252,11 @@ async def admin_update_user(
         w = body["weight_lbs"]
         weight_val = float(w) if w is not None and w != "" else None
         await storage.update_user_weight(user_id, weight_val)
+    # Per-user gear default (#761).
+    if "gear_default_lbs" in body:
+        g = body["gear_default_lbs"]
+        gear_val = float(g) if g is not None and g != "" else None
+        await storage.update_user_gear_default(user_id, gear_val)
     changes = []
     if name is not None:
         changes.append(f"name={name!r}")
@@ -263,6 +268,8 @@ async def admin_update_user(
         changes.append(f"is_developer={body['is_developer']!r}")
     if "weight_lbs" in body:
         changes.append(f"weight_lbs={body['weight_lbs']!r}")
+    if "gear_default_lbs" in body:
+        changes.append(f"gear_default_lbs={body['gear_default_lbs']!r}")
     await audit(request, "user.update", detail=f"user={user_id} {' '.join(changes)}", user=_user)
 
 
