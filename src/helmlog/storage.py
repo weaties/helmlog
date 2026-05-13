@@ -9114,6 +9114,41 @@ class Storage:
         return t
 
     # ------------------------------------------------------------------
+    # Speaker LLM artefact purge (#697 follow-up from #699)
+    # ------------------------------------------------------------------
+
+    async def purge_speaker_llm_artefacts(self, speaker_label: str) -> dict[str, int]:
+        """Delete all LLM artefacts attributed to a speaker across all races.
+
+        Called as part of a voice-data deletion request. Operates in a single
+        transaction to avoid partial purge on crash.
+
+        Returns {"callbacks_deleted": N, "qa_scrubbed": M}.
+
+        NOTE — qa_scrubbed is always 0: citations in llm_qa.citations_json carry
+        only {"ts": "HH:MM:SS"} and do not record which speaker was cited.
+        Scrubbing by speaker requires a schema extension to add a `speaker` field
+        to each citation entry. Until that follow-up lands, qa rows cannot be
+        attributed to a specific speaker and are left untouched. See #697.
+        """
+        db = self._conn()
+        cur = await db.execute(
+            "DELETE FROM llm_callbacks WHERE speaker_label = ?",
+            (speaker_label,),
+        )
+        callbacks_deleted = cur.rowcount
+        # TODO(#697): once llm_qa.citations_json carries a `speaker` field,
+        # parse each row here and rewrite citations that match speaker_label.
+        await db.commit()
+        logger.info(
+            "purge_speaker_llm_artefacts: speaker={} callbacks_deleted={} qa_scrubbed=0"
+            " (citations lack speaker field — schema follow-up required)",
+            speaker_label,
+            callbacks_deleted,
+        )
+        return {"callbacks_deleted": callbacks_deleted, "qa_scrubbed": 0}
+
+    # ------------------------------------------------------------------
     # Crew consent (#202)
     # ------------------------------------------------------------------
 
