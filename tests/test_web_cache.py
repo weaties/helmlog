@@ -62,6 +62,20 @@ def test_compute_race_data_hash_accepts_null_end_utc() -> None:
     assert compute_race_data_hash(race_id=42, start_utc=start, end_utc=None, row_count=0)
 
 
+def test_compute_race_data_hash_flips_on_calibration_change() -> None:
+    """#711: a change to the calibration hash must produce a fresh data
+    hash so per-race caches miss and recompute with the new offsets."""
+    start = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+    end = datetime(2026, 4, 1, 13, 30, tzinfo=UTC)
+    base = compute_race_data_hash(
+        race_id=42, start_utc=start, end_utc=end, row_count=100, calibration_hash="cal-v1"
+    )
+    changed = compute_race_data_hash(
+        race_id=42, start_utc=start, end_utc=end, row_count=100, calibration_hash="cal-v2"
+    )
+    assert base != changed
+
+
 # ---------------------------------------------------------------------------
 # T1 process LRU with TTL
 # ---------------------------------------------------------------------------

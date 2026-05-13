@@ -49,6 +49,7 @@ def compute_race_data_hash(
     row_count: int,
     linked_imported_id: int | None = None,
     linked_imported_results: int = 0,
+    calibration_hash: str = "",
 ) -> str:
     """Stable 16-char hex digest of the race's cache-relevant inputs.
 
@@ -61,6 +62,12 @@ def compute_race_data_hash(
     imported-results link into the hash so ETag revalidation flips when
     a session's results are linked, unlinked, or rewritten — otherwise
     browsers that cached an empty-results response keep getting 304s.
+
+    ``calibration_hash`` (#711) folds in the boat-wide calibration
+    values that affect computed outputs (leeway, per-tack compass
+    offsets). When an admin updates a calibration constant the hash
+    flips and downstream caches (session replay, summary, …) miss on
+    the next read and recompute with the new values.
     """
     payload = {
         "race_id": race_id,
@@ -69,6 +76,7 @@ def compute_race_data_hash(
         "row_count": row_count,
         "linked_imported_id": linked_imported_id,
         "linked_imported_results": linked_imported_results,
+        "calibration_hash": calibration_hash,
     }
     raw = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
@@ -134,6 +142,14 @@ async def resolve_race_data_hash(storage: Storage, race_id: int) -> str | None:
 
     start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
     end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00")) if end_iso else None
+    # Calibration inputs that flow through the compute path (#711). When an
+    # admin changes any of these, every per-race cache entry should miss on
+    # the next read and recompute with the new values.
+    calibration_hash = hashlib.sha256(
+        f"leeway={storage._leeway_k:.6f}|"
+        f"compass_port={storage._compass_offset_port:.6f}|"
+        f"compass_stbd={storage._compass_offset_stbd:.6f}".encode()
+    ).hexdigest()[:12]
     return compute_race_data_hash(
         race_id=race_id,
         start_utc=start_dt,
@@ -141,6 +157,7 @@ async def resolve_race_data_hash(storage: Storage, race_id: int) -> str | None:
         row_count=row_count,
         linked_imported_id=linked_imported_id,
         linked_imported_results=linked_imported_results,
+        calibration_hash=calibration_hash,
     )
 
 
