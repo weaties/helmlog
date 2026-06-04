@@ -75,6 +75,19 @@ These are the policies a general PII review will NOT catch:
 - [ ] Soft delete (suppression) supported during 30-day grace period.
 - [ ] Hard delete is irreversible after grace period.
 
+## Don't rationalize skipping the review
+
+These policies are invisible to a generalist PII pass — which is exactly
+why "it looked fine" is not a clearance. Common excuses and rebuttals:
+
+| Rationalization | Rebuttal |
+|---|---|
+| "General PII looks clean, so we're compliant." | The general pass cannot see embargoes, the protest firewall, the 4-boat benchmark floor, or biometric consent separation. Walk Section 2 explicitly. |
+| "There's already an embargo check, so it's covered." | Presence ≠ correctness. Verify the comparison operator matches `embargo_until`'s meaning — a flipped check leaks early. |
+| "Boat owner consented, so biometric data is fine." | Biometrics need per-person consent separate from instrument sharing. Owner consent is not sufficient. |
+| "Coach just needs access for the season." | No permanent or blanket grants — time-limited, per-session authorization only. |
+| "It's only an export format tweak." | Export is where the protest firewall and AIS-exclusion rules bite. Re-check both before clearing. |
+
 ## 3. Report findings
 
 For each issue: state the policy section, quote the relevant policy

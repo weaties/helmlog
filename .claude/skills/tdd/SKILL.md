@@ -48,6 +48,19 @@ with patch("helmlog.cameras.httpx.AsyncClient") as mock_client:
 Hardware modules to mock: `audio.py`, `can_reader.py`, `sk_reader.py`,
 `cameras.py`.
 
+## Don't rationalize skipping the cycle
+
+The cycle only helps if you don't talk yourself out of it. Common excuses
+and their rebuttals:
+
+| Rationalization | Rebuttal |
+|---|---|
+| "This change is too small to need a test." | Size predicts neither breakage nor regression. A failing test first is what proves the change does what you think — write it. |
+| "I'll write the test after I see it work." | Test-after rationalizes whatever the code already does, bugs included. Red-Green-Refactor is mandated in CLAUDE.md for a reason. |
+| "It's just a renderer/route tweak — I'll eyeball it." | Web routes are the easiest place to ship a silent 500. Use the `AsyncClient`/`ASGITransport` pattern above. |
+| "Tests pass, so it's correct." | Passing tests are evidence, not proof. Confirm the test exercises the new behavior and would actually fail without your change. |
+| "ruff/mypy is noisy here, I'll skip the lint gate." | Only the pre-existing-error allowlist below is exempt. Everything else is green-before-PR. |
+
 ## Pre-existing errors to ignore
 
 Do not fix these unless explicitly asked — they are tracked separately:

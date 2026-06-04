@@ -24,6 +24,20 @@ for race marking, history, debrief audio, and CSV/GPX/JSON export.
 - **Commit and push every change immediately.** Uncommitted Pi edits are
   lost on the next deploy.
 
+### Judgment rules (not just process)
+
+- **Surface assumptions before building.** If the task is underspecified,
+  state the assumption you're proceeding on rather than silently guessing.
+- **Stop and ask when requirements conflict** — with an issue, with
+  `docs/data-licensing.md`, or with existing behavior. Don't pick a side
+  unasked.
+- **Push back when warranted.** A worse plan you were handed is still worse;
+  say so before implementing it.
+- **Prefer boring, obvious solutions.** This is a Pi logger where a reboot
+  must lose at most one record — reliability beats cleverness.
+- **Touch only what you're asked to touch.** No drive-by refactors of
+  adjacent code or unrelated TODOs; they widen the blast radius and the diff.
+
 ## Stack & tooling
 
 | Concern | Tool |

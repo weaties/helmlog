@@ -82,6 +82,19 @@ tier — Critical/High hotspots are more urgent than Standard. Also flag
 files that grew by more than 50 lines in this PR even if they were
 already over 200.
 
+## Don't rationalize skipping a check
+
+The tier matrix is resolved by file, not by how the diff feels. Common
+excuses and their rebuttals:
+
+| Rationalization | Rebuttal |
+|---|---|
+| "The `storage.py` change is tiny, skip the spec." | Tier is set by file + migration content, not diff size. If migrations changed, it's Critical and needs an approved `/spec` before merge. |
+| "Unit tests pass — integration tests are overkill." | For federation/peer/auth/PII changes, integration tests are Required regardless of unit coverage. Run them. |
+| "This Pi hotfix is urgent, just commit to main." | Never. Branch + PR + merge — even for hotfixes (CLAUDE.md). Urgency is not an exception. |
+| "Module isn't in the tier table, so it's low-risk." | Unclassified `.py` defaults to **Standard**, not Low — and you must flag it for classification. |
+| "Docs are out of scope for this PR." | If you added a module / env var / CLI command / migration / dep, the documentation-update map below is part of the PR. |
+
 ## Final steps
 
 - PR body must include `Closes #N` (or `Fixes #N` for bugs).
