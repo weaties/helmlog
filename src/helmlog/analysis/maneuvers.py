@@ -961,6 +961,10 @@ async def enrich_session_maneuvers(
             maneuver_type=stored_type,
             twd=twd,
         )
+        # Capture the persisted head-to-wind before ``md`` overwrites it below,
+        # so the write-back can be skipped when it's already stored.
+        stored_htw = d.get("head_to_wind_ts")
+
         md = metrics.to_dict()
         # Don't let entry_ts/exit_ts clobber the stored ts/end_ts fields.
         md.pop("entry_ts", None)
@@ -972,11 +976,29 @@ async def enrich_session_maneuvers(
         # Persist head-to-wind onto the maneuvers row so downstream callers
         # (phase-split metrics #614, overlay chart #619) can query the
         # column directly without going through the enrichment cache.
-        if d.get("id") is not None:
-            await storage.set_maneuver_head_to_wind_ts(
-                int(d["id"]),
-                metrics.head_to_wind_ts.isoformat() if metrics.head_to_wind_ts else None,
-            )
+        #
+        # This is a GET path, so only write when the value isn't already
+        # persisted — a write on every page view contends with the live
+        # logger and, on a hot DB, fails with "database is locked" and 500s
+        # the maneuvers panel. ``write_maneuvers`` resets the column to NULL on
+        # every re-detect, so the first enrich after a detect still persists
+        # it; later views read the stored value and skip the write. A transient
+        # lock here is non-fatal: ``d`` already carries the computed value for
+        # this response, so we log and move on rather than fail the request.
+        computed_htw = metrics.head_to_wind_ts.isoformat() if metrics.head_to_wind_ts else None
+        if d.get("id") is not None and stored_htw is None and computed_htw is not None:
+            import sqlite3
+
+            from loguru import logger
+
+            try:
+                await storage.set_maneuver_head_to_wind_ts(int(d["id"]), computed_htw)
+            except sqlite3.OperationalError as exc:
+                logger.warning(
+                    "enrich: head_to_wind_ts persist skipped for maneuver {} (DB busy): {}",
+                    d["id"],
+                    exc,
+                )
 
         # Reclassify a wildly-large-turn gybe as a rounding. The detector
         # classifies by pre/post TWA mode, which misses "Mexican" roundings

@@ -1252,3 +1252,90 @@ class TestRankManeuvers:
         # so the spread-aware path should label everything 'consistent'.
         labels = {m["rank"] for m in items}
         assert labels == {"consistent"}
+
+
+class TestEnrichWriteBackGating:
+    """The maneuvers display path (a GET) must not write head_to_wind_ts back
+    to the DB when it is already persisted — that read-time write contends with
+    the live logger and 500s with 'database is locked' on hot sessions."""
+
+    async def _seed_tack_session(
+        self, storage: Storage, session_id: int, head_to_wind_ts: str | None
+    ) -> None:
+        db = storage._conn()
+        start = datetime(2024, 6, 15, 14, 0, 0, tzinfo=UTC)
+        end = start + timedelta(seconds=120)
+        await db.execute(
+            "INSERT INTO races"
+            " (id, name, event, race_num, date, session_type, start_utc, end_utc)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (session_id, "s", "e", 1, start.date().isoformat(), "race",
+             start.isoformat(), end.isoformat()),
+        )
+        for i in range(121):
+            ts = (start + timedelta(seconds=i)).isoformat()
+            hdg = 10.0 if i < 60 else 280.0
+            bsp = 6.0 if i < 55 or i > 70 else 3.0
+            await db.execute(
+                "INSERT INTO headings (ts, source_addr, heading_deg) VALUES (?, ?, ?)",
+                (ts, 0x05, hdg))
+            await db.execute(
+                "INSERT INTO speeds (ts, source_addr, speed_kts) VALUES (?, ?, ?)",
+                (ts, 0x05, bsp))
+            await db.execute(
+                "INSERT INTO winds (ts, source_addr, wind_speed_kts, wind_angle_deg, reference)"
+                " VALUES (?, ?, ?, ?, 0)", (ts, 0x05, 12.5, 40.0))
+            await db.execute(
+                "INSERT INTO positions (ts, source_addr, latitude_deg, longitude_deg)"
+                " VALUES (?, ?, ?, ?)", (ts, 0x05, 37.0 + i * 1e-5, -122.0))
+        await db.execute(
+            "INSERT INTO maneuvers"
+            " (session_id, type, ts, end_ts, duration_sec, loss_kts,"
+            "  vmg_loss_kts, tws_bin, twa_bin, head_to_wind_ts, details)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (session_id, "tack", (start + timedelta(seconds=60)).isoformat(),
+             (start + timedelta(seconds=70)).isoformat(), 10.0, 3.0, None, 12, 40,
+             head_to_wind_ts, None),
+        )
+        await db.commit()
+
+    @pytest.mark.asyncio
+    async def test_no_write_when_head_to_wind_already_set(
+        self, storage: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the stored row already has head_to_wind_ts, enrich must not
+        call the write-back."""
+        await self._seed_tack_session(
+            storage, 1, "2024-06-15T14:01:35+00:00"
+        )
+
+        calls: list[int] = []
+        orig = storage.set_maneuver_head_to_wind_ts
+
+        async def spy(mid: int, htw: str | None) -> None:
+            calls.append(mid)
+            await orig(mid, htw)
+
+        monkeypatch.setattr(storage, "set_maneuver_head_to_wind_ts", spy)
+        enriched, _ = await enrich_session_maneuvers(storage, 1)
+        assert len(enriched) == 1
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_writes_when_head_to_wind_is_null(
+        self, storage: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When head_to_wind_ts is NULL, enrich should still persist it once."""
+        await self._seed_tack_session(storage, 1, None)
+
+        calls: list[int] = []
+        orig = storage.set_maneuver_head_to_wind_ts
+
+        async def spy(mid: int, htw: str | None) -> None:
+            calls.append(mid)
+            await orig(mid, htw)
+
+        monkeypatch.setattr(storage, "set_maneuver_head_to_wind_ts", spy)
+        enriched, _ = await enrich_session_maneuvers(storage, 1)
+        assert len(enriched) == 1
+        assert len(calls) == 1

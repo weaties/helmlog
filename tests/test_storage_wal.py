@@ -38,6 +38,36 @@ async def test_wal_mode_enabled(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_busy_timeout_set_on_write_connection(tmp_path: Path) -> None:
+    """A non-zero busy_timeout must be set so contending writes wait instead
+    of erroring instantly with 'database is locked'."""
+    db_path = str(tmp_path / "busy.db")
+    s = Storage(StorageConfig(db_path=db_path))
+    await s.connect()
+    try:
+        cur = await s._conn().execute("PRAGMA busy_timeout")
+        row = await cur.fetchone()
+        assert row[0] >= 5000
+    finally:
+        await s.close()
+
+
+@pytest.mark.asyncio
+async def test_busy_timeout_set_on_read_connection(tmp_path: Path) -> None:
+    """The read connection should also carry a busy_timeout."""
+    db_path = str(tmp_path / "busy_ro.db")
+    s = Storage(StorageConfig(db_path=db_path))
+    await s.connect()
+    try:
+        assert s._read_db is not None
+        cur = await s._read_db.execute("PRAGMA busy_timeout")
+        row = await cur.fetchone()
+        assert row[0] >= 5000
+    finally:
+        await s.close()
+
+
+@pytest.mark.asyncio
 async def test_read_connection_exists_for_file_db(tmp_path: Path) -> None:
     """File-backed storage should have a separate read connection."""
     db_path = str(tmp_path / "read.db")

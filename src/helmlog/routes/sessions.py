@@ -2454,6 +2454,8 @@ async def api_detect_maneuvers(
 
     Returns immediately with the count of detected maneuvers.
     """
+    import sqlite3
+
     storage = get_storage(request)
     from helmlog.maneuver_detector import detect_maneuvers
 
@@ -2463,7 +2465,20 @@ async def api_detect_maneuvers(
     if await cur.fetchone() is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    maneuvers = await detect_maneuvers(storage, session_id)
+    try:
+        maneuvers = await detect_maneuvers(storage, session_id)
+    except sqlite3.OperationalError as exc:
+        # The detect write (write_maneuvers) can lose a race with the live
+        # logger or the startup maneuver-backfill task and fail with
+        # "database is locked". That's transient — surface a retryable 503
+        # instead of an opaque 500 so the UI can prompt the user to retry.
+        if "locked" not in str(exc).lower():
+            raise
+        return JSONResponse(
+            {"detail": "Database is busy; please retry maneuver detection.", "retryable": True},
+            status_code=503,
+            headers={"Retry-After": "3"},
+        )
     return JSONResponse(
         {
             "session_id": session_id,
