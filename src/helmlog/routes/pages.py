@@ -87,6 +87,37 @@ def _canonical_session_url(race_id: int, slug: str | None) -> str:
     return f"/session/{race_id}/{slug}" if slug else f"/session/{race_id}"
 
 
+async def _imported_session_redirect(request: Request, race: Any) -> RedirectResponse | None:  # noqa: ANN401
+    """Redirect an imported results row to its linked live recording, or None.
+
+    Imported races (Clubspot et al., ``source != 'live'``) are scoreboard rows
+    pinned to a date with a placeholder ``start_utc == end_utc`` window and no
+    instrument data of their own — so their track, overlays, and maneuvers
+    panel all come up empty. When the import is matched to a recording it
+    carries ``local_session_id``, and the live session page already folds the
+    imported results back in (reverse ``local_session_id`` lookup), making it
+    the complete view. Redirect there instead of rendering the data-less
+    window. Unmatched imports (``local_session_id IS NULL``) render as-is.
+    """
+    storage = get_storage(request)
+    db = storage._read_conn()  # noqa: SLF001
+    cur = await db.execute("SELECT source, local_session_id FROM races WHERE id = ?", (race.id,))
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    source = row["source"]
+    local_sid = row["local_session_id"]
+    if source in (None, "live") or local_sid is None or local_sid == race.id:
+        return None
+    live_race = await storage.get_race(local_sid)
+    if live_race is None:
+        return None
+    qs = f"?{request.url.query}" if request.url.query else ""
+    return RedirectResponse(
+        url=_canonical_session_url(live_race.id, live_race.slug) + qs, status_code=302
+    )
+
+
 async def _render_session_page(
     request: Request,
     race: Any,  # helmlog.races.Race  # noqa: ANN401
@@ -313,6 +344,9 @@ async def session_detail_page_canonical(request: Request, session_id: int, slug:
         return RedirectResponse(
             url=_canonical_session_url(race.id, race.slug) + qs, status_code=302
         )
+    imported_redirect = await _imported_session_redirect(request, race)
+    if imported_redirect is not None:
+        return imported_redirect
     return await _render_session_page(request, race)
 
 
@@ -379,6 +413,9 @@ async def session_detail_page(request: Request, session_ref: str) -> Response:
                     url=_canonical_session_url(race.id, slug) + qs, status_code=302
                 )
             # Last-resort fallback — render inline rather than redirect-loop.
+            imported_redirect = await _imported_session_redirect(request, race)
+            if imported_redirect is not None:
+                return imported_redirect
             return await _render_session_page(request, race)
         # Not a race — try the debrief (audio_sessions) id space so history
         # links to debrief sessions keep resolving.
