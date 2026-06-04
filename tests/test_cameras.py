@@ -174,6 +174,50 @@ async def test_stop_camera_success() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_camera_default_timeout_is_short(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop should fail fast — an offline camera must not wedge end-race (#773)."""
+    monkeypatch.delenv("CAMERA_STOP_TIMEOUT", raising=False)
+    cam = Camera(name="stern", ip="192.168.42.1")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.text = '{"state": "done"}'
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_resp
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        await stop_camera(cam)  # no explicit timeout — use default
+
+    assert mock_client.post.await_count >= 1
+    sent = mock_client.post.await_args.kwargs["timeout"]
+    assert sent <= 3.0, f"stop default {sent}s too long; must fail fast when offline"
+
+
+@pytest.mark.asyncio
+async def test_stop_camera_default_timeout_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CAMERA_STOP_TIMEOUT overrides the fail-fast default for ops who want longer."""
+    monkeypatch.setenv("CAMERA_STOP_TIMEOUT", "4.5")
+    cam = Camera(name="stern", ip="192.168.42.1")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.text = '{"state": "done"}'
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_resp
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        await stop_camera(cam)
+
+    assert mock_client.post.await_args.kwargs["timeout"] == 4.5
+
+
+@pytest.mark.asyncio
 async def test_get_status_recording() -> None:
     cam = Camera(name="test", ip="192.168.8.50")
     mock_resp = MagicMock()

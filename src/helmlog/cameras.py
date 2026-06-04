@@ -43,6 +43,13 @@ def _default_timeout() -> float:
     return float(os.environ.get("CAMERA_START_TIMEOUT", "10"))
 
 
+def _default_stop_timeout() -> float:
+    # Short by design: at end-race we expect the camera to be reachable. If it's
+    # not (Pi off the camera's hotspot, camera off, dead battery), waiting the
+    # full start timeout × multiple endpoints can wedge end-race for minutes (#773).
+    return float(os.environ.get("CAMERA_STOP_TIMEOUT", "2"))
+
+
 _OSC_PATH = "/osc/commands/execute"
 _OSC_HEADERS = {"X-XSRF-Protected": "1"}
 
@@ -161,7 +168,7 @@ async def stop_camera(camera: Camera, timeout: float | None = None) -> CameraSta
     ``startCapture`` first "claims" the session for OSC, after which
     ``stopCapture`` succeeds.
     """
-    timeout = timeout if timeout is not None else _default_timeout()
+    timeout = timeout if timeout is not None else _default_stop_timeout()
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
