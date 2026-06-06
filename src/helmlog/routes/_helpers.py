@@ -231,21 +231,13 @@ async def audit(
 
 
 async def load_cameras(request: Request) -> list[Any]:
-    """Load cameras from the database and return Camera objects."""
-    from helmlog.cameras import Camera
+    """Load configured cameras via the injected camera controller (#780).
 
-    storage = get_storage(request)
-    rows = await storage.list_cameras()
-    return [
-        Camera(
-            name=r["name"],
-            ip=r["ip"],
-            model=r["model"],
-            wifi_ssid=r.get("wifi_ssid"),
-            wifi_password=r.get("wifi_password"),
-        )
-        for r in rows
-    ]
+    Routes go through ``request.app.state.cameras`` rather than importing the
+    hardware module directly, preserving hardware isolation.
+    """
+    cams: list[Any] = await request.app.state.cameras.load(get_storage(request))
+    return cams
 
 
 # ---------------------------------------------------------------------------

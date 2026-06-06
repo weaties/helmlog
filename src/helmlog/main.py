@@ -134,6 +134,7 @@ async def _web_loop(
     import uvicorn
 
     from helmlog.audio import AudioConfig, AudioRecorder, AudioRecorderGroup
+    from helmlog.cameras import HardwareCameraController
     from helmlog.races import RaceConfig
     from helmlog.storage import Storage
     from helmlog.web import create_app
@@ -148,7 +149,12 @@ async def _web_loop(
         cfg = RaceConfig()
         server = uvicorn.Server(
             uvicorn.Config(
-                create_app(storage, _recorder, _audio_config),
+                create_app(
+                    storage,
+                    _recorder,
+                    _audio_config,
+                    camera_controller=HardwareCameraController(),
+                ),
                 host=cfg.web_host,
                 port=cfg.web_port,
                 log_level="warning",
