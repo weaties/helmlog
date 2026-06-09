@@ -116,6 +116,23 @@ def _parse_utc(s: str | None) -> datetime | None:
     return dt.astimezone(UTC)
 
 
+def _reconcile_end_utc(proposed: datetime, last_data: datetime | None, grace_s: float) -> datetime:
+    """Resolve a race's end time, anchoring to the last real data point when a
+    data gap precedes the requested end — power/instrument loss before the race
+    was stopped (#785).
+
+    - No telemetry at all → keep ``proposed`` (nothing to anchor to).
+    - ``proposed`` more than ``grace_s`` after ``last_data`` → use ``last_data``
+      (the boat stopped reporting; everything after is empty wall-clock time).
+    - Otherwise (data still flowing within ``grace_s``) → keep ``proposed``.
+    """
+    if last_data is None:
+        return proposed
+    if (proposed - last_data).total_seconds() > grace_s:
+        return last_data
+    return proposed
+
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -128,6 +145,18 @@ class StorageConfig:
     db_path: str = field(default_factory=lambda: os.environ.get("DB_PATH", "data/logger.db"))
     rudder_storage_hz: float = field(
         default_factory=lambda: float(os.environ.get("RUDDER_STORAGE_HZ", "2"))
+    )
+    # Race-close reconciliation (#785). When the wall-clock end is more than
+    # ``close_grace_s`` after the last recorded data point, the race is closed
+    # at the last data point instead (power/instrument loss before stop).
+    close_grace_s: float = field(
+        default_factory=lambda: float(os.environ.get("RACE_CLOSE_GRACE_S", "120"))
+    )
+    # On boot, an open race whose last data is older than this is treated as
+    # stale (overnight power loss) and closed; a smaller gap is a quick reboot
+    # mid-race and recording resumes into the same race.
+    boot_resume_window_s: float = field(
+        default_factory=lambda: float(os.environ.get("RACE_BOOT_RESUME_WINDOW_S", "600"))
     )
 
 
@@ -2521,9 +2550,7 @@ class Storage:
             except Exception:
                 logger.warning("Failed to open read connection; falling back to single connection")
                 self._read_db = None
-        current = await self.get_current_race()
-        self._session_active = current is not None
-        self._active_race_id = current.id if current is not None else None
+        await self._reconcile_open_race_on_boot()
         await self.refresh_smoothing()
         await self.refresh_leeway_k()
         await self.refresh_compass_offsets()
@@ -3961,17 +3988,28 @@ class Storage:
 
         db = self._conn()
 
-        # Close any open race for this UTC date
+        # Close any open race for this UTC date. If its data stopped well before
+        # this new start (power loss before the prior race was ended), anchor its
+        # end to its last data point rather than spanning to the new gun (#785).
         open_cur = await db.execute(
             "SELECT id FROM races WHERE date = ? AND end_utc IS NULL",
             (date_str,),
         )
         open_row = await open_cur.fetchone()
+        auto_closed: tuple[int, datetime, float] | None = None
         if open_row is not None:
+            prior_last = await self.last_record_utc(open_row["id"])
+            prior_end = _reconcile_end_utc(start_utc, prior_last, self._config.close_grace_s)
             await db.execute(
                 "UPDATE races SET end_utc = ? WHERE id = ?",
-                (start_utc.isoformat(), open_row["id"]),
+                (prior_end.isoformat(), open_row["id"]),
             )
+            if prior_end != start_utc and prior_last is not None:
+                auto_closed = (
+                    open_row["id"],
+                    prior_end,
+                    (start_utc - prior_last).total_seconds() / 60,
+                )
 
         # Insert with NULL slug first; we compute and assign the final slug
         # after the insert so the empty-name fallback can use the row id.
@@ -3987,6 +4025,22 @@ class Storage:
         await db.execute("UPDATE races SET slug = ? WHERE id = ?", (slug, cur.lastrowid))
         await db.commit()
         await self._invalidate_race_cache(cur.lastrowid)
+        if auto_closed is not None:
+            prior_id, prior_end, gap_min = auto_closed
+            await self._invalidate_race_cache(prior_id)
+            logger.warning(
+                "Race {} auto-closed at last data {} on new race start ({:.0f} min gap)",
+                prior_id,
+                prior_end.isoformat(),
+                gap_min,
+            )
+            await self.log_action(
+                "race_auto_close",
+                detail=(
+                    f"Race {prior_id} closed at {prior_end.isoformat()} "
+                    f"(power loss suspected, {gap_min:.0f} min gap) on new race start"
+                ),
+            )
         logger.info("Race started: {} (id={}) type={}", name, cur.lastrowid, session_type)
         self._session_active = True
         self._active_race_id = cur.lastrowid
@@ -4002,8 +4056,28 @@ class Storage:
             slug=slug,
         )
 
-    async def end_race(self, race_id: int, end_utc: datetime) -> None:
-        """Set end_utc on the given race row."""
+    # Telemetry tables carrying a race_id; each is indexed by race_id so the
+    # per-race MAX(ts) below is an indexed lookup, not a scan (#785).
+    _TELEMETRY_TABLES = ("positions", "cogsog", "winds", "speeds", "headings", "depths")
+
+    async def last_record_utc(self, race_id: int) -> datetime | None:
+        """Latest telemetry timestamp recorded for a race, or None if it has no
+        data (#785). Used to anchor a race's end to when data actually stopped."""
+        union = " UNION ALL ".join(
+            f"SELECT MAX(ts) AS m FROM {t} WHERE race_id = ?" for t in self._TELEMETRY_TABLES
+        )
+        cur = await self._read_conn().execute(
+            f"SELECT MAX(m) FROM ({union})",  # noqa: S608 — table names from a fixed tuple
+            tuple([race_id] * len(self._TELEMETRY_TABLES)),
+        )
+        row = await cur.fetchone()
+        return _parse_utc(row[0]) if row and row[0] else None
+
+    async def _close_race(
+        self, race_id: int, end_utc: datetime, *, auto_close_reason: str | None
+    ) -> None:
+        """Write end_utc, invalidate cache, clear active state. When
+        ``auto_close_reason`` is set, also log + audit it for admin review (#785)."""
         db = self._conn()
         await db.execute(
             "UPDATE races SET end_utc = ? WHERE id = ?",
@@ -4014,7 +4088,67 @@ class Storage:
         self._session_active = False
         if self._active_race_id == race_id:
             self._active_race_id = None
-        logger.info("Race {} ended at {}", race_id, end_utc.isoformat())
+        if auto_close_reason is not None:
+            logger.warning(
+                "Race {} auto-closed at {} ({})", race_id, end_utc.isoformat(), auto_close_reason
+            )
+            await self.log_action(
+                "race_auto_close",
+                detail=f"Race {race_id} closed at {end_utc.isoformat()} ({auto_close_reason})",
+            )
+        else:
+            logger.info("Race {} ended at {}", race_id, end_utc.isoformat())
+
+    async def end_race(self, race_id: int, end_utc: datetime) -> None:
+        """Close a race. When a data gap precedes ``end_utc`` (power/instrument
+        loss before the race was stopped), anchor the end to the last real data
+        point instead of the requested time — #785."""
+        last = await self.last_record_utc(race_id)
+        resolved = _reconcile_end_utc(end_utc, last, self._config.close_grace_s)
+        reason: str | None = None
+        if resolved != end_utc and last is not None:
+            gap_min = (end_utc - last).total_seconds() / 60
+            reason = f"power loss suspected, {gap_min:.0f} min data gap"
+        await self._close_race(race_id, resolved, auto_close_reason=reason)
+
+    async def _reconcile_open_race_on_boot(self) -> None:
+        """Resolve an open race found at startup (#785, decision table B):
+
+        - no open race → idle.
+        - open, no data at all → delete it (started, power died before any record).
+        - open, last data older than ``boot_resume_window_s`` → stale (e.g.
+          overnight power loss): close at last data, do not resume into it.
+        - open, recent data → quick reboot mid-race: keep active, resume recording.
+        """
+        current = await self.get_current_race()
+        if current is None:
+            self._session_active = False
+            self._active_race_id = None
+            return
+        last = await self.last_record_utc(current.id)
+        if last is None:
+            await self.delete_race_session(current.id)
+            logger.warning("Boot: deleted open race {} with no recorded data", current.id)
+            await self.log_action(
+                "race_auto_close",
+                detail=f"Race {current.id} deleted on boot (open, no data recorded)",
+            )
+            self._session_active = False
+            self._active_race_id = None
+            return
+        gap_s = (datetime.now(UTC) - last).total_seconds()
+        if gap_s >= self._config.boot_resume_window_s:
+            await self._close_race(
+                current.id,
+                last,
+                auto_close_reason=f"stale open race on boot, {gap_s / 60:.0f} min since last data",
+            )
+        else:
+            self._session_active = True
+            self._active_race_id = current.id
+            logger.info(
+                "Boot: resuming active race {} ({:.0f}s since last data)", current.id, gap_s
+            )
 
     async def set_race_start_utc(self, race_id: int, start_utc: datetime) -> None:
         """Update the start_utc of a race (#644 — gun anchors session start).
