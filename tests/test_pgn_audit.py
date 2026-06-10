@@ -52,12 +52,19 @@ def _frames(payload: bytes) -> list[bytes]:
 @pytest.mark.asyncio
 async def test_record_and_summary_decoded(storage: Storage) -> None:
     await storage.record_pgn_observation(
-        observed_at=_TS, pgn=PGN_SIMRAD_SET_TIMER, source_addr=9,
-        raw_hex="41 9f", action="set", minutes=5,
+        observed_at=_TS,
+        pgn=PGN_SIMRAD_SET_TIMER,
+        source_addr=9,
+        raw_hex="41 9f",
+        action="set",
+        minutes=5,
     )
     await storage.record_pgn_observation(
-        observed_at=_TS, pgn=PGN_SIMRAD_START_STOP, source_addr=9,
-        raw_hex="41 9f", action="start",
+        observed_at=_TS,
+        pgn=PGN_SIMRAD_START_STOP,
+        source_addr=9,
+        raw_hex="41 9f",
+        action="start",
     )
     summary = await storage.get_pgn_audit_summary()
     assert summary["total"] == 2
@@ -72,8 +79,11 @@ async def test_record_and_summary_decoded(storage: Storage) -> None:
 @pytest.mark.asyncio
 async def test_undecoded_observation_recorded_raw(storage: Storage) -> None:
     await storage.record_pgn_observation(
-        observed_at=_TS, pgn=PGN_SIMRAD_SET_TIMER, source_addr=12,
-        raw_hex="de ad be ef", action=None,
+        observed_at=_TS,
+        pgn=PGN_SIMRAD_SET_TIMER,
+        source_addr=12,
+        raw_hex="de ad be ef",
+        action=None,
     )
     summary = await storage.get_pgn_audit_summary()
     assert summary["pgns"][PGN_SIMRAD_SET_TIMER]["frames"] == 1
@@ -87,8 +97,11 @@ async def test_log_is_pruned_to_cap(storage: Storage, monkeypatch: pytest.Monkey
     monkeypatch.setattr(storage_mod, "_PGN_AUDIT_MAX_ROWS", 3)
     for i in range(10):
         await storage.record_pgn_observation(
-            observed_at=_TS, pgn=PGN_SIMRAD_START_STOP, source_addr=i,
-            raw_hex=f"{i:02x}", action="start",
+            observed_at=_TS,
+            pgn=PGN_SIMRAD_START_STOP,
+            source_addr=i,
+            raw_hex=f"{i:02x}",
+            action="start",
         )
     summary = await storage.get_pgn_audit_summary()
     # Keeps newest 3 (id range pruned each insert): cap + the just-inserted row.
@@ -132,8 +145,12 @@ def test_verdict_fail_no_frames() -> None:
 
 def test_verdict_tolerates_string_keys() -> None:
     # get_pgn_audit_summary uses int keys, but be robust to JSON-roundtripped str keys.
-    summary = {"pgns": {str(PGN_SIMRAD_SET_TIMER): {"decoded": 1, "frames": 1},
-                        str(PGN_SIMRAD_START_STOP): {"decoded": 1, "frames": 1}}}
+    summary = {
+        "pgns": {
+            str(PGN_SIMRAD_SET_TIMER): {"decoded": 1, "frames": 1},
+            str(PGN_SIMRAD_START_STOP): {"decoded": 1, "frames": 1},
+        }
+    }
     assert verdict_from_summary(summary)["level"] == "PASS"
 
 
@@ -211,12 +228,19 @@ async def test_state_empty_is_fail(storage: Storage) -> None:
 @pytest.mark.asyncio
 async def test_state_reflects_observations(storage: Storage) -> None:
     await storage.record_pgn_observation(
-        observed_at=_TS, pgn=PGN_SIMRAD_SET_TIMER, source_addr=9,
-        raw_hex="41 9f", action="set", minutes=5,
+        observed_at=_TS,
+        pgn=PGN_SIMRAD_SET_TIMER,
+        source_addr=9,
+        raw_hex="41 9f",
+        action="set",
+        minutes=5,
     )
     await storage.record_pgn_observation(
-        observed_at=_TS, pgn=PGN_SIMRAD_START_STOP, source_addr=9,
-        raw_hex="41 9f", action="start",
+        observed_at=_TS,
+        pgn=PGN_SIMRAD_START_STOP,
+        source_addr=9,
+        raw_hex="41 9f",
+        action="start",
     )
     app = create_app(storage)
     async with httpx.AsyncClient(

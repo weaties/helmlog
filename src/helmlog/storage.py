@@ -4922,9 +4922,7 @@ class Storage:
         )
         # Bounded log: drop everything older than the newest _PGN_AUDIT_MAX_ROWS.
         await db.execute(
-            "DELETE FROM pgn_audit WHERE id <= ("
-            "  SELECT MAX(id) - ? FROM pgn_audit"
-            ")",
+            "DELETE FROM pgn_audit WHERE id <= (  SELECT MAX(id) - ? FROM pgn_audit)",
             (_PGN_AUDIT_MAX_ROWS,),
         )
         await db.commit()
@@ -4946,8 +4944,7 @@ class Storage:
         db = self._read_conn()
         pgns: dict[int, dict[str, Any]] = {}
         cur = await db.execute(
-            "SELECT pgn, COUNT(*), SUM(decoded), MAX(observed_at)"
-            "  FROM pgn_audit GROUP BY pgn"
+            "SELECT pgn, COUNT(*), SUM(decoded), MAX(observed_at)  FROM pgn_audit GROUP BY pgn"
         )
         for pgn, frames, decoded, last in await cur.fetchall():
             cur2 = await db.execute(

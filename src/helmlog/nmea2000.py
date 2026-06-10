@@ -69,9 +69,7 @@ SUPPORTED_PGNS: Final[frozenset[int]] = frozenset(
 
 # PGNs that use Fast Packet multi-frame encoding — callers must reassemble
 # frames via FastPacketBuffer before passing the payload to decode().
-FAST_PACKET_PGNS: Final[frozenset[int]] = frozenset(
-    {PGN_SIMRAD_SET_TIMER, PGN_SIMRAD_START_STOP}
-)
+FAST_PACKET_PGNS: Final[frozenset[int]] = frozenset({PGN_SIMRAD_SET_TIMER, PGN_SIMRAD_START_STOP})
 
 # AIS and other-vessel PGN blocklist (#208) — must never be ingested or stored
 AIS_BLOCKED_PGNS: Final[frozenset[int]] = frozenset(
