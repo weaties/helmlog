@@ -470,6 +470,17 @@ async def _run() -> None:
             deploy_task = asyncio.create_task(_deploy_loop(storage, deploy_config))
         else:
             deploy_task = asyncio.create_task(asyncio.sleep(1e9))
+        # Instrument timer-PGN audit (#789). Opt-in, read-only sniffer that
+        # co-reads can0 to confirm B&G/Simrad timer-PGN support from the web
+        # UI. Off unless PGN_AUDIT_ENABLED=true; never transmits.
+        from helmlog.pgn_audit import PgnAuditConfig, run_pgn_audit
+
+        pgn_audit_config = PgnAuditConfig.from_env()
+        if pgn_audit_config.enabled:
+            logger.info("PGN audit enabled — read-only sniffer on {}", pgn_audit_config.channel)
+            pgn_audit_task = asyncio.create_task(run_pgn_audit(storage, pgn_audit_config))
+        else:
+            pgn_audit_task = asyncio.create_task(asyncio.sleep(1e9))
         try:
             if data_source == "signalk":
                 from helmlog.sk_reader import SKReader, SKReaderConfig
@@ -513,6 +524,7 @@ async def _run() -> None:
             monitor_task.cancel()
             deploy_task.cancel()
             maneuver_backfill_task.cancel()
+            pgn_audit_task.cancel()
             await asyncio.gather(
                 aruco_task,
                 weather_task,
@@ -521,6 +533,7 @@ async def _run() -> None:
                 monitor_task,
                 deploy_task,
                 maneuver_backfill_task,
+                pgn_audit_task,
                 return_exceptions=True,
             )
             await storage.close()

@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Timer PGN Audit — HelmLog{% endblock %}
+{% block extra_css %}
+<style>
+.verdict{padding:14px 18px;border-radius:10px;margin:14px 0;font-size:1rem;font-weight:600}
+.verdict-PASS{background:color-mix(in srgb,var(--success) 15%,transparent);color:var(--success)}
+.verdict-PARTIAL{background:color-mix(in srgb,var(--warning) 15%,transparent);color:var(--warning)}
+.verdict-FAIL{background:color-mix(in srgb,var(--danger) 13%,transparent);color:var(--danger)}
+.verdict .msg{display:block;font-weight:400;font-size:.85rem;margin-top:4px;color:var(--text-secondary)}
+.pgn-cards{display:flex;gap:14px;flex-wrap:wrap;margin:12px 0}
+.pgn-card{flex:1 1 240px;border:1px solid var(--border);border-radius:10px;padding:14px;background:var(--bg-secondary)}
+.pgn-card h3{margin:0 0 6px;font-size:.95rem}
+.pgn-card .big{font-size:1.6rem;font-weight:700;color:var(--text-primary)}
+.pgn-card .sub{font-size:.78rem;color:var(--text-secondary)}
+.seen{color:var(--success)}.unseen{color:var(--text-muted)}
+table.obs{width:100%;border-collapse:collapse;font-size:.82rem;margin-top:10px}
+table.obs th,table.obs td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--border)}
+table.obs td.raw{font-family:ui-monospace,monospace;color:var(--text-secondary);font-size:.76rem}
+.pill{padding:1px 7px;border-radius:6px;font-size:.72rem;font-weight:600}
+.pill-dec{background:color-mix(in srgb,var(--success) 14%,transparent);color:var(--success)}
+.pill-raw{background:var(--border);color:var(--text-secondary)}
+.off-banner{background:color-mix(in srgb,var(--warning) 12%,transparent);color:var(--warning);padding:10px 14px;border-radius:8px;font-size:.85rem;margin:10px 0}
+.muted{color:var(--text-secondary);font-size:.85rem}
+</style>
+{% endblock %}
+{% block content %}
+<h1>Instrument Timer PGN Audit</h1>
+<p class="muted">
+  Read-only check that the B&amp;G/Simrad instruments emit the race-timer PGNs
+  (130845 Set, 130850 Start/Stop) on the bus. Operate the start timer on the
+  display, then watch below. Nothing is transmitted. (<a href="/admin/pgn-audit">refresh</a>)
+</p>
+
+<div id="off-banner" class="off-banner" style="display:none">
+  The audit sniffer is <strong>OFF</strong>. Set <code>PGN_AUDIT_ENABLED=true</code>
+  (and restart <code>helmlog</code>) to capture frames. Any rows below are from a
+  previous session.
+</div>
+
+<div id="verdict" class="verdict verdict-FAIL">…<span class="msg"></span></div>
+
+<div class="pgn-cards">
+  <div class="pgn-card" id="card-130845">
+    <h3>130845 — Set Timer</h3>
+    <div class="big"><span class="frames">0</span> <span class="sub">frames</span></div>
+    <div class="sub"><span class="decoded">0</span> decoded · <span class="status unseen">not seen</span></div>
+    <div class="sub">src: <span class="srcs">—</span> · last: <span class="last">—</span></div>
+  </div>
+  <div class="pgn-card" id="card-130850">
+    <h3>130850 — Start/Stop/Reset</h3>
+    <div class="big"><span class="frames">0</span> <span class="sub">frames</span></div>
+    <div class="sub"><span class="decoded">0</span> decoded · <span class="status unseen">not seen</span></div>
+    <div class="sub">src: <span class="srcs">—</span> · last: <span class="last">—</span></div>
+  </div>
+</div>
+
+<h2 style="font-size:1rem;margin-top:18px">Recent observations <span class="muted" id="total"></span></h2>
+<table class="obs">
+  <thead><tr><th>Time (UTC)</th><th>PGN</th><th>SA</th><th>Decoded</th><th>Raw bytes</th></tr></thead>
+  <tbody id="obs-body"><tr><td colspan="5" class="muted">No frames yet.</td></tr></tbody>
+</table>
+{% endblock %}
+{% block scripts %}
+<script>
+function fmtTime(iso){ if(!iso) return '—'; return iso.replace('T',' ').slice(11,19); }
+function card(pgn, st){
+  const el = document.getElementById('card-'+pgn);
+  st = st || {frames:0, decoded:0, source_addrs:[], last_observed_at:null};
+  el.querySelector('.frames').textContent = st.frames;
+  el.querySelector('.decoded').textContent = st.decoded;
+  el.querySelector('.srcs').textContent = (st.source_addrs||[]).map(a=>'0x'+a.toString(16).toUpperCase().padStart(2,'0')).join(', ') || '—';
+  el.querySelector('.last').textContent = fmtTime(st.last_observed_at);
+  const s = el.querySelector('.status');
+  const seen = st.frames > 0;
+  s.textContent = seen ? (st.decoded>0 ? 'decoding' : 'seen, not decoded') : 'not seen';
+  s.className = 'status ' + (seen ? 'seen' : 'unseen');
+}
+async function poll(){
+  let d;
+  try { const r = await fetch('/api/pgn-audit/state'); d = await r.json(); }
+  catch(e){ return; }
+  document.getElementById('off-banner').style.display = d.enabled ? 'none' : 'block';
+
+  const v = document.getElementById('verdict');
+  v.className = 'verdict verdict-' + d.verdict.level;
+  v.childNodes[0].nodeValue = d.verdict.level + ' ';
+  v.querySelector('.msg').textContent = d.verdict.message;
+
+  const pgns = d.summary.pgns || {};
+  card('130845', pgns['130845']);
+  card('130850', pgns['130850']);
+
+  document.getElementById('total').textContent = d.summary.total ? '(' + d.summary.total + ' total)' : '';
+  const body = document.getElementById('obs-body');
+  const rows = d.summary.recent || [];
+  if(!rows.length){ body.innerHTML = '<tr><td colspan="5" class="muted">No frames yet.</td></tr>'; return; }
+  body.innerHTML = rows.map(o => {
+    const dec = o.decoded
+      ? '<span class="pill pill-dec">'+o.action+(o.minutes!=null?(' '+o.minutes+'m'):'')+'</span>'
+      : '<span class="pill pill-raw">undecoded</span>';
+    const sa = '0x'+o.source_addr.toString(16).toUpperCase().padStart(2,'0');
+    return '<tr><td>'+fmtTime(o.observed_at)+'</td><td>'+o.pgn+'</td><td>'+sa+'</td><td>'+dec+'</td><td class="raw">'+o.raw_hex+'</td></tr>';
+  }).join('');
+}
+poll();
+setInterval(poll, 1500);
+</script>
+{% endblock %}

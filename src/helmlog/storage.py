@@ -232,7 +232,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 86
+_CURRENT_VERSION: int = 87
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -2162,12 +2162,33 @@ _MIGRATIONS: dict[int, str] = {
         ALTER TABLE races ADD COLUMN gear_preset TEXT;
         ALTER TABLE users ADD COLUMN gear_default_lbs REAL;
     """,
+    87: """
+        -- Instrument timer-PGN audit (docs/specs/pgn-audit.md, #789).
+        -- Append-only observation log of B&G/Simrad race-timer PGNs seen on
+        -- the bus, used to confirm Triton2 hardware support from the web UI.
+        -- Read-only and admin-only. Pruned to the newest rows on each insert.
+        CREATE TABLE IF NOT EXISTS pgn_audit (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            observed_at  TEXT NOT NULL,
+            pgn          INTEGER NOT NULL,
+            source_addr  INTEGER NOT NULL,
+            action       TEXT,
+            minutes      INTEGER,
+            decoded      INTEGER NOT NULL DEFAULT 0,
+            raw_hex      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_pgn_audit_observed_at ON pgn_audit (observed_at);
+    """,
 }
 
 # Retention window for retired slugs (#449). Requests for a retired slug 301
 # to the current slug while the retirement is within this window; beyond it
 # they 404.
 RACE_SLUG_RETENTION_DAYS: int = 30
+
+# Cap on the pgn_audit observation log (#789) so a long validation session on
+# the Pi can't grow the table without bound. Pruned to this many newest rows.
+_PGN_AUDIT_MAX_ROWS: int = 2000
 
 
 def _split_migration_sql(sql: str) -> list[str]:
@@ -4863,6 +4884,107 @@ class Storage:
             }
             for r in rows
         ]
+
+    # ------------------------------------------------------------------
+    # PGN audit (migration 87, #789) — instrument timer-PGN observations
+    # ------------------------------------------------------------------
+
+    async def record_pgn_observation(
+        self,
+        *,
+        observed_at: datetime,
+        pgn: int,
+        source_addr: int,
+        raw_hex: str,
+        action: str | None = None,
+        minutes: int | None = None,
+    ) -> None:
+        """Append one timer-PGN observation; prune to the newest rows.
+
+        ``action`` is the decoded command (set/start/stop/reset/nearest_minute)
+        or None when the frame reassembled but did not decode — ``raw_hex`` is
+        kept either way so a differing instrument layout can be adapted later.
+        """
+        db = self._conn()
+        await db.execute(
+            "INSERT INTO pgn_audit"
+            " (observed_at, pgn, source_addr, action, minutes, decoded, raw_hex)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                observed_at.isoformat(),
+                pgn,
+                source_addr,
+                action,
+                minutes,
+                1 if action is not None else 0,
+                raw_hex,
+            ),
+        )
+        # Bounded log: drop everything older than the newest _PGN_AUDIT_MAX_ROWS.
+        await db.execute(
+            "DELETE FROM pgn_audit WHERE id <= ("
+            "  SELECT MAX(id) - ? FROM pgn_audit"
+            ")",
+            (_PGN_AUDIT_MAX_ROWS,),
+        )
+        await db.commit()
+
+    async def get_pgn_audit_summary(self, recent_limit: int = 30) -> dict[str, Any]:
+        """Return per-PGN counts plus the most recent observations.
+
+        Shape::
+
+            {
+              "pgns": {130845: {"frames": int, "decoded": int,
+                                "source_addrs": [int], "last_observed_at": str|None},
+                       130850: {...}},
+              "recent": [{"observed_at", "pgn", "source_addr", "action",
+                          "minutes", "decoded", "raw_hex"}, ...],  # newest first
+              "total": int,
+            }
+        """
+        db = self._read_conn()
+        pgns: dict[int, dict[str, Any]] = {}
+        cur = await db.execute(
+            "SELECT pgn, COUNT(*), SUM(decoded), MAX(observed_at)"
+            "  FROM pgn_audit GROUP BY pgn"
+        )
+        for pgn, frames, decoded, last in await cur.fetchall():
+            cur2 = await db.execute(
+                "SELECT DISTINCT source_addr FROM pgn_audit WHERE pgn = ? ORDER BY source_addr",
+                (pgn,),
+            )
+            addrs = [int(a[0]) for a in await cur2.fetchall()]
+            pgns[int(pgn)] = {
+                "frames": int(frames),
+                "decoded": int(decoded or 0),
+                "source_addrs": addrs,
+                "last_observed_at": last,
+            }
+        cur3 = await db.execute(
+            "SELECT observed_at, pgn, source_addr, action, minutes, decoded, raw_hex"
+            "  FROM pgn_audit ORDER BY id DESC LIMIT ?",
+            (recent_limit,),
+        )
+        recent = [
+            {
+                "observed_at": r[0],
+                "pgn": int(r[1]),
+                "source_addr": int(r[2]),
+                "action": r[3],
+                "minutes": r[4],
+                "decoded": bool(r[5]),
+                "raw_hex": r[6],
+            }
+            for r in await cur3.fetchall()
+        ]
+        cur4 = await db.execute("SELECT COUNT(*) FROM pgn_audit")
+        total_row = await cur4.fetchone()
+        return {
+            "pgns": pgns,
+            "recent": recent,
+            "total": int(total_row[0]) if total_row else 0,
+        }
 
     async def list_races_for_date(self, date_str: str) -> list[Race]:
         """Return all races for a UTC date string, ordered by start_utc ASC."""

@@ -22,6 +22,13 @@ from the instruments with no browser open).
 
 ## Phase 0 — Hardware validation (this branch, deploy tonight)
 
+> **Now delivered as a web feature** (`/admin/pgn-audit`), not just the CLI
+> script — see `docs/specs/pgn-audit.md`. The decoder is ported into
+> `nmea2000.py`; an opt-in read-only sniffer (`PGN_AUDIT_ENABLED=true`, wired in
+> `main.py`) co-reads `can0` and writes observations to the `pgn_audit` table
+> (migration 87); the admin page polls a verdict. The CLI script remains as an
+> SSH fallback. Validate from a phone on the boat — no command line needed.
+
 **Why first:** the fork's byte layout was reverse-engineered on a *different*
 boat (a Simrad system on "CreativePi"). Our boat is Corvo on B&G **Triton2**.
 Same vendor (Navico, mfr code `0x9F41`), so the framing is *likely* identical —
@@ -71,10 +78,10 @@ Outcomes:
 ## Phase 2 — Storage (critical tier)
 
 - Port the `simrad_timer_state` table **but renumber the migrations**: the fork
-  uses 86 & 87; our `main` already ships migration **86** (per-race crew, #761)
-  and sits at `_CURRENT_VERSION = 86`. Land these as **87 (create table) + 88
-  (add `rolling_timer_on`)** and bump `_CURRENT_VERSION = 88`. *(A single squashed
-  87 is fine too — the two-step split only mirrors the fork's history.)*
+  uses 86 & 87; our `main` ships migration **86** (per-race crew, #761) and this
+  branch now takes **87** (`pgn_audit`). Land the timer-state table as **88
+  (create) + 89 (add `rolling_timer_on`)** and bump `_CURRENT_VERSION = 89`.
+  *(A single squashed 88 is fine too — the split only mirrors the fork's history.)*
 - Port `get_simrad_timer_state` / `upsert_simrad_timer_state`.
 - `storage.py` migrations are **critical tier** → TDD + `/spec` + migration test
   proving a v86 DB upgrades cleanly.

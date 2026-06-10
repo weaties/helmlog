@@ -10,7 +10,16 @@ Supported PGNs:
     130306 — Wind Data
     130310 — Environmental Parameters
 
-All decoders use struct.unpack with little-endian byte order per the NMEA 2000 spec.
+Simrad/B&G proprietary PGNs (manufacturer code 0x9F41):
+    130845 — Set Timer    (Fast Packet — SET countdown duration in minutes)
+    130850 — Start/Stop   (Fast Packet — START / STOP / RESET / NEAREST-MINUTE)
+
+Standard PGNs are single-frame; the Simrad proprietary PGNs use Fast Packet
+multi-frame encoding. Use FastPacketBuffer to reassemble frames before calling
+decode().
+
+All standard decoders use struct.unpack with little-endian byte order per the
+NMEA 2000 spec.
 """
 
 from __future__ import annotations
@@ -37,6 +46,11 @@ PGN_WIND_DATA: Final[int] = 130306
 PGN_ENVIRONMENTAL: Final[int] = 130310
 PGN_RUDDER_ANGLE: Final[int] = 127245
 
+# Simrad/B&G proprietary (canboat does not cover these; decoded from candump
+# analysis on a Simrad system — see docs/specs/pgn-audit.md).
+PGN_SIMRAD_SET_TIMER: Final[int] = 130845  # Fast Packet — SET countdown duration
+PGN_SIMRAD_START_STOP: Final[int] = 130850  # Fast Packet — START/STOP/RESET/NEAREST-MINUTE
+
 SUPPORTED_PGNS: Final[frozenset[int]] = frozenset(
     {
         PGN_VESSEL_HEADING,
@@ -48,7 +62,15 @@ SUPPORTED_PGNS: Final[frozenset[int]] = frozenset(
         PGN_WIND_DATA,
         PGN_ENVIRONMENTAL,
         PGN_RUDDER_ANGLE,
+        PGN_SIMRAD_SET_TIMER,
+        PGN_SIMRAD_START_STOP,
     }
+)
+
+# PGNs that use Fast Packet multi-frame encoding — callers must reassemble
+# frames via FastPacketBuffer before passing the payload to decode().
+FAST_PACKET_PGNS: Final[frozenset[int]] = frozenset(
+    {PGN_SIMRAD_SET_TIMER, PGN_SIMRAD_START_STOP}
 )
 
 # AIS and other-vessel PGN blocklist (#208) — must never be ingested or stored
@@ -182,6 +204,35 @@ class AttitudeRecord:
     trim_deg: float  # pitch, degrees (positive = bow up)
 
 
+@dataclass(frozen=True)
+class SimradTimerRecord:
+    """PGN 130845/130850 — Simrad/B&G proprietary race timer (mfr code 0x9F41).
+
+    Payload layout (from candump analysis; both PGNs are Fast Packet):
+
+    Start/Stop/Reset/Nearest-Minute  (PGN 130850, 12 bytes after reassembly):
+        [0-1]  41 9F        Simrad manufacturer ID (little-endian 0x9F41)
+        [2-5]  FF FF 01 17  reserved
+        [6]    3D=start / 3E=stop / 3F=nearest-minute / 40=reset
+
+    Set Timer  (PGN 130845, 14 bytes after reassembly):
+        [0-1]  41 9F        Simrad manufacturer ID
+        [2-5]  FF FF FF FF  reserved
+        [6-9]  07 42 00 01  SET command discriminator
+        [10]   minutes
+        [11-13] 00 00 00    trailing (0xFF = NMEA N/A sentinel)
+
+    Running-state broadcasts (also PGN 130845) carry discriminator 02 00 00 01
+    at [6:10] and decode to None (ignored).
+    """
+
+    pgn: int
+    source_addr: int
+    timestamp: datetime
+    action: str  # "set" | "start" | "stop" | "reset" | "nearest_minute"
+    minutes: int | None  # populated only when action == "set"
+
+
 # Union type for all PGN record types
 PGNRecord = (
     HeadingRecord
@@ -193,6 +244,7 @@ PGNRecord = (
     | EnvironmentalRecord
     | RudderRecord
     | AttitudeRecord
+    | SimradTimerRecord
 )
 
 # ---------------------------------------------------------------------------
@@ -430,6 +482,114 @@ def _decode_130310(data: bytes, source: int, ts: datetime) -> EnvironmentalRecor
 
 
 # ---------------------------------------------------------------------------
+# Fast Packet reassembly
+# ---------------------------------------------------------------------------
+
+
+class FastPacketBuffer:
+    """Reassembles NMEA 2000 Fast Packet multi-frame payloads.
+
+    Keyed on (pgn, source_address, sequence) so concurrent streams from
+    different ECUs on the same PGN never collide.
+
+    Usage::
+
+        buf = FastPacketBuffer()
+        payload = buf.feed(pgn, source_addr, raw_can_data)
+        if payload is not None:
+            record = decode(pgn, payload, source_addr, timestamp)
+    """
+
+    def __init__(self) -> None:
+        self._sessions: dict[tuple[int, int, int], dict[str, object]] = {}
+
+    def feed(self, pgn: int, sa: int, raw: bytes) -> bytes | None:
+        """Feed one CAN frame. Returns the complete payload once all frames
+        have arrived, otherwise None."""
+        if len(raw) < 2:
+            return None
+
+        seq = (raw[0] >> 5) & 0x7
+        frame = raw[0] & 0x1F
+        key = (pgn, sa, seq)
+
+        if frame == 0:
+            total = raw[1]
+            self._sessions[key] = {"total": total, "data": bytearray(raw[2:]), "next": 1}
+            if total <= 6:  # fits entirely in the first frame
+                data = self._sessions.pop(key)["data"]
+                assert isinstance(data, bytearray)
+                return bytes(data[:total])
+        else:
+            session = self._sessions.get(key)
+            if session is None or session["next"] != frame:
+                self._sessions.pop(key, None)
+                return None
+            data = session["data"]
+            assert isinstance(data, bytearray)
+            data.extend(raw[1:])
+            session["next"] = frame + 1
+            expected = session["total"]
+            assert isinstance(expected, int)
+            if len(data) >= expected:
+                self._sessions.pop(key, None)
+                return bytes(data[:expected])
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Simrad/B&G proprietary decoder helpers
+# ---------------------------------------------------------------------------
+
+_SIMRAD_MFR: Final[bytes] = bytes([0x41, 0x9F])  # manufacturer code 0x9F41 (LE)
+_SIMRAD_ACTIONS: Final[dict[int, str]] = {
+    0x3D: "start",
+    0x3E: "stop",
+    0x3F: "nearest_minute",
+    0x40: "reset",
+}
+_SIMRAD_SET_DISCRIMINATOR: Final[bytes] = bytes([0x07, 0x42, 0x00, 0x01])
+
+
+def _is_simrad(p: bytes) -> bool:
+    return len(p) >= 2 and p[0:2] == _SIMRAD_MFR
+
+
+def _decode_130850(data: bytes, source: int, ts: datetime) -> SimradTimerRecord | None:
+    """PGN 130850 — Simrad Start/Stop/Reset/Nearest-Minute (12 bytes)."""
+    if not _is_simrad(data) or len(data) < 7:
+        return None
+    action = _SIMRAD_ACTIONS.get(data[6])
+    if action is None:
+        return None
+    return SimradTimerRecord(
+        pgn=PGN_SIMRAD_START_STOP,
+        source_addr=source,
+        timestamp=ts,
+        action=action,
+        minutes=None,
+    )
+
+
+def _decode_130845(data: bytes, source: int, ts: datetime) -> SimradTimerRecord | None:
+    """PGN 130845 — Simrad Set Timer (14 bytes).
+
+    Running-state broadcasts (discriminator 02 00 00 01) decode to None.
+    """
+    if not _is_simrad(data) or len(data) < 11:
+        return None
+    if data[6:10] != _SIMRAD_SET_DISCRIMINATOR:
+        return None
+    return SimradTimerRecord(
+        pgn=PGN_SIMRAD_SET_TIMER,
+        source_addr=source,
+        timestamp=ts,
+        action="set",
+        minutes=int(data[10]),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Dispatch table & public API
 # ---------------------------------------------------------------------------
 
@@ -441,6 +601,8 @@ _DECODERS = {
     PGN_COG_SOG_RAPID: _decode_129026,
     PGN_WIND_DATA: _decode_130306,
     PGN_ENVIRONMENTAL: _decode_130310,
+    PGN_SIMRAD_START_STOP: _decode_130850,
+    PGN_SIMRAD_SET_TIMER: _decode_130845,
 }
 
 

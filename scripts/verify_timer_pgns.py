@@ -39,83 +39,33 @@ from dataclasses import dataclass, field
 
 import can
 
-# extract_pgn already lives on main; reuse it rather than re-deriving J1939.
+# Reuse the shipped decoder (ported to helmlog.nmea2000, #789) so the CLI and
+# the web audit share one source of truth — no drift between them.
 from helmlog.can_reader import extract_pgn
+from helmlog.nmea2000 import (
+    PGN_SIMRAD_SET_TIMER,
+    PGN_SIMRAD_START_STOP,
+    FastPacketBuffer,
+    SimradTimerRecord,
+    decode,
+)
 
 # Target PGNs (proprietary, not covered by canboat).
-PGN_SET_TIMER = 130845  # 0x1FF1D
-PGN_START_STOP = 130850  # 0x1FF22
+PGN_SET_TIMER = PGN_SIMRAD_SET_TIMER  # 130845 / 0x1FF1D
+PGN_START_STOP = PGN_SIMRAD_START_STOP  # 130850 / 0x1FF22
 _TARGET_PGNS = (PGN_SET_TIMER, PGN_START_STOP)
-
-# ---------------------------------------------------------------------------
-# Decoder — vendored from the MarkPre3802 fork (src/helmlog/nmea2000.py).
-# Kept inline so this branch stays purely additive (no edits to shipped
-# modules) and so we validate the *exact* decode logic on real hardware.
-# On port, this is replaced by `from helmlog.nmea2000 import decode, ...`.
-# ---------------------------------------------------------------------------
-
-_SIMRAD_MFR = bytes([0x41, 0x9F])  # Navico/Simrad manufacturer code 0x9F41 (LE)
-_SET_DISCRIMINATOR = bytes([0x07, 0x42, 0x00, 0x01])  # SET vs running-state broadcast
-_ACTIONS = {0x3D: "start", 0x3E: "stop", 0x3F: "nearest_minute", 0x40: "reset"}
-
-
-class FastPacketBuffer:
-    """Reassembles NMEA 2000 Fast Packet multi-frame payloads.
-
-    Keyed on (pgn, source_address, sequence) so concurrent streams from
-    different ECUs on the same PGN never collide.
-    """
-
-    def __init__(self) -> None:
-        self._sessions: dict[tuple[int, int, int], dict[str, object]] = {}
-
-    def feed(self, pgn: int, sa: int, raw: bytes) -> bytes | None:
-        if len(raw) < 2:
-            return None
-        seq = (raw[0] >> 5) & 0x7
-        frame = raw[0] & 0x1F
-        key = (pgn, sa, seq)
-        if frame == 0:
-            total = raw[1]
-            self._sessions[key] = {"total": total, "data": bytearray(raw[2:]), "next": 1}
-            if total <= 6:
-                data = self._sessions.pop(key)["data"]
-                assert isinstance(data, bytearray)
-                return bytes(data[:total])
-        else:
-            session = self._sessions.get(key)
-            if session is None or session["next"] != frame:
-                self._sessions.pop(key, None)
-                return None
-            data = session["data"]
-            assert isinstance(data, bytearray)
-            data.extend(raw[1:])
-            session["next"] = frame + 1
-            total = session["total"]
-            assert isinstance(total, int)
-            if len(data) >= total:
-                self._sessions.pop(key, None)
-                return bytes(data[:total])
-        return None
 
 
 def decode_simrad(pgn: int, payload: bytes) -> tuple[str, int | None] | None:
     """Return (action, minutes) for a Simrad timer payload, or None.
 
-    None means "this PGN appeared but the payload is not a recognised timer
-    command" — e.g. a running-state broadcast, or a layout we have not seen.
+    Thin wrapper over helmlog.nmea2000.decode(). None means "this PGN appeared
+    but the payload is not a recognised timer command" — e.g. a running-state
+    broadcast, or a layout we have not seen.
     """
-    if len(payload) < 2 or payload[0:2] != _SIMRAD_MFR:
-        return None
-    if pgn == PGN_START_STOP:
-        if len(payload) < 7:
-            return None
-        action = _ACTIONS.get(payload[6])
-        return (action, None) if action is not None else None
-    if pgn == PGN_SET_TIMER:
-        if len(payload) < 11 or payload[6:10] != _SET_DISCRIMINATOR:
-            return None
-        return ("set", int(payload[10]))
+    record = decode(pgn, payload, 0, 0.0)
+    if isinstance(record, SimradTimerRecord):
+        return (record.action, record.minutes)
     return None
 
 
@@ -285,21 +235,17 @@ def _fast_packet_frames(payload: bytes) -> list[bytes]:
 
 
 def self_test() -> int:
+    # Synthetic payloads matching the shipped decoder's expected layout.
+    mfr = bytes([0x41, 0x9F])
+    set_disc = bytes([0x07, 0x42, 0x00, 0x01])
     cases: list[tuple[int, bytes, tuple[str, int | None]]] = [
         (
             PGN_SET_TIMER,
-            _SIMRAD_MFR
-            + bytes([0xFF, 0xFF, 0xFF, 0xFF])
-            + _SET_DISCRIMINATOR
-            + bytes([5, 0xFF, 0xFF, 0xFF]),
+            mfr + bytes([0xFF, 0xFF, 0xFF, 0xFF]) + set_disc + bytes([5, 0xFF, 0xFF, 0xFF]),
             ("set", 5),
         ),
-        (
-            PGN_START_STOP,
-            _SIMRAD_MFR + bytes([0xFF, 0xFF, 0x01, 0x17, 0x3D, 0x00]),
-            ("start", None),
-        ),
-        (PGN_START_STOP, _SIMRAD_MFR + bytes([0xFF, 0xFF, 0x01, 0x17, 0x3E, 0x00]), ("stop", None)),
+        (PGN_START_STOP, mfr + bytes([0xFF, 0xFF, 0x01, 0x17, 0x3D, 0x00]), ("start", None)),
+        (PGN_START_STOP, mfr + bytes([0xFF, 0xFF, 0x01, 0x17, 0x3E, 0x00]), ("stop", None)),
     ]
     ok = True
     for pgn, payload, expected in cases:
