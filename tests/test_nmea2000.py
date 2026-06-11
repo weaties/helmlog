@@ -371,15 +371,44 @@ class TestDecode130850:
         assert decode(PGN_SIMRAD_START_STOP, first_frame, 9, _UNIX_TS) is None
 
 
+def _hexbytes(s: str) -> bytes:
+    """Build a payload from a space-separated hex string (real capture rows)."""
+    return bytes(int(b, 16) for b in s.split())
+
+
 class TestDecode130845:
-    def test_set_minutes(self) -> None:
+    def test_set_minutes_simrad(self) -> None:
+        # Simrad bench discriminator 07 42 00 01.
         r = decode(PGN_SIMRAD_SET_TIMER, _set_timer_payload(5), 9, _UNIX_TS)
         assert isinstance(r, SimradTimerRecord)
         assert (r.action, r.minutes) == ("set", 5)
 
+    def test_set_command_triton2_discriminator(self) -> None:
+        # Real Corvo Triton2 on-water SET frames (#789) — discriminator 07 c0 00
+        # 01 (byte[7]=0xC0). Must now decode as a SET; byte[10] read as minutes
+        # (position pending dockside confirmation, see decoder note).
+        for raw, expect_min in (
+            ("41 9f ff ff ff ff 07 c0 00 01 00 ff ff ff", 0),
+            ("41 9f ff ff ff ff 07 c0 00 01 01 ff ff ff", 1),
+        ):
+            r = decode(PGN_SIMRAD_SET_TIMER, _hexbytes(raw), 7, _UNIX_TS)
+            assert isinstance(r, SimradTimerRecord)
+            assert (r.action, r.minutes) == ("set", expect_min)
+
     def test_running_state_broadcast_ignored(self) -> None:
         payload = _MFR + bytes([0xFF, 0xFF, 0xFF, 0xFF, 0x02, 0x00, 0x00, 0x01, 5, 0, 0, 0])
         assert decode(PGN_SIMRAD_SET_TIMER, payload, 9, _UNIX_TS) is None
+
+    def test_triton2_countdown_frames_do_not_decode(self) -> None:
+        # Real Triton2 state/countdown 130845 frames (byte[6] != 0x07) must stay
+        # undecoded — they are not SET commands. Captured #789.
+        for raw in (
+            "41 9f 80 ff ff ff 31 00 00 00 ff ff ff ff",  # SA7 0x80 state
+            "41 9f 80 ff ff ff 39 00 00 00 ff ff ff ff",
+            "41 9f 23 ff ff ff 06 00 00 00 ff ff ff ff",  # SA7 0x23 heartbeat
+            "41 9f ff ff ff ff 00 00 00 02 23 06 00 00",  # SA128 echo (byte[6]=0x00)
+        ):
+            assert decode(PGN_SIMRAD_SET_TIMER, _hexbytes(raw), 7, _UNIX_TS) is None
 
 
 class TestFastPacketBuffer:

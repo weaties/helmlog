@@ -66,6 +66,15 @@ Outcomes:
 
 ## Phase 1 — Decoder + read path (port, behind validation)
 
+> **On-water result (2026-06-10, race night):** Triton² **does** emit both PGNs.
+> **130850** (start/stop/reset/nearest-minute) decodes unchanged — fully working.
+> **130845** uses a Triton²-specific SET discriminator `07 c0 00 01` (vs Simrad
+> `07 42 00 01`); the decoder now ignores the byte[7] variant. The duration byte
+> position is still unconfirmed — pinned by a dockside capture
+> (`docs/specs/triton2-timer-capture.md`). Decoder change in progress as a gated
+> stacked PR; the 0x80/0x23 state-broadcast decode is deferred until the same
+> capture disambiguates it.
+
 - Port `FastPacketBuffer`, `SimradTimerRecord`, the 130845/130850 decoders, and
   the PGN constants into `src/helmlog/nmea2000.py` (adapting the layout if the
   Phase 0 capture differed). Bring the fork's `tests/test_nmea2000.py`
