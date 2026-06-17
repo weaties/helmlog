@@ -36,6 +36,9 @@ class Race:
     session_type: str = "race"  # "race" | "practice"
     slug: str = ""  # human-readable URL slug (#449); backfilled from name
     renamed_at: datetime | None = None  # UTC ts of most recent rename (#449)
+    # GPS-clock provenance of the live recording (#794): "synced" | "corrected"
+    # | "unverified" | "ref_lost". None = legacy/imported (not time-base tracked).
+    clock_flag: str | None = None
 
 
 # ---------------------------------------------------------------------------

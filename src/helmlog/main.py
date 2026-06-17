@@ -481,10 +481,20 @@ async def _run() -> None:
                     sk_config.port,
                     storage_config.db_path,
                 )
-                async for record in SKReader(sk_config):
+                reader = SKReader(sk_config)
+                last_clock_flag = reader.clock_flag
+                async for record in reader:
                     storage.update_live(record)
                     if storage.session_active:
                         await storage.write(record)
+                        # Persist GPS-clock provenance when it changes (#794).
+                        if reader.clock_flag is not last_clock_flag:
+                            race_id = storage.active_race_id
+                            if race_id is not None:
+                                await storage.set_race_clock_flag(
+                                    race_id, reader.clock_flag.value
+                                )
+                            last_clock_flag = reader.clock_flag
             else:
                 from helmlog.can_reader import CANReader, CANReaderConfig, extract_pgn
                 from helmlog.nmea2000 import decode

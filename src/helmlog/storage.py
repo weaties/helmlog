@@ -232,7 +232,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 86
+_CURRENT_VERSION: int = 87
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -2162,6 +2162,16 @@ _MIGRATIONS: dict[int, str] = {
         ALTER TABLE races ADD COLUMN gear_preset TEXT;
         ALTER TABLE users ADD COLUMN gear_default_lbs REAL;
     """,
+    87: """
+        -- GPS-clock provenance per live recording (#794). The Signal K server
+        -- runs on the Pi, so delta timestamps inherit the host clock, and an
+        -- unsynced boot can stamp a whole recording at the wrong UTC. The
+        -- logger now disciplines record timestamps to GPS time and records the
+        -- outcome here as synced, corrected, unverified, or ref_lost.
+        -- NULL = legacy/imported race (time base not tracked) so no banner.
+        -- (Migration comments must avoid semicolons -- the splitter cuts on them.)
+        ALTER TABLE races ADD COLUMN clock_flag TEXT;
+    """,
 }
 
 # Retention window for retired slugs (#449). Requests for a retired slug 301
@@ -2314,6 +2324,11 @@ class Storage:
     def session_active(self) -> bool:
         """True when a race or practice session is currently in progress."""
         return self._session_active
+
+    @property
+    def active_race_id(self) -> int | None:
+        """Id of the race currently being recorded, or None when idle (#794)."""
+        return self._active_race_id
 
     # ------------------------------------------------------------------
     # In-memory live instrument cache (always updated, no DB I/O)
@@ -4167,6 +4182,21 @@ class Storage:
         await self._invalidate_race_cache(race_id)
         logger.info("Race {} start_utc anchored to gun at {}", race_id, start_utc.isoformat())
 
+    async def set_race_clock_flag(self, race_id: int, clock_flag: str) -> None:
+        """Persist the GPS-clock provenance of a live recording (#794).
+
+        Called by the logger as the recording's clock state evolves
+        (``unverified`` → ``synced``/``corrected``/``ref_lost``). Idempotent:
+        the logger only calls this when the flag changes.
+        """
+        db = self._conn()
+        await db.execute(
+            "UPDATE races SET clock_flag = ? WHERE id = ?",
+            (clock_flag, race_id),
+        )
+        await db.commit()
+        await self._invalidate_race_cache(race_id)
+
     async def rename_race(
         self,
         race_id: int,
@@ -4528,10 +4558,12 @@ class Storage:
             session_type=row["session_type"],
             slug=row["slug"] or "",
             renamed_at=(datetime.fromisoformat(row["renamed_at"]) if row["renamed_at"] else None),
+            clock_flag=row["clock_flag"],
         )
 
     _RACE_COLS = (
-        "id, name, event, race_num, date, start_utc, end_utc, session_type, slug, renamed_at"
+        "id, name, event, race_num, date, start_utc, end_utc, session_type, slug, renamed_at,"
+        " clock_flag"
     )
 
     async def get_race(self, race_id: int) -> Race | None:
@@ -11974,6 +12006,81 @@ class Storage:
             s["matched_races"] = matches_by_session.get(int(s["id"]), [])
         return sessions
 
+    async def _sample_track(
+        self, table: str, id_col: str, id_val: int, *, target: int = 200
+    ) -> list[tuple[datetime, float, float]]:
+        """Time-ordered, evenly-downsampled ``(ts, lat, lon)`` track (~target points).
+
+        Used by the Vakaros import-skew cross-check (#794). ``table`` is one of
+        the position tables — ``positions`` (live) and ``vakaros_positions``
+        share the ts / latitude_deg / longitude_deg columns. ``table``/``id_col``
+        are internal constants, never user input.
+        """
+        db = self._read_conn()
+        cur = await db.execute(
+            f"SELECT COUNT(*) AS n FROM {table} WHERE {id_col} = ?",  # noqa: S608
+            (id_val,),
+        )
+        row = await cur.fetchone()
+        n = int(row["n"]) if row else 0
+        if n == 0:
+            return []
+        stride = max(1, n // target)
+        cur = await db.execute(
+            f"SELECT ts, latitude_deg, longitude_deg FROM "  # noqa: S608
+            f"(SELECT ts, latitude_deg, longitude_deg, "
+            f"ROW_NUMBER() OVER (ORDER BY ts) AS rn FROM {table} WHERE {id_col} = ?) "
+            f"WHERE rn % ? = 0",
+            (id_val, stride),
+        )
+        out: list[tuple[datetime, float, float]] = []
+        for r in await cur.fetchall():
+            ts = _parse_utc(r["ts"])
+            if ts is not None:
+                out.append((ts, r["latitude_deg"], r["longitude_deg"]))
+        return out
+
+    async def _flag_import_clock_skew(self, session_id: int, race_ids: list[int]) -> None:
+        """Cross-check linked recordings against the GPS-sourced Vakaros track (#794).
+
+        A Vakaros session carries GPS-authoritative time. If a freshly-linked
+        live recording's track is time-shifted relative to it, the recording's
+        clock was wrong (the race-201 incident). Logs a WARNING and, for
+        recordings whose time base was never GPS-tracked (``clock_flag IS
+        NULL``), sets ``unverified`` so the session page warns. Recordings that
+        already carry a real GPS-discipline flag are left as-is (that flag is
+        authoritative) but still logged.
+        """
+        if not race_ids:
+            return
+        from helmlog.clock_sync import IMPORT_SKEW_OK_S, estimate_track_offset_s
+
+        vak_track = await self._sample_track("vakaros_positions", "session_id", session_id)
+        if len(vak_track) < 5:
+            return
+        db = self._conn()
+        changed = False
+        for rid in race_ids:
+            race_track = await self._sample_track("positions", "race_id", rid)
+            offset = estimate_track_offset_s(race_track, vak_track)
+            if offset is None or abs(offset) <= IMPORT_SKEW_OK_S:
+                continue
+            logger.warning(
+                "Race {} clock skew vs Vakaros session {}: {:+.0f}s track offset "
+                "— recording clock likely wrong (#794)",
+                rid,
+                session_id,
+                offset,
+            )
+            cur = await db.execute("SELECT clock_flag FROM races WHERE id = ?", (rid,))
+            row = await cur.fetchone()
+            if row is not None and row["clock_flag"] is None:
+                await db.execute("UPDATE races SET clock_flag = 'unverified' WHERE id = ?", (rid,))
+                await self._invalidate_race_cache(rid)
+                changed = True
+        if changed:
+            await db.commit()
+
     async def match_vakaros_session(self, session_id: int) -> list[int]:
         """Link a Vakaros session to *all* overlapping races.
 
@@ -12044,6 +12151,7 @@ class Storage:
             linked.append(int(cand["id"]))
 
         await db.commit()
+        await self._flag_import_clock_skew(session_id, linked)
         return linked
 
     async def rematch_all_vakaros_sessions(self) -> dict[int, list[int]]:

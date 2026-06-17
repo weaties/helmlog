@@ -154,6 +154,17 @@ body.live-race #session-tags-row{display:none!important}
 </div>
 {% endif %}
 
+{# Clock provenance (#794): warn when the recording's time base is suspect. #}
+{% if (clock_flag or '') in ('unverified', 'ref_lost') %}
+<div class="stale-banner" style="margin-bottom:8px">
+  <span>⚠ Recording clock {{ 'had no GPS time reference' if clock_flag == 'unverified' else 'lost its GPS time reference mid-session' }} — timestamps come from the device clock and may not match true UTC. Cross-check against external sources (results, video, Vakaros) before trusting absolute times.</span>
+</div>
+{% elif (clock_flag or '') == 'corrected' %}
+<div class="card" style="background:var(--bg-secondary);border:1px dashed var(--warning);font-size:.78rem;color:var(--text-secondary);margin-bottom:8px">
+  ⏱ This recording's device clock was off; timestamps were automatically corrected to GPS time.
+</div>
+{% endif %}
+
 <div class="card">
   <div id="session-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
     <div style="flex:1;min-width:0">
