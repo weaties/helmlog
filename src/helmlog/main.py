@@ -491,9 +491,7 @@ async def _run() -> None:
                         if reader.clock_flag is not last_clock_flag:
                             race_id = storage.active_race_id
                             if race_id is not None:
-                                await storage.set_race_clock_flag(
-                                    race_id, reader.clock_flag.value
-                                )
+                                await storage.set_race_clock_flag(race_id, reader.clock_flag.value)
                             last_clock_flag = reader.clock_flag
             else:
                 from helmlog.can_reader import CANReader, CANReaderConfig, extract_pgn
