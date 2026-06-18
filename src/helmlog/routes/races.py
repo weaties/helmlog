@@ -170,7 +170,7 @@ async def _do_scheduled_start(
     ss = app.state.session_state
     from helmlog.races import build_race_name, local_today
 
-    now = datetime.now(UTC)
+    now = storage.disciplined_now()  # GPS-disciplined clock, not host (#794)
     today = local_today()
     date_str = today.isoformat()
     race_num = await storage.count_sessions_for_date(date_str, session_type) + 1
@@ -413,7 +413,9 @@ async def api_start_race(
     race_num = await storage.count_sessions_for_date(date_str, session_type) + 1
     name = build_race_name(event, today, race_num, session_type)
 
-    now = datetime.now(UTC)
+    # Stamp the race window on the GPS-disciplined clock, not raw host time, so
+    # an unsynced-boot Pi can't skew the window away from its telemetry (#794).
+    now = storage.disciplined_now()
     race = await storage.start_race(event, now, date_str, race_num, name, session_type)
 
     # Boat-level crew defaults auto-apply via resolve_crew() —
@@ -513,7 +515,7 @@ async def api_end_race(
 ) -> None:
     storage = get_storage(request)
     ss = request.app.state.session_state
-    now = datetime.now(UTC)
+    now = storage.disciplined_now()  # GPS-disciplined clock, not host (#794)
     await storage.end_race(race_id, now)
     await audit(request, "race.end", detail=str(race_id), user=_user)
 
@@ -614,7 +616,7 @@ async def api_start_debrief(
 
     # Defensive: if the race is still in progress, auto-end it first
     if row["end_utc"] is None:
-        now_end = datetime.now(UTC)
+        now_end = storage.disciplined_now()  # GPS-disciplined clock, not host (#794)
         await storage.end_race(race_id, now_end)
         if ss.audio_session_id is not None:
             await capture_stop(
@@ -634,7 +636,7 @@ async def api_start_debrief(
         ss.debrief_audio_session_id = None
 
     debrief_name = f"{row['name']}-debrief"
-    now = datetime.now(UTC)
+    now = storage.disciplined_now()  # GPS-disciplined clock, not host (#794)
     # Hand capture_start the race's sibling group so it can warn when the USB
     # device set has changed between race-end and debrief-start (#648 C5).
     prev_audio = await storage.get_race_primary_audio_session(race_id)

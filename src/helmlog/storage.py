@@ -12,7 +12,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from helmlog.vakaros import VakarosSession
 
 from helmlog.anchors import AnchorError
+from helmlog.clock_sync import IMPORT_SKEW_OK_S, ClockFlag
 from helmlog.nmea2000 import (
     AttitudeRecord,
     COGSOGRecord,
@@ -2233,6 +2234,13 @@ class Storage:
         # Active race id, if any. Maintained by start_race / end_race. Used
         # to tag WS position broadcasts so clients can filter by race.
         self._active_race_id: int | None = None
+        # Live GPS-clock discipline, mirrored from the SK reader by the
+        # recording loop (#794 follow-up). Web routes stamp recording-correlated
+        # timestamps (race/audio boundaries) through ``disciplined_now`` so an
+        # unsynced-boot Pi clock can't skew the race window away from the
+        # GPS-disciplined telemetry — the race-203 split.
+        self._clock_offset_s: float = 0.0
+        self._clock_apply: bool = False
         self._live: dict[str, float | None] = dict.fromkeys(_LIVE_KEYS)
         self._live_tw_ref: int | None = None
         self._live_tw_angle_raw: float | None = None
@@ -2329,6 +2337,45 @@ class Storage:
     def active_race_id(self) -> int | None:
         """Id of the race currently being recorded, or None when idle (#794)."""
         return self._active_race_id
+
+    # ------------------------------------------------------------------
+    # GPS-clock discipline for web-route timestamps (#794 follow-up)
+    # ------------------------------------------------------------------
+
+    def update_clock(self, offset_s: float, flag: ClockFlag) -> None:
+        """Mirror the live SK reader's GPS-clock offset onto the storage
+        singleton so web routes can stamp recording-correlated timestamps on the
+        same time base as the telemetry stream.
+
+        The offset is *applied* only when the reader is actively disciplining
+        (``corrected``/``ref_lost``) — exactly ``ClockDiscipliner.apply``'s rule.
+        When the host is trusted (``synced``) or no GPS reference exists yet
+        (``unverified``), routes fall back to raw host time. Called by the
+        recording loop whenever the reader's clock state changes.
+        """
+        self._clock_offset_s = offset_s
+        self._clock_apply = flag in (ClockFlag.CORRECTED, ClockFlag.REF_LOST)
+
+    def discipline_ts(self, host_ts: datetime) -> datetime:
+        """Return the GPS-disciplined equivalent of a host timestamp.
+
+        Mirrors :meth:`helmlog.clock_sync.ClockDiscipliner.apply` so a record
+        stamped by a web route lands on the same time base as the live
+        telemetry stream.
+        """
+        if self._clock_apply:
+            return host_ts + timedelta(seconds=self._clock_offset_s)
+        return host_ts
+
+    def disciplined_now(self) -> datetime:
+        """``datetime.now(UTC)`` disciplined to GPS time (#794 follow-up).
+
+        Web routes use this in place of ``datetime.now(UTC)`` when stamping
+        recording-correlated boundaries (race start/end, audio sessions) so an
+        unsynced-boot Pi clock can't skew the race window away from its own
+        GPS-disciplined telemetry.
+        """
+        return self.discipline_ts(datetime.now(UTC))
 
     # ------------------------------------------------------------------
     # In-memory live instrument cache (always updated, no DB I/O)
@@ -3786,8 +3833,10 @@ class Storage:
             (
                 session.file_path,
                 session.device_name,
-                session.start_utc.isoformat(),
-                session.end_utc.isoformat() if session.end_utc else None,
+                # Discipline the recorder's host-clock stamp to GPS time so audio
+                # boundaries stay consistent with the telemetry stream (#794).
+                self.discipline_ts(session.start_utc).isoformat(),
+                self.discipline_ts(session.end_utc).isoformat() if session.end_utc else None,
                 session.sample_rate,
                 session.channels,
                 race_id,
@@ -3855,11 +3904,14 @@ class Storage:
         )
 
     async def update_audio_session_end(self, session_id: int, end_utc: datetime) -> None:
-        """Set the end_utc for an existing audio session row."""
+        """Set the end_utc for an existing audio session row.
+
+        ``end_utc`` is disciplined to GPS time so it stays on the same time base
+        as the session's ``start_utc`` and the telemetry stream (#794)."""
         db = self._conn()
         await db.execute(
             "UPDATE audio_sessions SET end_utc = ? WHERE id = ?",
-            (end_utc.isoformat(), session_id),
+            (self.discipline_ts(end_utc).isoformat(), session_id),
         )
         await db.commit()
         logger.debug("Audio session {} end_utc updated", session_id)
@@ -4088,6 +4140,78 @@ class Storage:
         row = await cur.fetchone()
         return _parse_utc(row[0]) if row and row[0] else None
 
+    async def _record_span_utc(self, race_id: int) -> tuple[datetime, datetime] | None:
+        """(earliest, latest) telemetry timestamp for a race, or None when it has
+        no data. The span the race's boundaries should bracket (#794 follow-up)."""
+        lo_union = " UNION ALL ".join(
+            f"SELECT MIN(ts) AS m FROM {t} WHERE race_id = ?" for t in self._TELEMETRY_TABLES
+        )
+        hi_union = " UNION ALL ".join(
+            f"SELECT MAX(ts) AS m FROM {t} WHERE race_id = ?" for t in self._TELEMETRY_TABLES
+        )
+        params = tuple([race_id] * len(self._TELEMETRY_TABLES))
+        cur = await self._read_conn().execute(
+            f"SELECT MIN(m), MAX(m) FROM ("  # noqa: S608 — table names from a fixed tuple
+            f"SELECT m FROM ({lo_union}) UNION ALL SELECT m FROM ({hi_union}))",
+            params + params,
+        )
+        row = await cur.fetchone()
+        if not row or row[0] is None or row[1] is None:
+            return None
+        first, last = _parse_utc(row[0]), _parse_utc(row[1])
+        if first is None or last is None:
+            return None
+        return first, last
+
+    async def _flag_boundary_clock_skew(self, race_id: int, end_utc: datetime) -> None:
+        """Flag a race whose start/end boundaries disagree with its own telemetry.
+
+        PR #795 disciplines the recording stream to GPS time but a race marked or
+        ended on an unsynced host clock still gets host-time boundaries (the
+        race-203 split: a window 2630s behind its own GPS-correct data). The
+        Vakaros track cross-check (:meth:`_flag_import_clock_skew`) can't catch
+        this — it validates the track, which is already correct — so we compare
+        the boundaries against the recorded data directly.
+
+        The boundaries must bracket the telemetry: data stamped *after* the
+        recorded end, or *well after* the recorded start, means the boundary
+        clock was wrong. When the skew clears ``IMPORT_SKEW_OK_S`` we log it and
+        set ``unverified`` so the session page warns — the same surfacing the
+        track cross-check uses. No telemetry → nothing to compare, leave as-is.
+        """
+        span = await self._record_span_utc(race_id)
+        if span is None:
+            return
+        first, last = span
+        db = self._conn()
+        cur = await db.execute("SELECT start_utc FROM races WHERE id = ?", (race_id,))
+        row = await cur.fetchone()
+        if row is None:
+            return
+        start_utc = _parse_utc(row["start_utc"])
+        if start_utc is None:
+            return
+        # Positive = boundary stamped behind the data it brackets (the skew).
+        # End-after-data and start-before-data are the normal, ignored cases.
+        skew_s = max(
+            (first - start_utc).total_seconds(),
+            (last - end_utc).total_seconds(),
+        )
+        if skew_s <= IMPORT_SKEW_OK_S:
+            return
+        logger.warning(
+            "Race {} clock skew: boundaries {:+.0f}s behind their own telemetry "
+            "— race window host-stamped while the recording was GPS-disciplined (#794)",
+            race_id,
+            skew_s,
+        )
+        await db.execute(
+            "UPDATE races SET clock_flag = ? WHERE id = ?",
+            (ClockFlag.UNVERIFIED.value, race_id),
+        )
+        await db.commit()
+        await self._invalidate_race_cache(race_id)
+
     async def _close_race(
         self, race_id: int, end_utc: datetime, *, auto_close_reason: str | None
     ) -> None:
@@ -4100,6 +4224,7 @@ class Storage:
         )
         await db.commit()
         await self._invalidate_race_cache(race_id)
+        await self._flag_boundary_clock_skew(race_id, end_utc)
         self._session_active = False
         if self._active_race_id == race_id:
             self._active_race_id = None

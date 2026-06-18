@@ -485,14 +485,19 @@ async def _run() -> None:
                 last_clock_flag = reader.clock_flag
                 async for record in reader:
                     storage.update_live(record)
+                    # Mirror the GPS-clock state onto storage on every change so
+                    # web routes (race/audio boundaries) stamp on the same time
+                    # base as the telemetry — even between races (#794 follow-up).
+                    if reader.clock_flag is not last_clock_flag:
+                        storage.update_clock(reader.clock_offset_s, reader.clock_flag)
+                        # Persist provenance onto the active race when recording.
+                        if storage.session_active and storage.active_race_id is not None:
+                            await storage.set_race_clock_flag(
+                                storage.active_race_id, reader.clock_flag.value
+                            )
+                        last_clock_flag = reader.clock_flag
                     if storage.session_active:
                         await storage.write(record)
-                        # Persist GPS-clock provenance when it changes (#794).
-                        if reader.clock_flag is not last_clock_flag:
-                            race_id = storage.active_race_id
-                            if race_id is not None:
-                                await storage.set_race_clock_flag(race_id, reader.clock_flag.value)
-                            last_clock_flag = reader.clock_flag
             else:
                 from helmlog.can_reader import CANReader, CANReaderConfig, extract_pgn
                 from helmlog.nmea2000 import decode
