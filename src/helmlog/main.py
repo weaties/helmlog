@@ -575,6 +575,77 @@ async def _export(start_iso: str, end_iso: str, out: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _measure_gps_offset(timeout_s: float) -> float | None:
+    """Read the host↔GPS offset from Signal K, or None if no GPS time appears
+    within ``timeout_s``. Reuses the live ``SKReader`` discipliner so the offset
+    carries the same median-smoothing as the recording path (#799)."""
+    from helmlog.clock_sync import ClockFlag
+    from helmlog.sk_reader import SKReader, SKReaderConfig
+
+    reader = SKReader(SKReaderConfig())
+    try:
+        async with asyncio.timeout(timeout_s):
+            async for _record in reader:
+                # Any non-unverified flag means a GPS reference has been seen and
+                # offset_s is meaningful (synced ⇒ ~0, corrected ⇒ the boot skew).
+                if reader.clock_flag is not ClockFlag.UNVERIFIED:
+                    return reader.clock_offset_s
+    except TimeoutError:
+        logger.warning("gps-clock-sync: no GPS time from Signal K within {:.0f}s", timeout_s)
+    return None
+
+
+def _clock_is_synchronized() -> bool:
+    """True when the OS already considers its clock disciplined (NTP/timesyncd).
+    On any error, return False — better to attempt a GPS step than to assume a
+    possibly-wrong clock is good (the step is still gated on the offset)."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        return out.stdout.strip() == "yes"
+    except Exception as exc:  # noqa: BLE001 — best-effort probe, never fatal
+        logger.warning("gps-clock-sync: could not read clock-sync state: {}", exc)
+        return False
+
+
+def _set_system_clock(target: datetime) -> None:
+    """Step the system clock to ``target`` (UTC). No-op unless running as root."""
+    import subprocess
+
+    if os.geteuid() != 0:
+        logger.warning("gps-clock-sync: not root (euid={}), cannot step clock", os.geteuid())
+        return
+    ts = target.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+    # `date -u -s` sets the clock unconditionally; `timedatectl set-time` refuses
+    # while timesyncd is active, which is exactly the no-internet dock case.
+    subprocess.run(["date", "-u", "-s", ts], check=True, timeout=5)
+    logger.warning("gps-clock-sync: stepped system clock to {} UTC", ts)
+
+
+async def _gps_clock_sync(timeout_s: float) -> None:
+    """CLI: best-effort one-shot GPS system-clock discipline at boot (#799)."""
+    from helmlog.clock_sync import gps_boot_clock_sync
+
+    result = await gps_boot_clock_sync(
+        measure_offset=lambda: _measure_gps_offset(timeout_s),
+        is_synchronized=_clock_is_synchronized,
+        set_clock=_set_system_clock,
+        now=lambda: datetime.now(UTC),
+    )
+    logger.info(
+        "gps-clock-sync: {} (offset={})",
+        result.action,
+        f"{result.offset_s:+.1f}s" if result.offset_s is not None else "n/a",
+    )
+
+
 async def _status() -> None:
     """Print row counts and last-seen timestamps for each data table."""
     from helmlog.storage import Storage, StorageConfig
@@ -1627,6 +1698,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="Show DB row counts and last-seen timestamps")
 
+    gcs = sub.add_parser(
+        "gps-clock-sync",
+        help="One-shot: step the system clock to GPS time at boot (best-effort, #799)",
+    )
+    gcs.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help="Seconds to wait for GPS time from Signal K before giving up (default 30)",
+    )
+
     lv = sub.add_parser(
         "link-video",
         help="Link a YouTube video to logged data via a time sync point",
@@ -1795,6 +1877,8 @@ def main() -> None:
                 asyncio.run(_export(args.start, args.end, args.out))
             case "status":
                 asyncio.run(_status())
+            case "gps-clock-sync":
+                asyncio.run(_gps_clock_sync(args.timeout))
             case "link-video":
                 sync_utc_iso = args.start if args.start else args.sync_utc
                 sync_offset = 0.0 if args.start else args.sync_offset

@@ -210,6 +210,16 @@ Each session card has buttons for:
 **"The START RACE button is missing or greyed out"**
 → A race or debrief is already active. Tap the **■ END** button to close it first.
 
+**"A past race shows a clock warning, or its times look off by ~an hour"**
+→ The Pi has no battery clock, so if it booted with no internet *and* before GPS
+  lock, it can start on a wrong time. The logger GPS-corrects the recorded track
+  automatically, and a banner flags any race whose window doesn't match its own
+  data. To prevent it, a boot service (`helmlog-gpsclock`) steps the system clock
+  to GPS time before recording starts — give the Pi a minute with a GPS fix after
+  power-on before starting a race. The navigator can confirm with
+  `systemctl status helmlog-gpsclock` (it runs once at boot). A flagged past race
+  needs a manual time fix — note the race and tell the data admin.
+
 **Emergency note**
 The logger is read-only on the instruments — it cannot affect boat systems.
 If anything breaks in the app, simply close the browser. The boat is fine.

@@ -718,6 +718,32 @@ fi
 #    UV_CACHE_DIR: helmlog has no home dir, so point uv cache to /var/cache.
 # ---------------------------------------------------------------------------
 
+step "Installing helmlog GPS clock-sync one-shot (#799)..."
+# Best-effort: step the system clock to GPS time once at boot, before recording
+# starts, so a Pi that booted before NTP/GPS sync (no RTC, no dock internet)
+# doesn't stamp race boundaries on a wrong host clock. Runs as root so it can set
+# the clock; never blocks boot (TimeoutStartSec, no Requires=). The in-app
+# discipliner + boundary guard remain the safety net if this no-ops.
+sudo tee /etc/systemd/system/helmlog-gpsclock.service > /dev/null << EOF
+[Unit]
+Description=HelmLog GPS system-clock discipline (one-shot at boot)
+After=signalk.service
+Wants=signalk.service
+Before=helmlog.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=${PROJECT_DIR}
+EnvironmentFile=${ENV_FILE}
+Environment=UV_CACHE_DIR=/var/cache/helmlog
+Environment=HOME=/var/cache/helmlog
+ExecStart=${UV_BIN} run --no-sync --project ${PROJECT_DIR} helmlog gps-clock-sync --timeout 30
+TimeoutStartSec=45
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 step "Installing helmlog service..."
 sudo tee /etc/systemd/system/helmlog.service > /dev/null << EOF
 [Unit]
@@ -742,6 +768,7 @@ UMask=0002
 WantedBy=multi-user.target
 EOF
 sudo systemctl daemon-reload
+sudo systemctl enable helmlog-gpsclock.service
 sudo systemctl enable helmlog.service
 
 if sudo systemctl is-active --quiet signalk.service 2>/dev/null; then

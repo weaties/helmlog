@@ -30,6 +30,10 @@ import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 # Defaults (spec Q2). Max tolerated host<->GPS divergence, and how long
 # without a GPS sample before the reference is considered lost.
@@ -178,3 +182,75 @@ def estimate_track_offset_s(
             best_cost = cost
             best_offset = offset
     return best_offset
+
+
+# ---------------------------------------------------------------------------
+# OS-level GPS clock discipline at boot (#799)
+# ---------------------------------------------------------------------------
+#
+# The in-recording-path discipline above corrects *record* timestamps, but a
+# race marked before GPS sync still gets a host-time boundary (the pre-sync
+# residual #797 leaves). The complete fix is to step the *system* clock to GPS
+# time once, at boot, before the recording service starts — so even raw host
+# stamps are right. This orchestration is kept hardware-free: ``main.py`` injects
+# the SK-offset reader, the system-clock setter, and the sync check.
+
+# Don't step the system clock for sub-threshold jitter — only a real boot skew.
+STEP_THRESHOLD_S: float = 10.0
+
+
+def should_step_clock(
+    *, offset_s: float, clock_synchronized: bool, threshold_s: float = STEP_THRESHOLD_S
+) -> bool:
+    """Decide whether to step the system clock to GPS time at boot.
+
+    Step only when the system clock is **not** already synchronized — never
+    fight an authoritative NTP/timesyncd source — and the host↔GPS offset
+    clears ``threshold_s`` so jitter can't trigger a needless step.
+    """
+    if clock_synchronized:
+        return False
+    return abs(offset_s) >= threshold_s
+
+
+@dataclass(frozen=True)
+class BootClockSyncResult:
+    """Outcome of a boot-time GPS clock-sync attempt (for logging/tests)."""
+
+    action: str  # "stepped" | "skipped-synchronized" | "skipped-small" | "no-gps"
+    offset_s: float | None = None
+    target_utc: datetime | None = None
+
+
+async def gps_boot_clock_sync(
+    *,
+    measure_offset: Callable[[], Awaitable[float | None]],
+    is_synchronized: Callable[[], bool],
+    set_clock: Callable[[datetime], None],
+    now: Callable[[], datetime],
+    threshold_s: float = STEP_THRESHOLD_S,
+) -> BootClockSyncResult:
+    """Best-effort: step the system clock to GPS time at boot if it's adrift.
+
+    All side-effecting parts are injected so this stays hardware-free and fully
+    testable: ``measure_offset`` reads the host↔GPS offset from Signal K
+    (``None`` if no GPS reference appears in time), ``is_synchronized`` reports
+    whether the OS clock is already disciplined, ``set_clock`` applies the step,
+    and ``now`` supplies the host time being corrected.
+
+    Never raises and never blocks indefinitely (the injected ``measure_offset``
+    owns the timeout): the in-app discipliner + boundary guard remain the safety
+    net, so a no-op here only forfeits the *system*-clock correction.
+    """
+    offset = await measure_offset()
+    if offset is None:
+        return BootClockSyncResult(action="no-gps")
+    synchronized = is_synchronized()
+    if not should_step_clock(
+        offset_s=offset, clock_synchronized=synchronized, threshold_s=threshold_s
+    ):
+        action = "skipped-synchronized" if synchronized else "skipped-small"
+        return BootClockSyncResult(action=action, offset_s=offset)
+    target = now() + timedelta(seconds=offset)
+    set_clock(target)
+    return BootClockSyncResult(action="stepped", offset_s=offset, target_utc=target)
