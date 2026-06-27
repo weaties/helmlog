@@ -20,16 +20,33 @@ typical instrument work, defeating the goal. Revisit if the file grows
 past ~500 lines or if a slice (likely `domain-racing`) becomes
 self-contained.
 
-## Decision: skip `CLAUDE.md` → `AGENTS.md` symlink
+## Decision: `AGENTS.md` is canonical; `CLAUDE.md` imports it
+
+**Supersedes** the earlier "skip `AGENTS.md`" call below (kept for the record).
+
+**Chose:** keep a single, real `AGENTS.md` as the tool-agnostic source of truth
+and reduce `CLAUDE.md` to an `@AGENTS.md` import plus a short Claude-Code-only
+tail (the `EnterWorktree` tool, the skill catalog, file-based memory).
+
+**Why:** a parallel `CLAUDE.md` and `AGENTS.md` had already drifted — the
+`AGENTS.md` was a thinner, partially stale copy of `CLAUDE.md`'s rules. One
+canonical file removes the drift, and `AGENTS.md` is the cross-agent standard
+(Cursor, Copilot, Codex, Windsurf, Zed all read it), so any agent now works from
+the same conventions. A `@AGENTS.md` import (not a symlink) keeps Claude Code's
+extra mechanics layered on top without duplicating the substance. Done as part
+of bringing the sibling `shiftsimulator` repo to the same convention.
+
+### Earlier decision (superseded): skip `CLAUDE.md` → `AGENTS.md` symlink
 
 **Considered:** symlinking `AGENTS.md → CLAUDE.md` for portability across
 Cursor, Copilot, Codex, Factory, Windsurf, Zed (60k+ repos use the standard).
 
-**Chose:** skip for now.
+**Chose at the time:** skip for now.
 
-**Why:** HelmLog is single-tool (Claude Code) and there's no concrete plan
-to use another agent. The symlink is cheap to add later and adds clutter to
-the repo root today. Revisit if a contributor uses a different agent.
+**Why (at the time):** HelmLog was single-tool (Claude Code) with no concrete
+plan to use another agent; the symlink was cheap to add later and added clutter
+to the repo root. (Reversed above once a real `AGENTS.md` existed and had
+drifted from `CLAUDE.md`.)
 
 ## Decision: third-person skill descriptions — audit pass clean
 

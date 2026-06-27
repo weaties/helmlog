@@ -541,4 +541,4 @@ read the policy or run `/data-license` against the change.
 | Fleet champion pitching adoption | [`guide-champions.md`](guide-champions.md) |
 | Boat owner setting up federation | [`guide-federation.md`](guide-federation.md) |
 | Operator setting up a new Pi | [`bootstrap-new-pi.md`](bootstrap-new-pi.md) |
-| Developer | [`../CONTRIBUTING.md`](../CONTRIBUTING.md), [`../CLAUDE.md`](../CLAUDE.md) |
+| Developer | [`../AGENTS.md`](../AGENTS.md) (canonical conventions), [`../CONTRIBUTING.md`](../CONTRIBUTING.md) |
