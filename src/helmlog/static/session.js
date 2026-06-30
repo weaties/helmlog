@@ -1324,6 +1324,16 @@ function _moveCursorToUtc(utc) {
   const {latLngs, timestamps} = _trackData;
   if (!latLngs.length) return;
   const tMs = utc.getTime();
+  // Outside the GPS track's time span there is no real boat position to show.
+  // The replay scrubber extends ~20 min into the prestart (#712) so video /
+  // audio / gauges can be scrubbed before the gun, but the GPS track almost
+  // always begins at the gun (instruments come online just before racing).
+  // Clamping to an endpoint would falsely park the boat on the green "Start"
+  // dot for that whole pre-gun window — so hide the cursor instead.
+  if (tMs < timestamps[0].getTime() || tMs > timestamps[timestamps.length - 1].getTime()) {
+    if (_map && _map.hasLayer(_trackData.cursor)) _map.removeLayer(_trackData.cursor);
+    return;
+  }
   // Bracket the timestamps
   let hi = _trackLowerBound(tMs);
   if (hi <= 0) { hi = 1; }
