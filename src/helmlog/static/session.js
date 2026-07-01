@@ -5009,8 +5009,21 @@ async function loadPolar() {
       + above + ' bins above, ' + below + ' below'
       + (noBaseline ? ' &middot; ' + noBaseline + ' bins no baseline' : '')
       + ' &middot; ' + data.session_sample_count + ' samples'
-      + rebuildBtn;
+      + rebuildBtn
+      + _polarWindowCaption(data);
   } catch (e) { /* non-fatal */ }
+}
+
+// Small caption showing the racing window this polar was computed over, so the
+// trim (prestart excluded, post-finish auto-detected) is auditable (#812).
+function _polarWindowCaption(data) {
+  if (!data.window_start || !data.window_end) return '';
+  const gun = data.gun_source === 'vakaros' ? 'Vakaros gun' : 'session start';
+  const fin = data.finish_source === 'heuristic' ? 'auto-detected finish' : 'session end';
+  return '<div style="font-size:.7rem;color:var(--text-secondary);margin-top:2px">'
+    + 'Racing window: ' + fmtTime(data.window_start) + '–' + fmtTime(data.window_end)
+    + ' &middot; ' + gun + ' → ' + fin
+    + '</div>';
 }
 
 async function rebuildPolarBaseline() {
