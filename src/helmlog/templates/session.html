@@ -3,6 +3,7 @@
 
 {% block extra_css %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="/static/vendor/highlight-github-dark.min.css?v={{ git_sha }}"/>
 <style>
 .field{background:var(--bg-input);border:1px solid var(--accent-strong);border-radius:6px;color:var(--text-primary)}
 .track-map{height:350px;border-radius:8px;transition:height .15s ease}
@@ -70,7 +71,36 @@
 .comment-author{color:var(--accent);font-weight:600;font-size:.75rem}
 .comment-time{color:var(--text-secondary);font-size:.7rem;margin-left:4px}
 .comment-edited{color:var(--text-secondary);font-size:.65rem;font-style:italic}
-.comment-body{color:var(--text-primary);margin-top:2px;white-space:pre-wrap}
+.comment-body{color:var(--text-primary);margin-top:2px;overflow-wrap:anywhere}
+/* Rendered GitHub-Flavored Markdown in comment bodies (#809). Tight vertical
+   rhythm so a one-liner still reads like a one-liner. */
+.comment-body>*:first-child{margin-top:0}
+.comment-body>*:last-child{margin-bottom:0}
+.comment-body p{margin:.4em 0}
+.comment-body h1,.comment-body h2,.comment-body h3,.comment-body h4,.comment-body h5,.comment-body h6{margin:.6em 0 .3em;line-height:1.25;font-weight:600}
+.comment-body h1{font-size:1.15rem}
+.comment-body h2{font-size:1.05rem}
+.comment-body h3{font-size:.95rem}
+.comment-body h4,.comment-body h5,.comment-body h6{font-size:.85rem}
+.comment-body ul,.comment-body ol{margin:.4em 0;padding-left:1.4em}
+.comment-body li{margin:.15em 0}
+.comment-body a{color:var(--accent);text-decoration:underline}
+.comment-body code{background:var(--bg-input);border-radius:3px;padding:.1em .35em;font-size:.85em;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.comment-body pre{background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:8px 10px;overflow-x:auto;margin:.5em 0}
+.comment-body pre code{background:none;border:0;padding:0;font-size:.8rem;white-space:pre}
+.comment-body blockquote{margin:.5em 0;padding:.1em .8em;border-left:3px solid var(--border);color:var(--text-secondary)}
+.comment-body table{border-collapse:collapse;margin:.5em 0;font-size:.78rem}
+.comment-body th,.comment-body td{border:1px solid var(--border);padding:3px 8px;text-align:left}
+.comment-body th{background:var(--bg-input);font-weight:600}
+.comment-body hr{border:0;border-top:1px solid var(--border);margin:.7em 0}
+.comment-body img{max-width:100%}
+.comment-body .contains-task-list{list-style:none;padding-left:.6em}
+.comment-body .task-list-item-checkbox{margin-right:.4em;vertical-align:middle}
+.comment-body .comment-edit-textarea{width:100%;box-sizing:border-box;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:4px 8px;font-size:.8rem;resize:vertical;min-height:60px;font-family:inherit}
+.comment-body .comment-edit-actions{display:flex;gap:6px;margin-top:4px}
+.btn-edit-comment{background:none;border:1px solid var(--border);color:var(--text-secondary);border-radius:4px;padding:4px 10px;font-size:.72rem;cursor:pointer}
+.btn-edit-comment:hover{border-color:var(--accent);color:var(--accent)}
+.comment-edit-cancel{background:none;color:var(--text-secondary)}
 .thread-form input,.thread-form select,.thread-form textarea{background:var(--bg-input);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:4px 8px;font-size:.8rem;width:100%;box-sizing:border-box}
 .thread-form textarea{resize:vertical;min-height:60px}
 .btn-thread{background:var(--border);color:var(--accent);border:none;border-radius:4px;padding:4px 12px;font-size:.78rem;cursor:pointer}
@@ -552,6 +582,13 @@ body.live-race #session-tags-row{display:none!important}
 <script src="/static/tag-picker.js?v={{ git_sha }}"></script>
 <script src="/static/anchor-picker.js?v={{ git_sha }}"></script>
 <script src="/static/maneuver_viz.js?v={{ git_sha }}"></script>
+<!-- Markdown rendering for comment bodies (#809): vendored, no build step.
+     Load before session.js so `markdownit`, `DOMPurify`, `hljs`, and
+     `markdownitTaskLists` are global when renderMarkdown() first runs. -->
+<script src="/static/vendor/markdown-it.min.js?v={{ git_sha }}"></script>
+<script src="/static/vendor/markdown-it-task-lists.min.js?v={{ git_sha }}"></script>
+<script src="/static/vendor/purify.min.js?v={{ git_sha }}"></script>
+<script src="/static/vendor/highlight.min.js?v={{ git_sha }}"></script>
 <script src="/static/session.js?v={{ git_sha }}"></script>
 <script src="/static/llm.js?v={{ git_sha }}"></script>
 <script>
