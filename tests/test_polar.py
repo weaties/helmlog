@@ -800,8 +800,14 @@ async def test_grade_does_not_block_event_loop(storage: Storage) -> None:
     import asyncio as _asyncio
 
     await _build_baseline_at(storage, bsp=6.0, tws=10.0, twa=45.0)
-    # Larger synthetic session so the sync work is non-trivial.
-    sid = await _seed_session(storage, duration_s=600, bsp=6.0, tws=10.0, twa=45.0)
+    # Larger synthetic session so the sync work is non-trivial. Positions are
+    # omitted so the #812 finish heuristic doesn't trim this unrealistic track
+    # (the synthetic boat sails monotonically away from the start and never
+    # returns); this test only cares that a long session grades fully while the
+    # event loop stays responsive.
+    sid = await _seed_session(
+        storage, duration_s=600, bsp=6.0, tws=10.0, twa=45.0, with_positions=False
+    )
 
     ticks = 0
     stop = False
@@ -1060,3 +1066,21 @@ class TestSessionPolarWindow:
         assert upwind is not None
         assert upwind["mean_bsp"] == pytest.approx(6.0, rel=1e-3)
         assert downwind is None
+
+
+class TestGradeSegmentsWindow:
+    @pytest.mark.asyncio
+    async def test_grading_uses_racing_window(self, storage: Storage) -> None:
+        """Per-segment grading is confined to [gun, finish] (#812): no segment
+        starts before the gun or ends after the detected finish, and the count
+        reflects the ~200 s racing window, not the full 320 s session."""
+        rid, gun, finish = await _seed_windowed_race(
+            storage, prestart_s=60, race_s=200, tail_s=60, with_vakaros=True
+        )
+        segs = await grade_session_segments(storage, rid, segment_seconds=10)
+        assert segs
+        assert segs[0].t_start >= gun
+        assert segs[-1].t_end <= finish + timedelta(seconds=10)
+        # Racing window ≈ 200 s → ~20 segments; the full session (320 s) would be
+        # ~32. Comfortably under 25 confirms prestart + post-finish were trimmed.
+        assert len(segs) < 25

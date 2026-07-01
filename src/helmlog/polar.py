@@ -821,10 +821,12 @@ async def grade_session_segments(
 ) -> list[GradedSegment]:
     """Return per-segment polar grading for a completed session.
 
-    Segments are fixed-width windows over the session's [start_utc, end_utc]
-    range. Each segment carries averaged conditions, the polar target, and
-    a grade label. Results are cached in ``polar_segment_grades`` and
-    invalidated when the polar baseline is rebuilt.
+    Segments are fixed-width windows over the session's effective racing window
+    [gun, finish] (#812) — prestart maneuvering and post-finish sailing are
+    trimmed just as they are for the polar diagram and baseline. Each segment
+    carries averaged conditions, the polar target, and a grade label. Results
+    are cached in ``polar_segment_grades`` and invalidated when the polar
+    baseline is rebuilt.
 
     The CPU-bound segmentation runs in a worker thread (#603) so long sessions
     don't block the event loop for other HTTP requests.
@@ -833,7 +835,9 @@ async def grade_session_segments(
     db = storage._conn()
 
     # Resolve session bounds
-    cur = await db.execute("SELECT start_utc, end_utc FROM races WHERE id = ?", (session_id,))
+    cur = await db.execute(
+        "SELECT start_utc, end_utc, vakaros_session_id FROM races WHERE id = ?", (session_id,)
+    )
     row = await cur.fetchone()
     if row is None or row["end_utc"] is None:
         return []  # req 16
@@ -867,6 +871,24 @@ async def grade_session_segments(
             )
             for r in cached
         ]
+
+    # Cache miss → narrow to the racing window before segmenting so prestart +
+    # post-finish don't get graded (#812). Deferred past the cache check so
+    # cheap cache hits don't pay for the finish heuristic's queries. (Cached
+    # grades from before this change refresh on the next baseline rebuild, which
+    # bumps baseline_version and invalidates the cache.)
+    try:
+        win = await race_window(
+            storage,
+            start_utc=str(row["start_utc"]),
+            end_utc=str(row["end_utc"]),
+            vakaros_session_id=row["vakaros_session_id"],
+        )
+    except ValueError:
+        return []
+    start, end = win.gun, win.finish
+    if end <= start:
+        return []
 
     # Load session window data
     speeds = await storage.query_range("speeds", start, end)
