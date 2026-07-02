@@ -19,16 +19,19 @@
     if (panel) return panel;
     panel = document.createElement("div");
     panel.id = "race-start-widget";
+    // Follow the active theme — use the same surface/border/text tokens as the
+    // page cards. (Previously hardcoded a dark fallback via the nonexistent
+    // --bg-elev var, so the strip stayed black in light themes.)
     panel.style.cssText = [
       "display:none",
       "padding:.5rem 1rem",
-      "background:var(--bg-elev,#1a1d23)",
-      "border:1px solid var(--border,#333)",
+      "background:var(--bg-secondary)",
+      "border:1px solid var(--border)",
       "border-radius:.5rem",
       "margin:.5rem auto",
       "max-width:960px",
       "font-family:inherit",
-      "color:var(--text-primary,#fff)",
+      "color:var(--text-primary)",
     ].join(";");
     panel.innerHTML = `
       <div style="display:flex;gap:1.5rem;align-items:center;flex-wrap:wrap;

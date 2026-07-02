@@ -214,14 +214,17 @@ class SimradTimerRecord:
         [6]    3D=start / 3E=stop / 3F=nearest-minute / 40=reset
 
     Set Timer  (PGN 130845, 14 bytes after reassembly):
-        [0-1]  41 9F        Simrad manufacturer ID
+        [0-1]  41 9F        manufacturer ID
         [2-5]  FF FF FF FF  reserved
-        [6-9]  07 42 00 01  SET command discriminator
-        [10]   minutes
+        [6]    07           SET command marker
+        [7]    42 / C0      vendor variant (42 = Simrad bench, C0 = Triton2)
+        [8-9]  00 01        SET discriminator tail
+        [10]   minutes      (Simrad-confirmed; Triton2 position pending — #789)
         [11-13] 00 00 00    trailing (0xFF = NMEA N/A sentinel)
 
-    Running-state broadcasts (also PGN 130845) carry discriminator 02 00 00 01
-    at [6:10] and decode to None (ignored).
+    Running-state / countdown broadcasts (also PGN 130845) carry byte[6] != 0x07
+    (e.g. 0x02 running-state, or the 0x80/0x23 Triton2 state frames) and decode
+    to None (ignored).
     """
 
     pgn: int
@@ -546,11 +549,33 @@ _SIMRAD_ACTIONS: Final[dict[int, str]] = {
     0x3F: "nearest_minute",
     0x40: "reset",
 }
-_SIMRAD_SET_DISCRIMINATOR: Final[bytes] = bytes([0x07, 0x42, 0x00, 0x01])
+# SET command discriminator. The fork's Simrad bench sent 07 42 00 01; the
+# Corvo Triton2 on-water capture (#789) sent 07 c0 00 01 — byte[7] is a vendor/
+# model variant. We key on byte[6]==0x07 and byte[8:10]==00 01, treating byte[7]
+# as a don't-care, which still excludes the running-state broadcast (byte[6]==
+# 0x02) and the 0x80/0x23 countdown frames (byte[6] not 0x07). See
+# docs/specs/triton2-timer-capture.md for the raw payloads.
+_SIMRAD_SET_B6: Final[int] = 0x07
+_SIMRAD_SET_B8: Final[int] = 0x00
+_SIMRAD_SET_B9: Final[int] = 0x01
 
 
 def _is_simrad(p: bytes) -> bool:
     return len(p) >= 2 and p[0:2] == _SIMRAD_MFR
+
+
+def _is_set_command(data: bytes) -> bool:
+    """True if the reassembled 130845 payload is a SET-duration command.
+
+    Matches both the Simrad (07 42 00 01) and Triton2 (07 c0 00 01) layouts by
+    ignoring the byte[7] vendor variant.
+    """
+    return (
+        len(data) >= 11
+        and data[6] == _SIMRAD_SET_B6
+        and data[8] == _SIMRAD_SET_B8
+        and data[9] == _SIMRAD_SET_B9
+    )
 
 
 def _decode_130850(data: bytes, source: int, ts: datetime) -> SimradTimerRecord | None:
@@ -570,13 +595,19 @@ def _decode_130850(data: bytes, source: int, ts: datetime) -> SimradTimerRecord 
 
 
 def _decode_130845(data: bytes, source: int, ts: datetime) -> SimradTimerRecord | None:
-    """PGN 130845 — Simrad Set Timer (14 bytes).
+    """PGN 130845 — Simrad/B&G Set Timer (14 bytes).
 
-    Running-state broadcasts (discriminator 02 00 00 01) decode to None.
+    Only the SET-duration command decodes; running-state / countdown broadcasts
+    on this PGN (byte[6] != 0x07) decode to None.
+
+    NOTE (#789): the duration is read from byte[10] as on the Simrad bench. The
+    Triton2 SET *discriminator* is confirmed from the on-water capture, but the
+    duration *byte position* is NOT yet confirmed for Triton2 (the two captured
+    SET frames carried 0x00/0x01, which don't map to plausible start lengths).
+    A controlled dockside capture (docs/specs/triton2-timer-capture.md) pins it
+    before this is trusted for headless race creation — hence the gated PR.
     """
-    if not _is_simrad(data) or len(data) < 11:
-        return None
-    if data[6:10] != _SIMRAD_SET_DISCRIMINATOR:
+    if not _is_simrad(data) or not _is_set_command(data):
         return None
     return SimradTimerRecord(
         pgn=PGN_SIMRAD_SET_TIMER,
