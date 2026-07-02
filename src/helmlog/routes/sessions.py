@@ -1220,6 +1220,12 @@ async def api_session_polar(
             "tws_bins": data.tws_bins,
             "twa_bins": data.twa_bins,
             "session_sample_count": data.session_sample_count,
+            # Effective racing window this was computed over (#812) — lets the
+            # panel show that prestart/post-finish were trimmed and how.
+            "window_start": data.window_start.isoformat(),
+            "window_end": data.window_end.isoformat(),
+            "gun_source": data.gun_source,
+            "finish_source": data.finish_source,
         }
     )
 

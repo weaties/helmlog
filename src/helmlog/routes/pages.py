@@ -161,6 +161,7 @@ async def _render_session_page(
             session_slug=race.slug,
             session_url=_canonical_session_url(race.id, race.slug),
             renamed_from=renamed_banner,
+            clock_flag=race.clock_flag,
             grafana_port=request.app.state.race_config.grafana_port,
             grafana_uid=request.app.state.race_config.grafana_uid,
             user_role=user_role,

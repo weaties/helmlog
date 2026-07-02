@@ -21,6 +21,8 @@ from helmlog.polar import (
     GRADE_SUSPICIOUS_AT,
     GRADE_YELLOW_BELOW,
     _compute_twa,
+    _detect_finish_from_track,
+    _distance_m,
     _grade_from_pct,
     _twa_bin,
     _tws_bin,
@@ -28,6 +30,7 @@ from helmlog.polar import (
     get_polar_baseline_version,
     grade_session_segments,
     lookup_polar,
+    race_window,
     session_polar_comparison,
 )
 
@@ -797,8 +800,14 @@ async def test_grade_does_not_block_event_loop(storage: Storage) -> None:
     import asyncio as _asyncio
 
     await _build_baseline_at(storage, bsp=6.0, tws=10.0, twa=45.0)
-    # Larger synthetic session so the sync work is non-trivial.
-    sid = await _seed_session(storage, duration_s=600, bsp=6.0, tws=10.0, twa=45.0)
+    # Larger synthetic session so the sync work is non-trivial. Positions are
+    # omitted so the #812 finish heuristic doesn't trim this unrealistic track
+    # (the synthetic boat sails monotonically away from the start and never
+    # returns); this test only cares that a long session grades fully while the
+    # event loop stays responsive.
+    sid = await _seed_session(
+        storage, duration_s=600, bsp=6.0, tws=10.0, twa=45.0, with_positions=False
+    )
 
     ticks = 0
     stop = False
@@ -819,3 +828,259 @@ async def test_grade_does_not_block_event_loop(storage: Storage) -> None:
     # If the grader held the loop, ticks would be 0-ish. With to_thread the
     # ticker runs freely while the thread computes.
     assert ticks > 10
+
+
+# ---------------------------------------------------------------------------
+# Race window: trim prestart (gun) + post-finish (track heuristic) — #812
+# ---------------------------------------------------------------------------
+
+_WIN_LAT = 37.80
+_WIN_LON = -122.27
+
+
+class TestDistanceHelper:
+    def test_zero_distance(self) -> None:
+        assert _distance_m(_WIN_LAT, _WIN_LON, _WIN_LAT, _WIN_LON) == pytest.approx(0.0)
+
+    def test_known_offset_metres(self) -> None:
+        # ~0.01 deg latitude ≈ 1.11 km.
+        d = _distance_m(_WIN_LAT, _WIN_LON, _WIN_LAT + 0.01, _WIN_LON)
+        assert d == pytest.approx(1113.0, rel=0.02)
+
+
+class TestDetectFinishHeuristic:
+    """Pure backward-scan finish detector (no Storage)."""
+
+    gun = datetime(2024, 7, 1, 12, 0, 0, tzinfo=UTC)
+
+    def _sample(self, offset_s: int, *, near: bool, close_hauled: bool) -> tuple:
+        lat = _WIN_LAT + (0.001 if near else 0.03)  # ~140 m vs ~3.3 km from start
+        twa = 40.0 if close_hauled else 140.0
+        return (self.gun + timedelta(seconds=offset_s), lat, _WIN_LON + 0.001, twa)
+
+    def test_trims_postfinish_tail(self) -> None:
+        end = self.gun + timedelta(seconds=300)
+        samples = [self._sample(t, near=True, close_hauled=True) for t in range(0, 201, 10)]
+        # post-finish: sailed away, downwind
+        samples += [self._sample(t, near=False, close_hauled=False) for t in range(210, 301, 10)]
+        finish, source = _detect_finish_from_track(self.gun, end, _WIN_LAT, _WIN_LON, samples)
+        assert source == "heuristic"
+        assert finish == self.gun + timedelta(seconds=200)
+
+    def test_no_trim_when_tail_shorter_than_threshold(self) -> None:
+        # Close-hauled near start right up to t=295 → only 5 s of tail (< 30 s).
+        end = self.gun + timedelta(seconds=300)
+        samples = [self._sample(t, near=True, close_hauled=True) for t in range(0, 296, 5)]
+        finish, source = _detect_finish_from_track(self.gun, end, _WIN_LAT, _WIN_LON, samples)
+        assert source == "end_utc"
+        assert finish == end
+
+    def test_no_trim_when_finish_would_collapse_window(self) -> None:
+        # Only the first 60 s are close-hauled-near-start; the rest is far/downwind.
+        # Backward scan finds finish at t=60, but 60 s < 120 s min race duration.
+        end = self.gun + timedelta(seconds=300)
+        samples = [self._sample(t, near=True, close_hauled=True) for t in range(0, 61, 10)]
+        samples += [self._sample(t, near=False, close_hauled=False) for t in range(70, 301, 10)]
+        finish, source = _detect_finish_from_track(self.gun, end, _WIN_LAT, _WIN_LON, samples)
+        assert source == "end_utc"
+        assert finish == end
+
+    def test_no_match_falls_back_to_end(self) -> None:
+        # Never close-hauled-near-start → cannot detect a finish.
+        end = self.gun + timedelta(seconds=300)
+        samples = [self._sample(t, near=False, close_hauled=False) for t in range(0, 301, 10)]
+        finish, source = _detect_finish_from_track(self.gun, end, _WIN_LAT, _WIN_LON, samples)
+        assert source == "end_utc"
+        assert finish == end
+
+    def test_empty_samples_falls_back_to_end(self) -> None:
+        end = self.gun + timedelta(seconds=300)
+        finish, source = _detect_finish_from_track(self.gun, end, _WIN_LAT, _WIN_LON, [])
+        assert source == "end_utc"
+        assert finish == end
+
+
+async def _seed_windowed_race(
+    storage: Storage,
+    *,
+    prestart_s: int,
+    race_s: int,
+    tail_s: int,
+    with_vakaros: bool,
+    seq: int = 0,
+) -> tuple[int, datetime, datetime]:
+    """Seed a race with three phases and return (race_id, gun, finish).
+
+    Phases (1 Hz), all with reference-0 (boat) wind so TWA == wind_angle:
+      * pre-start [start_utc, gun): BSP 1.0, TWA 40, near start line
+      * racing    [gun, finish]:    BSP 6.0, TWA 40 (close-hauled), near start
+      * post-race (finish, end]:    BSP 6.5, TWA 140 (running), ~3 km away
+
+    When ``with_vakaros`` the race is Vakaros-matched with a race_start event at
+    the gun, so pre-start is trimmable; otherwise the gun falls back to
+    start_utc (pre-start stays in-window, which is the point of that variant).
+    """
+    db = storage._conn()
+    # Offset each seeded race by seq days so multi-race tests don't overlap in
+    # the (time-ranged, not race_id-filtered) telemetry tables.
+    start_utc = datetime(2024, 8, 1, 18, 0, 0, tzinfo=UTC) + timedelta(days=seq)
+    gun = start_utc + timedelta(seconds=prestart_s)
+    finish = gun + timedelta(seconds=race_s)
+    end = finish + timedelta(seconds=tail_s)
+
+    vid: int | None = None
+    if with_vakaros:
+        await db.execute(
+            "INSERT INTO vakaros_sessions (source_hash, source_file, start_utc,"
+            " end_utc, ingested_at) VALUES (?, ?, ?, ?, ?)",
+            (
+                f"h{seq}",
+                f"v{seq}.csv",
+                start_utc.isoformat(),
+                end.isoformat(),
+                start_utc.isoformat(),
+            ),
+        )
+        vrow = await (
+            await db.execute("SELECT id FROM vakaros_sessions ORDER BY id DESC LIMIT 1")
+        ).fetchone()
+        vid = int(vrow["id"])
+        await db.execute(
+            "INSERT INTO vakaros_race_events (session_id, ts, event_type, timer_value_s)"
+            " VALUES (?, ?, 'race_start', 0)",
+            (vid, gun.isoformat()),
+        )
+
+    await db.execute(
+        "INSERT INTO races (name, event, race_num, date, start_utc, end_utc, vakaros_session_id)"
+        " VALUES (?, 'E', ?, ?, ?, ?, ?)",
+        (
+            f"W{seq}",
+            seq + 1,
+            start_utc.date().isoformat(),
+            start_utc.isoformat(),
+            end.isoformat(),
+            vid,
+        ),
+    )
+    await db.commit()
+    rid = int(
+        (await (await db.execute("SELECT id FROM races ORDER BY id DESC LIMIT 1")).fetchone())["id"]
+    )
+
+    async def _phase(t0: datetime, n: int, bsp: float, twa: float, lat: float, lon: float) -> None:
+        for i in range(n):
+            ts = t0 + timedelta(seconds=i)
+            await storage.write(SpeedRecord(PGN_SPEED_THROUGH_WATER, 5, ts, bsp))
+            await storage.write(WindRecord(PGN_WIND_DATA, 5, ts, 10.0, twa, 0))
+            await storage.write(PositionRecord(PGN_POSITION_RAPID, 5, ts, lat, lon))
+
+    await _phase(start_utc, prestart_s, 1.0, 40.0, _WIN_LAT + 0.001, _WIN_LON + 0.001)
+    await _phase(gun, race_s, 6.0, 40.0, _WIN_LAT + 0.001, _WIN_LON + 0.001)
+    await _phase(
+        finish + timedelta(seconds=1), tail_s, 6.5, 140.0, _WIN_LAT + 0.03, _WIN_LON + 0.03
+    )
+    # The last racing sample is at gun + (race_s - 1) — that's the timestamp the
+    # backward-scan heuristic should land on as the finish.
+    return rid, gun, gun + timedelta(seconds=race_s - 1)
+
+
+class TestRaceWindow:
+    @pytest.mark.asyncio
+    async def test_vakaros_gun_and_heuristic_finish(self, storage: Storage) -> None:
+        rid, gun, finish = await _seed_windowed_race(
+            storage, prestart_s=60, race_s=200, tail_s=60, with_vakaros=True
+        )
+        row = await (
+            await storage._conn().execute(
+                "SELECT start_utc, end_utc, vakaros_session_id FROM races WHERE id = ?", (rid,)
+            )
+        ).fetchone()
+        win = await race_window(
+            storage,
+            start_utc=str(row["start_utc"]),
+            end_utc=str(row["end_utc"]),
+            vakaros_session_id=row["vakaros_session_id"],
+        )
+        assert win.gun_source == "vakaros"
+        assert win.gun == gun
+        assert win.finish_source == "heuristic"
+        assert win.finish == finish
+
+    @pytest.mark.asyncio
+    async def test_no_vakaros_gun_falls_back_to_start_utc(self, storage: Storage) -> None:
+        rid, _gun, finish = await _seed_windowed_race(
+            storage, prestart_s=0, race_s=200, tail_s=60, with_vakaros=False
+        )
+        row = await (
+            await storage._conn().execute(
+                "SELECT start_utc, end_utc, vakaros_session_id FROM races WHERE id = ?", (rid,)
+            )
+        ).fetchone()
+        win = await race_window(
+            storage,
+            start_utc=str(row["start_utc"]),
+            end_utc=str(row["end_utc"]),
+            vakaros_session_id=row["vakaros_session_id"],
+        )
+        assert win.gun_source == "start_utc"
+        assert win.finish_source == "heuristic"
+        assert win.finish == finish
+
+
+class TestSessionPolarWindow:
+    @pytest.mark.asyncio
+    async def test_comparison_excludes_prestart_and_postfinish(self, storage: Storage) -> None:
+        """Only racing-phase samples (BSP 6.0, close-hauled) should bin. The
+        pre-start (BSP 1.0) and post-finish (downwind BSP 6.5) phases must be
+        trimmed by the gun and the finish heuristic respectively."""
+        rid, gun, finish = await _seed_windowed_race(
+            storage, prestart_s=60, race_s=200, tail_s=60, with_vakaros=True
+        )
+        data = await session_polar_comparison(storage, rid)
+        assert data is not None
+        assert data.window_start == gun
+        assert data.window_end == finish
+        assert data.gun_source == "vakaros"
+        assert data.finish_source == "heuristic"
+        # Every cell must be the racing bin: upwind, ~6.0 kt. No 1.0 (prestart)
+        # and no downwind (140°) cell.
+        assert data.cells
+        for c in data.cells:
+            assert c.point_of_sail == "upwind"
+            assert c.session_mean_bsp == pytest.approx(6.0, rel=1e-3)
+
+    @pytest.mark.asyncio
+    async def test_baseline_excludes_postfinish_tail(self, storage: Storage) -> None:
+        """Three Vakaros races, each with a downwind post-finish tail. The
+        heuristic must trim the tail so the baseline mean reflects racing only
+        (6.0), not a blend with the 6.5 kt post-finish running."""
+        for seq in range(3):
+            await _seed_windowed_race(
+                storage, prestart_s=60, race_s=200, tail_s=60, with_vakaros=True, seq=seq
+            )
+        await build_polar_baseline(storage)
+        # Racing was TWA 40 upwind; the post-finish TWA-140 bin must not exist.
+        upwind = await storage.get_polar_point(_tws_bin(10.0), _twa_bin(40.0))
+        downwind = await storage.get_polar_point(_tws_bin(10.0), _twa_bin(140.0))
+        assert upwind is not None
+        assert upwind["mean_bsp"] == pytest.approx(6.0, rel=1e-3)
+        assert downwind is None
+
+
+class TestGradeSegmentsWindow:
+    @pytest.mark.asyncio
+    async def test_grading_uses_racing_window(self, storage: Storage) -> None:
+        """Per-segment grading is confined to [gun, finish] (#812): no segment
+        starts before the gun or ends after the detected finish, and the count
+        reflects the ~200 s racing window, not the full 320 s session."""
+        rid, gun, finish = await _seed_windowed_race(
+            storage, prestart_s=60, race_s=200, tail_s=60, with_vakaros=True
+        )
+        segs = await grade_session_segments(storage, rid, segment_seconds=10)
+        assert segs
+        assert segs[0].t_start >= gun
+        assert segs[-1].t_end <= finish + timedelta(seconds=10)
+        # Racing window ≈ 200 s → ~20 segments; the full session (320 s) would be
+        # ~32. Comfortably under 25 confirms prestart + post-finish were trimmed.
+        assert len(segs) < 25

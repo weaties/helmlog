@@ -119,6 +119,188 @@ def _point_of_sail(abs_twa_deg: float) -> PointOfSail:
 
 
 # ---------------------------------------------------------------------------
+# Race window: trim prestart + post-finish so polars only see racing data (#812)
+# ---------------------------------------------------------------------------
+#
+# The polar diagram and the baseline must only see data from when we were
+# actually racing. Prestart maneuvering and post-finish sailing otherwise bias
+# both the per-race comparison and the shared baseline.
+#
+# Gun: the Vakaros ``race_start`` event when the race is Vakaros-matched, else
+# ``start_utc`` (which the 5-4-1-0 start-timer FSM already anchors to the gun,
+# #644, when the crew runs the timer).
+#
+# Finish: no device event is trusted here, so we detect it from the track. For
+# a windward/leeward course the finish is an upwind finish by the committee
+# boat; after crossing, the boat bears away and sails off. Walking backward
+# from the session end, the finish is the last moment we were close-hauled in
+# the vicinity of the start area. The finish line sits just past the RC, so the
+# vicinity radius is deliberately generous.
+
+# ≤ this absolute TWA (deg) counts as close-hauled / beating.
+_FINISH_CLOSE_HAULED_MAX_ABS_TWA: float = 55.0
+# "vicinity of the start" radius (m); generous so the finish just past the RC
+# still counts.
+_FINISH_VICINITY_RADIUS_M: float = 500.0
+# Only trim when the post-finish tail is worth trimming.
+_FINISH_MIN_TAIL_TRIM_S: float = 30.0
+# Never collapse the racing window below this — guards against a finish detected
+# too early (e.g. an upwind pass near the line mid-race).
+_FINISH_MIN_RACE_DURATION_S: float = 120.0
+
+GunSource = Literal["vakaros", "start_utc"]
+FinishSource = Literal["heuristic", "end_utc"]
+
+
+@dataclass(frozen=True)
+class RaceWindow:
+    """Effective racing window [gun, finish] plus the provenance of each edge."""
+
+    gun: datetime
+    finish: datetime
+    gun_source: GunSource
+    finish_source: FinishSource
+
+
+def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in metres (haversine)."""
+    r = 6_371_000.0
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlambda / 2) ** 2
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _detect_finish_from_track(
+    gun: datetime,
+    end: datetime,
+    start_lat: float,
+    start_lon: float,
+    samples: list[tuple[datetime, float, float, float]],
+) -> tuple[datetime, FinishSource]:
+    """Backward-scan finish heuristic.
+
+    ``samples`` is ``(ts, lat, lon, abs_twa)`` sorted ascending by ts, covering
+    ``[gun, end]``. Walking backward, the finish is the latest sample where the
+    boat was close-hauled *and* within the start vicinity — i.e. the last beat
+    to the finish by the committee boat, before it bore away and sailed off.
+
+    Returns ``(finish_ts, source)``. Falls back to ``(end, "end_utc")`` when no
+    plausible finish is found or a guardrail rejects the trim (tail too short to
+    bother, or the detected finish would collapse the racing window).
+    """
+    finish_ts: datetime | None = None
+    for ts, lat, lon, abs_twa in reversed(samples):
+        if ts <= gun or ts > end:
+            continue
+        if (
+            abs_twa <= _FINISH_CLOSE_HAULED_MAX_ABS_TWA
+            and _distance_m(lat, lon, start_lat, start_lon) <= _FINISH_VICINITY_RADIUS_M
+        ):
+            finish_ts = ts
+            break
+    if finish_ts is None:
+        return end, "end_utc"
+    if (end - finish_ts).total_seconds() < _FINISH_MIN_TAIL_TRIM_S:
+        return end, "end_utc"
+    if (finish_ts - gun).total_seconds() < _FINISH_MIN_RACE_DURATION_S:
+        return end, "end_utc"
+    return finish_ts, "heuristic"
+
+
+async def race_window(
+    storage: Storage,
+    *,
+    start_utc: str,
+    end_utc: str,
+    vakaros_session_id: int | None,
+) -> RaceWindow:
+    """Resolve the effective racing window [gun, finish] for one race.
+
+    ``start_utc`` / ``end_utc`` are the race row's ISO timestamps; the caller is
+    responsible for ensuring ``end_utc`` is non-null. Raises ``ValueError`` on
+    unparseable timestamps (callers already guard those).
+    """
+    db = storage._conn()
+    start = datetime.fromisoformat(str(start_utc)).replace(tzinfo=UTC)
+    end = datetime.fromisoformat(str(end_utc)).replace(tzinfo=UTC)
+
+    # --- Gun: prefer the Vakaros race_start event (#536) ---
+    gun = start
+    gun_source: GunSource = "start_utc"
+    if vakaros_session_id is not None:
+        gun_cur = await db.execute(
+            "SELECT vre.ts FROM vakaros_race_events vre"
+            " WHERE vre.session_id = ? AND vre.event_type = 'race_start'"
+            "   AND vre.ts BETWEEN ? AND ?"
+            " ORDER BY vre.ts DESC LIMIT 1",
+            (vakaros_session_id, start_utc, end_utc),
+        )
+        gun_row = await gun_cur.fetchone()
+        if gun_row is not None:
+            with contextlib.suppress(ValueError):
+                gun = datetime.fromisoformat(str(gun_row["ts"])).replace(tzinfo=UTC)
+                gun_source = "vakaros"
+
+    # --- Finish: track heuristic over [gun, end] ---
+    # Defensive: a single race with odd data must never abort a baseline build,
+    # so any failure falls back to end_utc (the pre-#812 behaviour).
+    finish: datetime = end
+    finish_source: FinishSource = "end_utc"
+    try:
+        finish, finish_source = await _detect_finish(storage, gun, end)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Polar: finish heuristic failed, using end_utc: {}", exc)
+    return RaceWindow(gun=gun, finish=finish, gun_source=gun_source, finish_source=finish_source)
+
+
+async def _detect_finish(
+    storage: Storage, gun: datetime, end: datetime
+) -> tuple[datetime, FinishSource]:
+    """Fetch track + wind over [gun, end], build (ts, lat, lon, abs_twa) samples,
+    and hand them to the pure ``_detect_finish_from_track`` heuristic."""
+    positions = await storage.query_range("positions", gun, end)
+    if not positions:
+        return end, "end_utc"
+    winds = await storage.query_range("winds", gun, end)
+    headings = await storage.query_range("headings", gun, end)
+
+    hdg_by_s: dict[str, dict[str, Any]] = {}
+    for h in headings:
+        hdg_by_s.setdefault(str(h["ts"])[:19], h)
+    tw_by_s: dict[str, dict[str, Any]] = {}
+    for w in winds:
+        if int(w.get("reference", -1)) not in (_WIND_REF_BOAT, _WIND_REF_NORTH):
+            continue
+        tw_by_s.setdefault(str(w["ts"])[:19], w)
+
+    # First fix at/after the gun marks the start area (positions are ts-ordered).
+    start_lat = float(positions[0]["latitude_deg"])
+    start_lon = float(positions[0]["longitude_deg"])
+
+    samples: list[tuple[datetime, float, float, float]] = []
+    for p in positions:
+        wind_row = tw_by_s.get(str(p["ts"])[:19])
+        if wind_row is None:
+            continue
+        hdg_row = hdg_by_s.get(str(p["ts"])[:19])
+        heading = float(hdg_row["heading_deg"]) if hdg_row else None
+        twa = _compute_twa(
+            float(wind_row["wind_angle_deg"]), int(wind_row.get("reference", -1)), heading
+        )
+        if twa is None:
+            continue
+        ts = datetime.fromisoformat(str(p["ts"])).replace(tzinfo=UTC)
+        samples.append((ts, float(p["latitude_deg"]), float(p["longitude_deg"]), twa))
+
+    if not samples:
+        return end, "end_utc"
+    return _detect_finish_from_track(gun, end, start_lat, start_lon, samples)
+
+
+# ---------------------------------------------------------------------------
 # Baseline builder
 # ---------------------------------------------------------------------------
 
@@ -154,29 +336,21 @@ async def build_polar_baseline(storage: Storage, min_sessions: int = 3) -> int:
 
     for race_row in races:
         race_id = int(race_row["id"])
+        # Narrow to the effective racing window [gun, finish] so pre-start
+        # maneuvering (#536) and post-finish sailing (#812) don't bias the
+        # baseline. gun = Vakaros race_start / start_utc; finish = track
+        # heuristic / end_utc.
         try:
-            start = datetime.fromisoformat(str(race_row["start_utc"])).replace(tzinfo=UTC)
-            end = datetime.fromisoformat(str(race_row["end_utc"])).replace(tzinfo=UTC)
+            win = await race_window(
+                storage,
+                start_utc=str(race_row["start_utc"]),
+                end_utc=str(race_row["end_utc"]),
+                vakaros_session_id=race_row["vakaros_session_id"],
+            )
         except ValueError:
             logger.warning("Polar: skipping race {} — bad timestamps", race_id)
             continue
-
-        # Prefer the Vakaros race_start event as the effective gun for this
-        # race; fall back to start_utc when no Vakaros match is available.
-        # Skips pre-start maneuvering from the baseline (#536).
-        vakaros_sid = race_row["vakaros_session_id"]
-        if vakaros_sid is not None:
-            gun_cur = await db.execute(
-                "SELECT vre.ts FROM vakaros_race_events vre"
-                " WHERE vre.session_id = ? AND vre.event_type = 'race_start'"
-                "   AND vre.ts BETWEEN ? AND ?"
-                " ORDER BY vre.ts DESC LIMIT 1",
-                (vakaros_sid, race_row["start_utc"], race_row["end_utc"]),
-            )
-            gun_row = await gun_cur.fetchone()
-            if gun_row is not None:
-                with contextlib.suppress(ValueError):
-                    start = datetime.fromisoformat(str(gun_row["ts"])).replace(tzinfo=UTC)
+        start, end = win.gun, win.finish
 
         speeds = await storage.query_range("speeds", start, end)
         winds = await storage.query_range("winds", start, end)
@@ -324,6 +498,12 @@ class SessionPolarData:
     tws_bins: list[int]
     twa_bins: list[int]
     session_sample_count: int
+    # Effective racing window this comparison was computed over, plus how each
+    # edge was resolved — so the UI can show the trim is honest (#812).
+    window_start: datetime
+    window_end: datetime
+    gun_source: GunSource
+    finish_source: FinishSource
 
 
 async def session_polar_comparison(
@@ -332,21 +512,32 @@ async def session_polar_comparison(
 ) -> SessionPolarData | None:
     """Compare a session's BSP performance against the polar baseline.
 
+    Only data from the effective racing window [gun, finish] is used, so
+    prestart maneuvering and post-finish sailing don't skew the comparison
+    (#812).
+
     Returns None if the session doesn't exist or hasn't ended.
     Returns a SessionPolarData with empty cells if no instrument data is available.
     """
     db = storage._conn()
 
-    cur = await db.execute("SELECT start_utc, end_utc FROM races WHERE id = ?", (session_id,))
+    cur = await db.execute(
+        "SELECT start_utc, end_utc, vakaros_session_id FROM races WHERE id = ?", (session_id,)
+    )
     row = await cur.fetchone()
     if row is None or row["end_utc"] is None:
         return None
 
     try:
-        start = datetime.fromisoformat(str(row["start_utc"])).replace(tzinfo=UTC)
-        end = datetime.fromisoformat(str(row["end_utc"])).replace(tzinfo=UTC)
+        win = await race_window(
+            storage,
+            start_utc=str(row["start_utc"]),
+            end_utc=str(row["end_utc"]),
+            vakaros_session_id=row["vakaros_session_id"],
+        )
     except ValueError:
         return None
+    start, end = win.gun, win.finish
 
     # Load instrument data for this session
     speeds = await storage.query_range("speeds", start, end)
@@ -440,6 +631,10 @@ async def session_polar_comparison(
         tws_bins=tws_bins,
         twa_bins=twa_bins,
         session_sample_count=total_samples,
+        window_start=win.gun,
+        window_end=win.finish,
+        gun_source=win.gun_source,
+        finish_source=win.finish_source,
     )
 
 
@@ -626,10 +821,12 @@ async def grade_session_segments(
 ) -> list[GradedSegment]:
     """Return per-segment polar grading for a completed session.
 
-    Segments are fixed-width windows over the session's [start_utc, end_utc]
-    range. Each segment carries averaged conditions, the polar target, and
-    a grade label. Results are cached in ``polar_segment_grades`` and
-    invalidated when the polar baseline is rebuilt.
+    Segments are fixed-width windows over the session's effective racing window
+    [gun, finish] (#812) — prestart maneuvering and post-finish sailing are
+    trimmed just as they are for the polar diagram and baseline. Each segment
+    carries averaged conditions, the polar target, and a grade label. Results
+    are cached in ``polar_segment_grades`` and invalidated when the polar
+    baseline is rebuilt.
 
     The CPU-bound segmentation runs in a worker thread (#603) so long sessions
     don't block the event loop for other HTTP requests.
@@ -638,7 +835,9 @@ async def grade_session_segments(
     db = storage._conn()
 
     # Resolve session bounds
-    cur = await db.execute("SELECT start_utc, end_utc FROM races WHERE id = ?", (session_id,))
+    cur = await db.execute(
+        "SELECT start_utc, end_utc, vakaros_session_id FROM races WHERE id = ?", (session_id,)
+    )
     row = await cur.fetchone()
     if row is None or row["end_utc"] is None:
         return []  # req 16
@@ -672,6 +871,24 @@ async def grade_session_segments(
             )
             for r in cached
         ]
+
+    # Cache miss → narrow to the racing window before segmenting so prestart +
+    # post-finish don't get graded (#812). Deferred past the cache check so
+    # cheap cache hits don't pay for the finish heuristic's queries. (Cached
+    # grades from before this change refresh on the next baseline rebuild, which
+    # bumps baseline_version and invalidates the cache.)
+    try:
+        win = await race_window(
+            storage,
+            start_utc=str(row["start_utc"]),
+            end_utc=str(row["end_utc"]),
+            vakaros_session_id=row["vakaros_session_id"],
+        )
+    except ValueError:
+        return []
+    start, end = win.gun, win.finish
+    if end <= start:
+        return []
 
     # Load session window data
     speeds = await storage.query_range("speeds", start, end)

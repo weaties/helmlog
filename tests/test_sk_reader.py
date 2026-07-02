@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import json
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
@@ -794,3 +794,73 @@ class TestAuthPlumbing:
         assert len(captured_uris) >= 1
         assert "token=" not in captured_uris[0]
         assert captured_uris[0].endswith("subscribe=all")
+
+
+# ---------------------------------------------------------------------------
+# TestClockDiscipline — GPS-disciplined record timestamps (#794)
+# ---------------------------------------------------------------------------
+
+
+class TestClockDiscipline:
+    """process_delta routes record timestamps through a ClockDiscipliner."""
+
+    @staticmethod
+    def _gps_pos_delta(host_ts: str, gps_dt: str, pos: dict[str, float]) -> str:
+        # One delta carrying GPS time and a position fix at the same host time.
+        return json.dumps(
+            {
+                "context": "vessels.self",
+                "updates": [
+                    {
+                        "timestamp": host_ts,
+                        "values": [
+                            {"path": "navigation.datetime", "value": gps_dt},
+                            {"path": "navigation.position", "value": pos},
+                        ],
+                    }
+                ],
+            }
+        )
+
+    def test_no_clock_uses_host_timestamp(self) -> None:
+        # Without a discipliner, behaviour is unchanged: host timestamp wins.
+        recs = process_delta(_delta("navigation.headingTrue", math.pi), {})
+        assert recs[0].timestamp == _TS_DT
+
+    def test_host_clock_slow_records_disciplined_to_gps(self) -> None:
+        # Host clock 1h slow vs GPS (the race-201 condition).
+        from helmlog.clock_sync import ClockFlag
+        from helmlog.sk_reader import ClockDiscipliner
+
+        clock = ClockDiscipliner()
+        pos = {"latitude": 47.68, "longitude": -122.41}
+        rec = None
+        for i in range(6):
+            host = datetime(2026, 6, 16, 0, 27, i, tzinfo=UTC)
+            gps = host + timedelta(seconds=3600)
+            out = process_delta(
+                self._gps_pos_delta(host.isoformat(), gps.isoformat(), pos),
+                {},
+                clock=clock,
+            )
+            rec = next(r for r in out if isinstance(r, PositionRecord))
+        assert clock.flag is ClockFlag.CORRECTED
+        # Position is stamped at true (GPS) time, ~1h ahead of the host clock.
+        assert rec is not None
+        assert rec.timestamp.hour == 1  # 00:27 host -> 01:27 GPS-disciplined
+
+    def test_synced_clock_leaves_timestamp_untouched(self) -> None:
+        from helmlog.clock_sync import ClockFlag
+        from helmlog.sk_reader import ClockDiscipliner
+
+        clock = ClockDiscipliner()
+        pos = {"latitude": 47.68, "longitude": -122.41}
+        for i in range(6):
+            host = datetime(2026, 6, 16, 1, 30, i, tzinfo=UTC)
+            gps = host + timedelta(seconds=1)  # within SKEW_OK
+            process_delta(
+                self._gps_pos_delta(host.isoformat(), gps.isoformat(), pos),
+                {},
+                clock=clock,
+            )
+        assert clock.flag is ClockFlag.SYNCED

@@ -102,11 +102,16 @@ document.addEventListener('DOMContentLoaded', function () {
 
 let _isDeveloper = false;
 let _userRole = 'viewer';
+// Current user's id, captured from /api/me so the UI can show creator-only
+// affordances (e.g. the comment edit control, #809). null until initNav resolves
+// or when unauthenticated.
+let _currentUserId = null;
 
 function initNav() {
   fetch('/api/me').then(r => r.json()).then(u => {
     _isDeveloper = !!u.is_developer;
     _userRole = u.role || 'viewer';
+    _currentUserId = u.id != null ? u.id : null;
     if (u.role === 'admin') {
       document.querySelectorAll('.admin-link').forEach(el => el.style.setProperty('display', 'inline', 'important'));
     }

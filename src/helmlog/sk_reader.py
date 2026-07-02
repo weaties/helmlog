@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 from websockets.asyncio.client import connect as _ws_connect
 
+from helmlog.clock_sync import ClockDiscipliner, ClockFlag
 from helmlog.nmea2000 import (
     PGN_ATTITUDE,
     PGN_COG_SOG_RAPID,
@@ -185,8 +186,38 @@ _PAIR: dict[str, Callable[[dict[str, float], datetime], PGNRecord | None]] = {
 # ---------------------------------------------------------------------------
 
 
+# Signal K path carrying GPS-authoritative UTC (PGN 126992 / 129033). Its
+# *value* comes from the GPS; the update's *timestamp* is the host (SK server)
+# clock — comparing the two yields the host<->GPS offset (#794).
+_GPS_TIME_PATH = "navigation.datetime"
+
+
+def _parse_update_ts(update: dict[str, Any]) -> datetime:
+    """Host timestamp of a Signal K update, falling back to wall-clock now."""
+    ts_str: str = update.get("timestamp", "")
+    try:
+        return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return datetime.now(UTC)
+
+
+def _parse_gps_dt(value: object) -> datetime | None:
+    """Parse a ``navigation.datetime`` value (ISO 8601 GPS time) to aware UTC."""
+    if not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 def process_delta(
-    raw: str, buf: dict[str, float], *, self_context: str | None = None
+    raw: str,
+    buf: dict[str, float],
+    *,
+    self_context: str | None = None,
+    clock: ClockDiscipliner | None = None,
 ) -> list[PGNRecord]:
     """Parse a Signal K delta message; return any records it produces.
 
@@ -197,6 +228,10 @@ def process_delta(
     *self_context* is the resolved self-vessel context from the SK API
     (e.g. ``"vessels.urn:mrn:signalk:uuid:..."``) so UUID-style contexts are
     accepted when they match.
+
+    *clock*, when supplied, GPS-disciplines every emitted record timestamp:
+    ``navigation.datetime`` values feed :meth:`ClockDiscipliner.observe` and
+    record timestamps are routed through :meth:`ClockDiscipliner.apply` (#794).
     """
     try:
         delta: Any = json.loads(raw)
@@ -217,12 +252,21 @@ def process_delta(
         logger.warning("SK: rejecting non-self delta (context={!r})", context)
         return []
 
+    # Pre-scan for GPS time so this delta's records are disciplined with the
+    # offset it carries (a delta may hold navigation.datetime alongside a fix).
+    if clock is not None:
+        for update in delta.get("updates", []):
+            host_ts = _parse_update_ts(update)
+            for entry in update.get("values", []):
+                if entry.get("path") == _GPS_TIME_PATH:
+                    gps_ts = _parse_gps_dt(entry.get("value"))
+                    if gps_ts is not None:
+                        clock.observe(host_ts, gps_ts)
+
     for update in delta.get("updates", []):
-        ts_str: str = update.get("timestamp", "")
-        try:
-            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
-            ts = datetime.now(UTC)
+        ts = _parse_update_ts(update)
+        if clock is not None:
+            ts = clock.apply(ts)
 
         # Per-update Signal K source label (e.g. "n2k.0.130577.0"). Hashed
         # to an int so position rows from different physical GPS antennas
@@ -247,6 +291,10 @@ def process_delta(
             # Block AIS-related paths (#208)
             if "ais" in path.lower() or path.startswith("vessels.urn:"):
                 logger.warning("SK: rejecting AIS/other-vessel path {!r}", path)
+                continue
+
+            # GPS time: consumed by the clock pre-scan above, not a record.
+            if path == _GPS_TIME_PATH:
                 continue
 
             if path == "navigation.position":
@@ -334,6 +382,18 @@ class SKReader:
         self._buf: dict[str, float] = {}
         self._self_context: str | None = None
         self._token: str | None = None
+        self._clock = ClockDiscipliner()
+        self._clock_flag = ClockFlag.UNVERIFIED
+
+    @property
+    def clock_flag(self) -> ClockFlag:
+        """Current GPS-clock provenance for the session being recorded (#794)."""
+        return self._clock_flag
+
+    @property
+    def clock_offset_s(self) -> float:
+        """Smoothed host<->GPS offset in seconds (0.0 until a GPS ref exists)."""
+        return self._clock.offset_s
 
     def __aiter__(self) -> AsyncIterator[PGNRecord]:
         return self._stream()
@@ -431,9 +491,20 @@ class SKReader:
                     logger.info("SK: connected")
                     async for raw in ws:
                         for record in process_delta(
-                            str(raw), self._buf, self_context=self._self_context
+                            str(raw),
+                            self._buf,
+                            self_context=self._self_context,
+                            clock=self._clock,
                         ):
                             yield record
+                        if self._clock.flag is not self._clock_flag:
+                            logger.warning(
+                                "SK: clock provenance {} -> {} (offset {:+.1f}s)",
+                                self._clock_flag.value,
+                                self._clock.flag.value,
+                                self._clock.offset_s,
+                            )
+                            self._clock_flag = self._clock.flag
             except asyncio.CancelledError:
                 logger.info("SK: cancelled — stopping")
                 raise

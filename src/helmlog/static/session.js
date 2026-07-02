@@ -1324,6 +1324,16 @@ function _moveCursorToUtc(utc) {
   const {latLngs, timestamps} = _trackData;
   if (!latLngs.length) return;
   const tMs = utc.getTime();
+  // Outside the GPS track's time span there is no real boat position to show.
+  // The replay scrubber extends ~20 min into the prestart (#712) so video /
+  // audio / gauges can be scrubbed before the gun, but the GPS track almost
+  // always begins at the gun (instruments come online just before racing).
+  // Clamping to an endpoint would falsely park the boat on the green "Start"
+  // dot for that whole pre-gun window — so hide the cursor instead.
+  if (tMs < timestamps[0].getTime() || tMs > timestamps[timestamps.length - 1].getTime()) {
+    if (_map && _map.hasLayer(_trackData.cursor)) _map.removeLayer(_trackData.cursor);
+    return;
+  }
   // Bracket the timestamps
   let hi = _trackLowerBound(tMs);
   if (hi <= 0) { hi = 1; }
@@ -5009,8 +5019,21 @@ async function loadPolar() {
       + above + ' bins above, ' + below + ' below'
       + (noBaseline ? ' &middot; ' + noBaseline + ' bins no baseline' : '')
       + ' &middot; ' + data.session_sample_count + ' samples'
-      + rebuildBtn;
+      + rebuildBtn
+      + _polarWindowCaption(data);
   } catch (e) { /* non-fatal */ }
+}
+
+// Small caption showing the racing window this polar was computed over, so the
+// trim (prestart excluded, post-finish auto-detected) is auditable (#812).
+function _polarWindowCaption(data) {
+  if (!data.window_start || !data.window_end) return '';
+  const gun = data.gun_source === 'vakaros' ? 'Vakaros gun' : 'session start';
+  const fin = data.finish_source === 'heuristic' ? 'auto-detected finish' : 'session end';
+  return '<div style="font-size:.7rem;color:var(--text-secondary);margin-top:2px">'
+    + 'Racing window: ' + fmtTime(data.window_start) + '–' + fmtTime(data.window_end)
+    + ' &middot; ' + gun + ' → ' + fin
+    + '</div>';
 }
 
 async function rebuildPolarBaseline() {
@@ -7279,7 +7302,11 @@ function _setFocusedMoment(id) {
 function _threadTitle(t) {
   if (t.title) return esc(t.title);
   const body = t.first_comment_body || (t.comments && t.comments.length ? t.comments[0].body : null);
-  if (body) return esc(body.length > 60 ? body.slice(0, 60) + '\u2026' : body);
+  if (body) {
+    // Titles/previews are plain text \u2014 strip markdown, don't render it (#809).
+    const plain = stripMarkdown(body);
+    return esc(plain.length > 60 ? plain.slice(0, 60) + '\u2026' : plain);
+  }
   return 'Thread #' + t.id;
 }
 
@@ -7680,7 +7707,8 @@ async function _loadMarkerPreview(threadId) {
   }
   el.innerHTML = comments.map(c => {
     const a = c.author_name || c.author_email || 'Crew Member';
-    const body = c.body.length > 100 ? c.body.slice(0, 100) + '\u2026' : c.body;
+    const plain = stripMarkdown(c.body);
+    const body = plain.length > 100 ? plain.slice(0, 100) + '\u2026' : plain;
     return '<div style="margin-top:4px;font-size:.72rem;border-left:2px solid ' + cssVar('--border') + ';padding-left:6px">'
       + '<span style="color:' + cssVar('--accent') + ';font-weight:600">' + esc(a) + '</span> '
       + '<span style="color:var(--text-primary)">' + esc(body) + '</span></div>';
@@ -7813,12 +7841,21 @@ async function openThread(threadId, scrollToCommentId) {
   const commentsHtml = (t.comments || []).map(c => {
     const author = c.author_name || c.author_email || 'Crew Member';
     const edited = c.edited_at ? ' <span class="comment-edited">(edited)</span>' : '';
-    return '<div class="comment-item" id="comment-' + c.id + '">'
+    // Show the edit control only to the comment's author or an admin \u2014 the
+    // backend enforces the same rule (routes/comments.py). A moment's body is
+    // its first comment, so this uniformly covers the original post and replies.
+    const canEdit = (c.author != null && c.author === _currentUserId) || _userRole === 'admin';
+    const editBtn = canEdit
+      ? ' <button class="btn-edit-comment" title="Edit comment" '
+        + 'onclick="editComment(' + t.id + ',' + c.id + ')">\u270e</button>'
+      : '';
+    return '<div class="comment-item" id="comment-' + c.id + '" data-raw="' + esc(c.body) + '">'
       + '<span class="comment-author">' + esc(author) + '</span>'
       + '<span class="comment-time">' + fmtTime(c.created_at) + '</span>' + edited
       + ' <button class="btn-copy-link" title="Copy link to this comment" '
       + 'onclick="copyThreadLink(' + t.id + ',' + c.id + ',this)">\ud83d\udd17</button>'
-      + '<div class="comment-body">' + _renderMentions(esc(c.body)) + '</div>'
+      + editBtn
+      + '<div class="comment-body">' + renderMarkdown(c.body) + '</div>'
       + '</div>';
   }).join('');
   const copyThreadBtn = '<button class="btn-copy-link" title="Copy link to this moment" '
@@ -8181,6 +8218,61 @@ async function submitReply(threadId) {
   openThread(threadId);
 }
 
+// ---------------------------------------------------------------------------
+// Comment editing (#809) — author-or-admin, in-place textarea over the body.
+// The raw markdown is stashed on the comment element's data-raw attribute at
+// render time so edit/cancel need no extra fetch.
+// ---------------------------------------------------------------------------
+
+function editComment(momentId, commentId) {
+  const item = document.getElementById('comment-' + commentId);
+  const bodyEl = item && item.querySelector('.comment-body');
+  if (!bodyEl) return;
+  if (item.querySelector('.comment-edit-textarea')) return;  // already editing
+  const raw = item.dataset.raw || '';
+  const editBtn = item.querySelector('.btn-edit-comment');
+  if (editBtn) editBtn.style.display = 'none';
+  bodyEl.innerHTML = '';
+  const ta = document.createElement('textarea');
+  ta.className = 'comment-edit-textarea';
+  ta.value = raw;
+  bodyEl.appendChild(ta);
+  const actions = document.createElement('div');
+  actions.className = 'comment-edit-actions';
+  actions.innerHTML =
+    '<button class="btn-thread" onclick="_saveCommentEdit(' + momentId + ',' + commentId + ')">Save</button>'
+    + '<button class="btn-thread comment-edit-cancel" '
+    + 'onclick="_cancelCommentEdit(' + commentId + ')">Cancel</button>';
+  bodyEl.appendChild(actions);
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+
+async function _saveCommentEdit(momentId, commentId) {
+  const item = document.getElementById('comment-' + commentId);
+  const ta = item && item.querySelector('.comment-edit-textarea');
+  if (!ta) return;
+  const text = ta.value.trim();
+  if (!text) { alert('Comment cannot be empty'); return; }
+  const r = await fetch('/api/comments/' + commentId, {
+    method: 'PUT', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({body: text}),
+  });
+  if (!r.ok) { alert('Failed to save edit'); return; }
+  // Reload the thread so the fresh (edited) marker + re-render come from the
+  // server (matches submitReply / resolve).
+  openThread(momentId);
+}
+
+function _cancelCommentEdit(commentId) {
+  const item = document.getElementById('comment-' + commentId);
+  const bodyEl = item && item.querySelector('.comment-body');
+  if (!bodyEl) return;
+  bodyEl.innerHTML = renderMarkdown(item.dataset.raw || '');
+  const editBtn = item.querySelector('.btn-edit-comment');
+  if (editBtn) editBtn.style.display = '';
+}
+
 function resolveThread(threadId) {
   const container = document.getElementById('thread-comments');
   if (!container) return;
@@ -8222,6 +8314,130 @@ async function unresolveThread(threadId) {
 // ---------------------------------------------------------------------------
 
 let _mentionUsers = null; // [{id, name}, ...]
+
+// ---------------------------------------------------------------------------
+// Markdown rendering for comment bodies (#809)
+//
+// Comment bodies are authored as GitHub-Flavored Markdown and rendered richly.
+// Pipeline: markdown-it (html:false so raw HTML in source is escaped, not
+// parsed) -> DOMPurify.sanitize (strict tag/attr allowlist) -> walk text nodes
+// outside <code>/<pre>/<a> to inject @mention highlight spans (preserving the
+// prior behaviour without mangling code). Subjects/counterparties stay plain
+// text. If the vendored libs fail to load we degrade to the old escaped-text +
+// mentions rendering.
+// ---------------------------------------------------------------------------
+
+// Tags/attributes DOMPurify is allowed to keep. Everything markdown-it can emit
+// for GFM is here; anything else (script, style, iframe, event handlers, raw
+// HTML from source) is stripped. `input` is only for disabled task-list
+// checkboxes.
+const _MD_ALLOWED_TAGS = [
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'br', 'hr',
+  'strong', 'em', 'b', 'i', 'del', 's', 'ins', 'sub', 'sup', 'kbd',
+  'blockquote', 'ul', 'ol', 'li', 'a', 'code', 'pre', 'span',
+  'table', 'thead', 'tbody', 'tr', 'th', 'td', 'input',
+];
+const _MD_ALLOWED_ATTR = [
+  'href', 'title', 'class', 'start', 'type', 'checked', 'disabled', 'rel', 'target',
+];
+
+let _md = null;             // memoised markdown-it instance
+let _mdHooksInstalled = false;
+
+function _getMarkdownRenderer() {
+  if (_md) return _md;
+  if (typeof markdownit === 'undefined' || typeof DOMPurify === 'undefined') return null;
+  const md = markdownit({
+    html: false,        // never parse raw HTML from comment source
+    linkify: true,      // autolink bare URLs
+    breaks: true,       // GitHub-comment parity: soft newline -> <br>
+    typographer: false,
+    highlight: function (str, lang) {
+      if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
+        try {
+          return '<pre class="hljs"><code>'
+            + hljs.highlight(str, { language: lang, ignoreIllegals: true }).value
+            + '</code></pre>';
+        } catch (e) { /* fall through to escaped */ }
+      }
+      return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
+    },
+  });
+  if (typeof markdownitTaskLists !== 'undefined') {
+    md.use(markdownitTaskLists);
+  }
+  if (!_mdHooksInstalled) {
+    // Open rendered links in a new tab and neutralise tab-nabbing / referrer.
+    DOMPurify.addHook('afterSanitizeAttributes', function (node) {
+      if (node.tagName === 'A' && node.getAttribute('href')) {
+        node.setAttribute('target', '_blank');
+        node.setAttribute('rel', 'noopener noreferrer nofollow');
+      }
+    });
+    _mdHooksInstalled = true;
+  }
+  _md = md;
+  return md;
+}
+
+// Render raw markdown to a sanitised HTML string with @mentions highlighted.
+function renderMarkdown(raw) {
+  const md = _getMarkdownRenderer();
+  if (!md) {
+    // Libs unavailable — preserve legacy behaviour (escaped text + mentions).
+    return _renderMentions(esc(raw || ''));
+  }
+  const clean = DOMPurify.sanitize(md.render(raw || ''), {
+    ALLOWED_TAGS: _MD_ALLOWED_TAGS,
+    ALLOWED_ATTR: _MD_ALLOWED_ATTR,
+    ALLOW_DATA_ATTR: false,
+  });
+  const container = document.createElement('div');
+  container.innerHTML = clean;
+  _injectMentionsIntoDom(container);
+  return container.innerHTML;
+}
+
+// Reduce markdown to a single line of plain text for list titles / previews
+// (issue: snippet = stripped, not full render).
+function stripMarkdown(raw) {
+  const md = _getMarkdownRenderer();
+  if (!md) return String(raw || '');
+  const clean = DOMPurify.sanitize(md.render(raw || ''), {
+    ALLOWED_TAGS: _MD_ALLOWED_TAGS,
+    ALLOWED_ATTR: _MD_ALLOWED_ATTR,
+  });
+  const tmp = document.createElement('div');
+  tmp.innerHTML = clean;
+  return (tmp.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+// Walk text nodes and wrap @mentions in highlight spans, skipping code/pre/a
+// subtrees so code samples and link text are left untouched.
+function _injectMentionsIntoDom(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      let p = node.parentNode;
+      while (p && p !== root) {
+        const tag = p.nodeName;
+        if (tag === 'CODE' || tag === 'PRE' || tag === 'A') return NodeFilter.FILTER_REJECT;
+        p = p.parentNode;
+      }
+      return /@[\w.\-]/.test(node.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    },
+  });
+  const targets = [];
+  let n;
+  while ((n = walker.nextNode())) targets.push(n);
+  for (const node of targets) {
+    const escaped = esc(node.nodeValue);
+    const html = _renderMentions(escaped);
+    if (html === escaped) continue;  // nothing matched
+    const span = document.createElement('span');
+    span.innerHTML = html;
+    node.parentNode.replaceChild(span, node);
+  }
+}
 
 function _renderMentions(escapedText) {
   if (!_mentionUsers || !_mentionUsers.length) {

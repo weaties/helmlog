@@ -1,0 +1,7 @@
+# Vendored third-party browser libraries (#809) — minified upstream artifacts,
+# not authored here. Mark as vendored so GitHub excludes them from language
+# stats and collapses them in diffs. See src/helmlog/static/vendor/README.md.
+src/helmlog/static/vendor/*.min.js linguist-vendored
+src/helmlog/static/vendor/*.min.css linguist-vendored
+src/helmlog/static/vendor/*.min.js -diff
+src/helmlog/static/vendor/*.min.css -diff

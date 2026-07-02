@@ -48,6 +48,14 @@ PI_SIGNALK_DIR="${PI_SIGNALK_DIR:-/home/weaties/.signalk}"
 INFLUX_TOKEN_FILE="${INFLUX_TOKEN_FILE:-/home/weaties/influx-token.txt}"
 SMTP_CACHE="${SMTP_CACHE:-$HOME/.config/helmlog-backup/smtp.env}"
 MIN_SNAPSHOT_BYTES="${MIN_SNAPSHOT_BYTES:-10485760}"
+# Where on the Pi to stage the sqlite3 .backup. MUST be (a) on a roomy
+# filesystem, (b) writable by the backup SSH user (helmlog-backup), and
+# (c) OUTSIDE every rsync'd tree. The old default /tmp is a 4 GB tmpfs on
+# corvopi-live, so once logger.db passed ~4 GB the .backup ran out of space
+# and left a corrupt all-zeros file that silently clobbered the good copy
+# (every snapshot from 2026-06-16 on). /var/tmp is disk-backed on the 382 GB
+# root partition and world-writable — the right drop-in. (#807)
+PI_STAGE_DIR="${PI_STAGE_DIR:-/var/tmp/helmlog-backup}"
 
 # Pin every ssh/scp/rsync to the dedicated key + non-interactive options. This
 # avoids picking up a stale agent identity and ensures predictable behaviour
@@ -379,10 +387,24 @@ run_rsync_step() {
 # writes landed mid-rsync. `sqlite3 .backup` gives an atomic copy that is
 # safe to transfer regardless of active WAL (#676). We overwrite the raw DB
 # that rsync picks up with the staged snapshot after the tree copy.
-$SSH "$PI" "rm -f /tmp/logger.db.snap /tmp/logger.db.snap-* 2>/dev/null; \
-  sqlite3 $PI_HELMLOG_DIR/data/logger.db \".backup '/tmp/logger.db.snap'\"" 2>/dev/null && \
-  log "  DB snapshot staged at /tmp/logger.db.snap on $PI" || \
-  log "  WARNING: sqlite3 .backup failed (DB may not exist yet); continuing"
+#
+# Stage on a roomy filesystem and VERIFY before trusting it. The .backup is
+# only honoured if the command exits 0 AND the staged file opens as a valid
+# SQLite DB (PRAGMA quick_check = ok). Otherwise we leave rsync's live-file
+# copy in place rather than clobbering it with a partial/corrupt snapshot —
+# the failure mode that silently broke every backup from 2026-06-16 on. (#807)
+PI_STAGE="$PI_STAGE_DIR/logger.db.snap"
+DB_SNAP_OK=0
+if $SSH "$PI" "mkdir -p '$PI_STAGE_DIR' && rm -f '$PI_STAGE'*; \
+    sqlite3 '$PI_HELMLOG_DIR/data/logger.db' \".backup '$PI_STAGE'\" && \
+    [ \"\$(sqlite3 'file:$PI_STAGE?immutable=1' 'PRAGMA quick_check;' 2>/dev/null | head -1)\" = ok ]" 2>/dev/null; then
+  DB_SNAP_OK=1
+  log "  DB snapshot staged + verified at $PI_STAGE on $PI"
+else
+  log "  WARNING: sqlite3 .backup missing/failed/invalid; keeping rsync'd live-file copy"
+  mark_warning "consistent DB snapshot unavailable — snapshot holds the rsync'd live-file copy (verify it opens)"
+  $SSH "$PI" "rm -f '$PI_STAGE'*" 2>/dev/null || true
+fi
 
 # --rsync-path='sudo rsync' so we can read photos in notes/<session>/ — those
 # are written by the helmlog service as 0600/helmlog and were previously
@@ -395,11 +417,15 @@ run_rsync_step "SQLite + file data" "$SNAP/data" \
     "$PI:$PI_HELMLOG_DIR/data/" \
     "$SNAP/data/" || true
 
-# Replace rsync's live-DB copy with the consistent snapshot, then tidy up.
-if $SSH "$PI" "test -f /tmp/logger.db.snap" 2>/dev/null; then
-  rsync -e "$RSYNC_SSH" -az "$PI:/tmp/logger.db.snap" "$SNAP/data/logger.db" && \
+# Replace rsync's live-DB copy with the consistent snapshot — ONLY when the
+# stage verified above. Then drop any logger.db-wal / -shm rsync pulled from
+# the live tree: they belong to the live DB, not this consistent copy, and a
+# stale WAL alongside it confuses readers.
+if [ "$DB_SNAP_OK" = 1 ]; then
+  rsync -e "$RSYNC_SSH" -az "$PI:$PI_STAGE" "$SNAP/data/logger.db" && \
     log "  DB replaced with consistent snapshot"
-  $SSH "$PI" "rm -f /tmp/logger.db.snap /tmp/logger.db.snap-*" 2>/dev/null || true
+  rm -f "$SNAP/data/logger.db-wal" "$SNAP/data/logger.db-shm"
+  $SSH "$PI" "rm -f '$PI_STAGE'*" 2>/dev/null || true
 fi
 
 # Cross-check the snapshot: every moment_attachments / audio_sessions /
@@ -503,7 +529,7 @@ run_rsync_step "Grafana provisioning" "$SNAP/grafana-provisioning" \
     "$SNAP/grafana-provisioning/" || true
 
 # ── 5. Safety gate + rotation ─────────────────────────────────────────────────
-log "Safety gate: snapshot must contain data/logger.db and exceed $MIN_SNAPSHOT_BYTES bytes"
+log "Safety gate: data/logger.db must be present, > $MIN_SNAPSHOT_BYTES bytes, and a valid SQLite DB"
 snap_bytes=$(bytes_size "$SNAP")
 if [ ! -f "$SNAP/data/logger.db" ]; then
   mark_failed "safety gate failed: $SNAP/data/logger.db is missing"
@@ -519,8 +545,20 @@ if [ "$snap_bytes" -lt "$MIN_SNAPSHOT_BYTES" ]; then
   report_line "**Safety gate**: FAILED — snapshot size $snap_bytes bytes is below the $MIN_SNAPSHOT_BYTES-byte minimum. Rotation skipped; old snapshots preserved."
   exit 11
 fi
-log "  OK ($snap_bytes bytes)"
-report_line "- **Safety gate**: OK — $snap_bytes bytes"
+# logger.db must be a VALID SQLite database, not just present and large. The
+# 2026-06-16..30 corruption (a 4 GB all-zeros file) passed the size check; a
+# header + schema read catches it instantly. `immutable=1` opens the static
+# backup read-only without needing a -wal/-shm so it can't mutate the snapshot.
+if ! head -c 16 "$SNAP/data/logger.db" | grep -aq 'SQLite format 3' || \
+   ! sqlite3 "file:$SNAP/data/logger.db?immutable=1" 'SELECT count(*) FROM sqlite_master;' >/dev/null 2>&1; then
+  mark_failed "safety gate failed: $SNAP/data/logger.db is not a valid SQLite database"
+  log "  FAIL: logger.db is not a valid SQLite database"
+  report_line ""
+  report_line "**Safety gate**: FAILED — \`data/logger.db\` is not a valid SQLite database (corrupt/partial snapshot). Rotation skipped; old snapshots preserved."
+  exit 11
+fi
+log "  OK ($snap_bytes bytes, logger.db valid SQLite)"
+report_line "- **Safety gate**: OK — $snap_bytes bytes, logger.db is a valid SQLite DB"
 
 log "Rotating snapshots (keeping $KEEP_SNAPSHOTS)"
 # shellcheck disable=SC2012

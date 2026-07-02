@@ -35,7 +35,7 @@ starts the sniffer task. Off by default so production boats are unaffected;
 the audit is a deliberate opt-in for a validation session. `PGN_AUDIT_CHANNEL`
 (default `can0`) selects the socketcan interface.
 
-## Storage — `pgn_audit` table (migration 87)
+## Storage — `pgn_audit` table (migration 88)
 
 | Column | Type | Notes |
 |---|---|---|
