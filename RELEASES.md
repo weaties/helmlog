@@ -1,5 +1,90 @@
 # Release Notes
 
+## GPS-Disciplined Timestamps, Safer Backups & Moments Markdown (2026-07-02)
+
+The headline this cycle is time integrity: the Pi runs Signal K locally, so
+a boot before NTP/GPS sync used to stamp a whole recording — and its race and
+audio boundaries — at the wrong UTC. The logger now disciplines every
+timestamp to GPS time. Alongside that, a silent backup-corruption bug is
+fixed, Moments comments render real Markdown, per-race polars stop being
+skewed by prestart maneuvering, and the B&G start-timer port clears its
+hardware-validation gate.
+
+### GPS clock discipline & session integrity
+
+- **Recording timestamps disciplined to GPS time** — new `clock_sync.py`
+  derives the host↔GPS offset from `navigation.datetime` (PGN 126992/129033),
+  median-smoothed against outliers, and stamps records on GPS time. It never
+  blocks recording: with no GPS fix it falls back to host time and flags the
+  recording `unverified`. Each live recording now carries a clock provenance
+  flag (`synced` / `corrected` / `unverified` / `ref_lost`).
+  ([#794](https://github.com/weaties/helmlog/pull/794))
+- **Race and audio boundaries share the telemetry clock** — web-route
+  timestamps were left on the raw host clock, which split an unsynced-boot
+  recording (race 203 landed ~44 min behind its own data). The GPS offset is
+  now mirrored onto the storage singleton so race windows and audio sessions
+  stamp on the same time base as the instrument stream.
+  ([#797](https://github.com/weaties/helmlog/pull/797))
+- **Races close at their last data point, not wall-clock `now`** — a race
+  left open when power died was later stamped with `now`, producing bogus
+  multi-hour spans (a ~14.8 h race that pegged a core warming its cache on
+  boot). The end is now anchored to the last real data point when a gap
+  precedes the close. ([#786](https://github.com/weaties/helmlog/pull/786))
+- **Lock-resilient maneuver detection** — the maneuvers panel and re-detect
+  wrote to SQLite on read paths and lost races with the live logger
+  (`database is locked` → 500s). Read paths no longer write back when the
+  value is already stored, and transient locks are logged instead of bubbling
+  up. ([#776](https://github.com/weaties/helmlog/pull/776))
+
+### Race start-timer & polar analysis
+
+- **B&G/Simrad start-timer port — hardware validation (Phase 0)** — a
+  read-only PGN sniffer plus an admin `/admin/pgn-audit` page confirm from a
+  phone on the water whether the boat's Triton² instruments emit the race
+  timer PGNs (130845 Set, 130850 Start/Stop) before any of the port is built.
+  On-water validation passed. ([#790](https://github.com/weaties/helmlog/pull/790))
+- **Polars only see racing data** — the per-race polar diagram and baseline
+  were computed over the whole session, so prestart maneuvering and
+  post-finish sailing biased both. A shared `race_window()` now trims to the
+  gun (start-timer/Vakaros anchored) through the detected finish.
+  ([#812](https://github.com/weaties/helmlog/pull/812))
+
+### Moments & replay
+
+- **Markdown in Moments comments** — comment bodies rendered as escaped flat
+  text, collapsing paragraphs, lists, and emphasis. They now render
+  GitHub-Flavored Markdown (vendored markdown-it → DOMPurify, strict
+  allowlist), with a creator-only edit affordance on every comment.
+  ([#809](https://github.com/weaties/helmlog/pull/809))
+- **Replay boat marker hides outside the GPS track** — the scrubber extends
+  ~20 min into the prestart, but the GPS track starts at the gun, so the boat
+  used to sit parked on the "Start" dot for that window. The marker is now
+  hidden until replay time re-enters the track's span.
+  ([#806](https://github.com/weaties/helmlog/pull/806))
+
+### Backups, infrastructure & tooling
+
+- **Backups no longer ship corrupt DB snapshots** — `backup.sh` staged the
+  `sqlite3 .backup` on `/tmp`, a 4 GB tmpfs; once the DB grew past ~4 GB the
+  backup ran out of space and left an all-zeros file that got rsync'd over the
+  good copy (only `test -f` was checked). Snapshots now stage on disk-backed
+  `/var/tmp` and are honoured only when `.backup` exits 0 **and** passes
+  `PRAGMA quick_check`. ([#808](https://github.com/weaties/helmlog/pull/808))
+- **shiftsimulator coexists on corvopi-live** — nginx proxies `/sim/` to the
+  shiftsimulator service on `127.0.0.1:8765`, mirroring the `/grafana/` and
+  `/signalk/` routes; additive proxy only.
+  ([#802](https://github.com/weaties/helmlog/pull/802))
+- **`AGENTS.md` is now the canonical agent guide** — the drifted CLAUDE.md and
+  AGENTS.md are reconciled into one tool-agnostic `AGENTS.md`, with CLAUDE.md
+  reduced to an `@AGENTS.md` import plus Claude-Code-only mechanics.
+  ([#804](https://github.com/weaties/helmlog/pull/804))
+- **Skill anti-rationalization tables & judgment rules** — the `tdd`,
+  `pr-checklist`, and `data-license` skills pair each step-skipping excuse
+  with a written rebuttal, and CLAUDE.md gains explicit judgment rules.
+  ([#778](https://github.com/weaties/helmlog/pull/778))
+- **CI:** bump `actions/checkout` from 6 to 7.
+  ([#800](https://github.com/weaties/helmlog/pull/800))
+
 ## Per-Race Crew, Body Weight, and Gear Weight (2026-05-13)
 
 Crew weight is now a first-class part of every race rather than a
