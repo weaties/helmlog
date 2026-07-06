@@ -172,6 +172,32 @@ async def test_create_boat_settings_hot_refreshes_leeway_k(storage: Storage) -> 
 
 
 @pytest.mark.asyncio
+async def test_speed_cal_defaults_are_noop(storage: Storage) -> None:
+    """After connect with no rows, the STW cal is the identity (#810)."""
+    assert storage._speed_cal_base == 1.0
+    assert storage._speed_cal_heel_slope == 0.0
+
+
+@pytest.mark.asyncio
+async def test_create_boat_settings_hot_refreshes_speed_cal(storage: Storage) -> None:
+    """Writing speed_cal_base / speed_cal_heel_slope hot-reloads the cache so
+    the next live compute + polar read uses the new coefficients (#810)."""
+    from datetime import UTC, datetime
+
+    ts = datetime.now(UTC).isoformat()
+    await storage.create_boat_settings(
+        race_id=None,
+        entries=[
+            {"ts": ts, "parameter": "speed_cal_base", "value": "1.09"},
+            {"ts": ts, "parameter": "speed_cal_heel_slope", "value": "0.008"},
+        ],
+        source="manual",
+    )
+    assert storage._speed_cal_base == 1.09
+    assert storage._speed_cal_heel_slope == 0.008
+
+
+@pytest.mark.asyncio
 async def test_set_drift_derived_from_smoothed_inputs(storage: Storage) -> None:
     """Set / drift are computed server-side from the (already-smoothed)
     sog / cog / stw / hdg in self._live, then put through their own EMA

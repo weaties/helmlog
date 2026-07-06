@@ -2304,6 +2304,12 @@ class Storage:
         # behavior.
         self._compass_offset_port: float = 0.0
         self._compass_offset_stbd: float = 0.0
+        # Heel-dependent STW correction for the off-center paddlewheel (#810).
+        # corrected = raw / (base + slope * heel_deg). Loaded from boat_settings
+        # on connect; refresh_speed_cal() picks up admin changes. Defaults are
+        # the identity (base=1.0, slope=0.0) so untuned boats are unaffected.
+        self._speed_cal_base: float = 1.0
+        self._speed_cal_heel_slope: float = 0.0
         self._last_rudder_write: float = 0.0
         self._last_attitude_write: float = 0.0
         # Web response cache (#594). Optional; web.py binds a WebCache
@@ -2438,6 +2444,8 @@ class Storage:
             leeway_k=self._leeway_k,
             compass_offset_port=self._compass_offset_port,
             compass_offset_stbd=self._compass_offset_stbd,
+            speed_cal_base=self._speed_cal_base,
+            speed_cal_heel_slope=self._speed_cal_heel_slope,
         )
         if result is None:
             return
@@ -2569,6 +2577,32 @@ class Storage:
                     self._compass_offset_stbd = val
         return (self._compass_offset_port, self._compass_offset_stbd)
 
+    async def refresh_speed_cal(self) -> tuple[float, float]:
+        """Reload the heel-dependent STW correction coefficients (#810).
+
+        Reads ``boat_settings.speed_cal_base`` / ``speed_cal_heel_slope`` into
+        the cached ``self._speed_cal_base`` / ``self._speed_cal_heel_slope``.
+        Returns ``(base, slope)``. Called from ``connect()`` and on every
+        settings write that touches either parameter, so admin tuning takes
+        effect without a restart."""
+        try:
+            rows = await self.current_boat_settings(race_id=None)
+        except Exception:
+            return (self._speed_cal_base, self._speed_cal_heel_slope)
+        import contextlib
+
+        for row in rows:
+            param = row["parameter"]
+            if param not in ("speed_cal_base", "speed_cal_heel_slope"):
+                continue
+            with contextlib.suppress(TypeError, ValueError):
+                val = float(row["value"])
+                if param == "speed_cal_base":
+                    self._speed_cal_base = val
+                else:
+                    self._speed_cal_heel_slope = val
+        return (self._speed_cal_base, self._speed_cal_heel_slope)
+
     async def refresh_smoothing(self) -> dict[str, float]:
         """Reload per-channel time constants from ``app_settings`` and apply
         them to the live smoothers without losing accumulated state.
@@ -2637,6 +2671,7 @@ class Storage:
         await self.refresh_smoothing()
         await self.refresh_leeway_k()
         await self.refresh_compass_offsets()
+        await self.refresh_speed_cal()
 
     async def close(self) -> None:
         """Flush any buffered writes and close the database connections."""
@@ -10368,6 +10403,8 @@ class Storage:
             await self.refresh_leeway_k()
         if any(e["parameter"] in ("compass_offset_port", "compass_offset_stbd") for e in entries):
             await self.refresh_compass_offsets()
+        if any(e["parameter"] in ("speed_cal_base", "speed_cal_heel_slope") for e in entries):
+            await self.refresh_speed_cal()
         return ids
 
     async def list_boat_settings(self, race_id: int | None) -> list[dict[str, Any]]:

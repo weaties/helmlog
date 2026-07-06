@@ -90,6 +90,24 @@ PARAMETERS: tuple[ParameterDef, ...] = (
         "number",
         "instrument_calibration",
     ),
+    # Heel-dependent STW correction for the off-center paddlewheel (#810).
+    # corrected_STW = raw / (speed_cal_base + speed_cal_heel_slope * heel_deg).
+    # Defaults (1.0 / 0.0) are an exact no-op; fit via
+    # scripts/analysis/calibrate_speed_heel.py.
+    ParameterDef(
+        "speed_cal_base",
+        "Speed cal base (a)",
+        "",
+        "number",
+        "instrument_calibration",
+    ),
+    ParameterDef(
+        "speed_cal_heel_slope",
+        "Speed cal heel slope (b)",
+        "per-deg",
+        "number",
+        "instrument_calibration",
+    ),
     ParameterDef(
         "rudder_angle_offset",
         "Rudder angle offset",

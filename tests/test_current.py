@@ -270,3 +270,50 @@ class TestCompassOffsets:
         assert sd_with is not None and sd_manual is not None
         assert sd_with[0] == pytest.approx(sd_manual[0], abs=1e-6)
         assert sd_with[1] == pytest.approx(sd_manual[1], abs=1e-6)
+
+
+class TestSpeedCorrection:
+    """Heel-dependent STW correction (#810) is applied before the water
+    vector is formed, so a paddlewheel over-read no longer surfaces as
+    phantom current, and the same-consistent correction feeds set/drift."""
+
+    def test_defaults_leave_result_unchanged(self) -> None:
+        base = compute_set_drift(sog=5.0, cog=90.0, stw=5.0, hdg=0.0)
+        withcal = compute_set_drift(
+            sog=5.0,
+            cog=90.0,
+            stw=5.0,
+            hdg=0.0,
+            speed_cal_base=1.0,
+            speed_cal_heel_slope=0.0,
+        )
+        assert base == withcal
+
+    def test_base_factor_removes_phantom_current(self) -> None:
+        # Raw STW over-reads 9%: 5.45 kt logged, boat truly making 5 kt due N
+        # over ground. Un-corrected, the longer water vector fakes 0.45 kt of
+        # current toward the south.
+        sd_raw = compute_set_drift(sog=5.0, cog=0.0, stw=5.45, hdg=0.0)
+        assert sd_raw is not None
+        assert sd_raw[1] == pytest.approx(0.45, abs=1e-9)
+        # base=1.09 scales 5.45 → 5.0, matching ground → current collapses.
+        sd_corr = compute_set_drift(
+            sog=5.0, cog=0.0, stw=5.45, hdg=0.0, speed_cal_base=1.09
+        )
+        assert sd_corr is not None
+        assert sd_corr[1] == pytest.approx(0.0, abs=1e-3)
+
+    def test_heel_slope_uses_signed_heel(self) -> None:
+        # Port tack (heel>0): k = 1.0 + 0.01*10 = 1.1 → 5.5/1.1 = 5.0.
+        # No leeway_k passed, so heel only drives the speed correction here.
+        sd = compute_set_drift(
+            sog=5.0,
+            cog=0.0,
+            stw=5.5,
+            hdg=0.0,
+            heel_deg=10.0,
+            speed_cal_base=1.0,
+            speed_cal_heel_slope=0.01,
+        )
+        assert sd is not None
+        assert sd[1] == pytest.approx(0.0, abs=1e-3)
