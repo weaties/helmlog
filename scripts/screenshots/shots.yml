@@ -82,11 +82,11 @@
   wait: 800
 
 # --- Individual session detail (richest page: track map, polar heatmap, moments)
-# Needs a real session id — serve.py logs the latest one on boot ("latest
-# session page → /session/N/..."). Edit the id below, or shoot just the polar
-# heatmap panel with the selector crop.
+# Session id 1 always exists after seed_demo.py. Against a real DB, edit the id
+# (serve.py logs the latest one on boot: "latest session page → /session/N/...")
+# or shoot just the polar heatmap panel with the selector crop.
 - output: session.png
-  url: http://localhost:3010/session/35
+  url: http://localhost:3010/session/1
   wait: 3000
   # Crop to just the polar heatmap panel instead of the whole page:
   # selector: "#polar-heatmap-view"

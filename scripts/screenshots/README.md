@@ -10,15 +10,36 @@ on the Pi (it pulls Playwright + a browser).
 uv sync                                # the venv must exist (serve.py uses .venv/bin/python)
 uvx shot-scraper install               # one-time: download the Playwright browser
 
-# Empty auto-created DB (structure only, no data):
+# Populated pages from synthetic, PII-free data (recommended — same as CI):
+uv run python scripts/screenshots/seed_demo.py --db /tmp/demo.db --sessions 4
+SHOTS_DB=/tmp/demo.db uvx shot-scraper multi scripts/screenshots/shots.yml
+
+# Structure only, no data (empty auto-created DB):
 uvx shot-scraper multi scripts/screenshots/shots.yml
 
-# Against a real logger.db (populated pages):
+# Against a real logger.db (contains PII — local eyeballing only, never commit):
 SHOTS_DB=/path/to/logger.db uvx shot-scraper multi scripts/screenshots/shots.yml
 ```
 
 PNGs land in the current directory by the `output:` names in `shots.yml`. Move
 them to `docs/screenshots/` (gitignored) if you want to keep them locally.
+
+## Synthetic demo data (`seed_demo.py`)
+
+`seed_demo.py` builds a disposable DB populated entirely with **synthesised**
+data using HelmLog's own simulator (the same pipeline as the "Synthesize Race"
+web action) — track, gauges, wind, maneuvers, polar baseline, sails, and a few
+moments — so pages render realistically with **zero PII**. This is what CI
+shoots. No real crew names or audio transcripts are ever produced.
+
+## CI (`.github/workflows/screenshots.yml`)
+
+On push to `main`, CI seeds a synthetic DB, captures the pages, and commits the
+PNGs to the orphan **`screenshots`** branch — one commit per build. That gives a
+git-diffable visual history: `git diff` between two builds (or against the last
+`stage/*` tag) shows exactly which pages changed, which is how release notes can
+point at where a feature landed. The `screenshots` branch renders as a gallery
+(`README.md` with all shots) on GitHub.
 
 ## How it works
 
