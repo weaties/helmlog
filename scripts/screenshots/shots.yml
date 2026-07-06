@@ -1,0 +1,92 @@
+# shot-scraper multi-config for the HelmLog web UI (prototype).
+#
+#   uvx shot-scraper multi scripts/screenshots/shots.yml --output-dir docs/screenshots
+#   # or, if installed:  shot-scraper multi scripts/screenshots/shots.yml
+#
+# The first entry boots the app via serve.py (AUTH_DISABLED bypasses login and
+# the DB is copied to a temp file, so this never touches the live logger DB).
+# Point SHOTS_DB at a real/sample DB to get populated screenshots. All shots
+# then hit http://localhost:3010.
+#
+# Timing: map/canvas pages fetch their data as JSON after load and expose no
+# explicit "ready" flag, so we pause with `wait:`. For sharper CI shots against
+# a known-populated DB, swap in a selector-based wait, e.g.
+#   wait_for: document.querySelector('#track-map .leaflet-tile-loaded') !== null
+
+# `exec` + the venv python directly (not `uv run`) so the process shot-scraper
+# kills on cleanup IS the server — otherwise the python grandchild orphans and
+# leaks onto :3010. Run `uv sync` once first so the venv exists.
+# SHOTS_DB is inherited from the environment (defaults to data/logger.db inside
+# serve.py); export it before running to screenshot a populated DB:
+#   SHOTS_DB=/path/to/logger.db uvx shot-scraper multi scripts/screenshots/shots.yml
+- server: exec env AUTH_DISABLED=true WEB_PORT=3010 .venv/bin/python scripts/screenshots/serve.py
+
+# shot-scraper only sleeps 1s after starting a server, but our boot runs schema
+# migrations first (~3s on an empty DB). Block on /healthz until the app answers.
+- sh: 'for i in $(seq 1 60); do curl -sf http://localhost:3010/healthz >/dev/null 2>&1 && exit 0; sleep 0.5; done; echo "helmlog web never came up on :3010" >&2; exit 1'
+
+# --- Landing / dashboard (Leaflet map + canvas sparklines) --------------------
+- output: home.png
+  url: http://localhost:3010/
+  wait: 2500
+
+# Mobile viewport — the UI is mobile-optimised for on-boat crew use.
+- output: home-mobile.png
+  url: http://localhost:3010/
+  width: 390
+  height: 844
+  wait: 2500
+
+# --- Core pages (server-rendered; tables may hydrate via fetch) ---------------
+- output: history.png
+  url: http://localhost:3010/history
+  wait: 800
+
+- output: control.png
+  url: http://localhost:3010/control
+  wait: 800
+
+- output: analysis.png
+  url: http://localhost:3010/analysis
+  wait: 800
+
+- output: sails.png
+  url: http://localhost:3010/sails
+  wait: 800
+
+- output: attention.png
+  url: http://localhost:3010/attention
+  wait: 800
+
+# --- Maneuver analysis (canvas overlay chart) ---------------------------------
+- output: maneuvers.png
+  url: http://localhost:3010/maneuvers
+  wait: 1500
+
+- output: maneuvers-overlay.png
+  url: http://localhost:3010/maneuvers/overlay
+  wait: 2500
+
+- output: compare.png
+  url: http://localhost:3010/compare
+  wait: 1500
+
+# --- Race start line / timer --------------------------------------------------
+- output: race-start.png
+  url: http://localhost:3010/race-start
+  wait: 1500
+
+# --- Admin (example) ----------------------------------------------------------
+- output: admin-settings.png
+  url: http://localhost:3010/admin/settings
+  wait: 800
+
+# --- Individual session detail (richest page: track map, polar heatmap, moments)
+# Needs a real session id — serve.py logs the latest one on boot ("latest
+# session page → /session/N/..."). Edit the id below, or shoot just the polar
+# heatmap panel with the selector crop.
+- output: session.png
+  url: http://localhost:3010/session/35
+  wait: 3000
+  # Crop to just the polar heatmap panel instead of the whole page:
+  # selector: "#polar-heatmap-view"
