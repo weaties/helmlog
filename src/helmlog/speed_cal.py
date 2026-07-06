@@ -28,6 +28,10 @@ offsets, and re-fit per rig/sail era via ``scripts/analysis/calibrate_speed_heel
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass, field
+from typing import Any
+
 from loguru import logger
 
 # Sane band for the correction factor. A physically plausible paddlewheel cal
@@ -36,6 +40,20 @@ from loguru import logger
 # wildly scaled — or negative/infinite — speed.
 _K_MIN = 0.5
 _K_MAX = 2.0
+
+
+def _apply_factor(raw_kts: float, k: float, ctx: str = "") -> float:
+    """Divide by ``k`` after a sane-band guard; fall back to raw on a bad ``k``."""
+    if not (_K_MIN <= k <= _K_MAX):
+        logger.warning(
+            "speed_cal: correction factor k={:.4f} out of band [{}, {}]{}; using raw STW",
+            k,
+            _K_MIN,
+            _K_MAX,
+            f" ({ctx})" if ctx else "",
+        )
+        return raw_kts
+    return raw_kts / k
 
 
 def corrected_stw(
@@ -67,19 +85,115 @@ def corrected_stw(
         return raw_kts
 
     heel = heel_deg if heel_deg is not None else 0.0
-    k = a + b * heel
+    return _apply_factor(raw_kts, a + b * heel, f"heel={heel_deg}, a={a}, b={b}")
 
-    if not (_K_MIN <= k <= _K_MAX):
-        logger.warning(
-            "speed_cal: correction factor k={:.4f} out of band [{}, {}] "
-            "(heel={}, a={}, b={}); using raw STW",
-            k,
-            _K_MIN,
-            _K_MAX,
-            heel_deg,
-            a,
-            b,
+
+# ---------------------------------------------------------------------------
+# TWS × tack table + breeze gate (#810 follow-up)
+# ---------------------------------------------------------------------------
+#
+# Live-data regression showed the off-center paddlewheel's tack bias is not a
+# simple function of heel: it *reverses sign* with wind speed (port over-reads
+# most at 12–15 kt but under-reads below ~9 kt), so a single heel slope can't
+# fit it. Two data-driven refinements live here:
+#
+#   * a **breeze gate** — below ``gate_min_tws`` the noisy, sign-reversing
+#     light-air regime is left alone (only the base mean factor applies), and
+#   * a **TWS × tack lookup table** — per-(TWS bin, tack) factors, the model the
+#     data actually supports, used wherever TWS is known (the polar path).
+#
+# The heel-linear ``corrected_stw`` above remains the fallback for callers
+# without TWS (the live set/drift compute) and when no table bin matches.
+
+
+@dataclass(frozen=True)
+class SpeedCal:
+    """Bundle of STW-correction coefficients, resolved by ``resolve_stw``.
+
+    Attributes:
+        base: Mean factor ``a`` (always applied). Default 1.0 (no-op).
+        heel_slope: Heel slope ``b`` per degree, used only in the heel-linear
+            fallback. Default 0.0.
+        gate_min_tws: Below this TWS (kt) the tack/heel term is suppressed and
+            only ``base`` applies. 0.0 disables the gate.
+        table: Sorted ``(tws_min, tws_max, port_k, stbd_k)`` bins; ``tws_max``
+            exclusive. Empty → no table.
+    """
+
+    base: float = 1.0
+    heel_slope: float = 0.0
+    gate_min_tws: float = 0.0
+    table: tuple[tuple[float, float, float, float], ...] = field(default_factory=tuple)
+
+
+DEFAULT_CAL = SpeedCal()
+
+
+def parse_table(
+    spec: str | list[dict[str, Any]] | None,
+) -> tuple[tuple[float, float, float, float], ...]:
+    """Parse a TWS × tack table from a JSON string (or already-decoded list).
+
+    Each entry is ``{"tws_min":.., "tws_max":.., "port":.., "stbd":..}``. Bins
+    are returned sorted by ``tws_min``. Empty/blank/malformed input yields an
+    empty table (correction disabled) rather than raising — a bad admin value
+    must never take out the read path.
+    """
+    if not spec:
+        return ()
+    try:
+        rows = json.loads(spec) if isinstance(spec, str) else spec
+        parsed = tuple(
+            (float(r["tws_min"]), float(r["tws_max"]), float(r["port"]), float(r["stbd"]))
+            for r in rows
         )
+    except (ValueError, TypeError, KeyError) as e:
+        logger.warning(
+            "speed_cal: ignoring malformed speed_cal_table ({}): {}", type(e).__name__, e
+        )
+        return ()
+    return tuple(sorted(parsed, key=lambda r: r[0]))
+
+
+def _table_lookup(
+    table: tuple[tuple[float, float, float, float], ...],
+    tws_kts: float,
+    tack: str,
+) -> float | None:
+    """Return the ``k`` for the bin containing ``tws_kts`` on ``tack``, or None."""
+    for lo, hi, port_k, stbd_k in table:
+        if lo <= tws_kts < hi:
+            return port_k if tack == "port" else stbd_k
+    return None
+
+
+def resolve_stw(
+    raw_kts: float | None,
+    heel_deg: float | None,
+    tws_kts: float | None,
+    cal: SpeedCal = DEFAULT_CAL,
+) -> float | None:
+    """Correct STW using the full model: gate → table → heel-linear fallback.
+
+    Precedence:
+        1. Invalid ``raw_kts`` (None / ≤ 0) is passed through unchanged.
+        2. **Gate:** if ``tws_kts`` is known and below ``gate_min_tws``, apply
+           only ``base`` (light air's tack bias is noisy and sign-reversing).
+        3. **Table:** if a table is configured and both ``tws_kts`` and
+           ``heel_deg`` are known, use the matching ``(TWS bin, tack)`` factor.
+        4. **Fallback:** heel-linear ``corrected_stw`` (base + slope·heel) when
+           there's no table, no TWS, or no matching bin.
+    """
+    if raw_kts is None or raw_kts <= 0.0:
         return raw_kts
 
-    return raw_kts / k
+    if tws_kts is not None and cal.gate_min_tws > 0.0 and tws_kts < cal.gate_min_tws:
+        return _apply_factor(raw_kts, cal.base, f"gated tws={tws_kts}<{cal.gate_min_tws}")
+
+    if cal.table and tws_kts is not None and heel_deg is not None:
+        tack = "port" if heel_deg > 0 else "stbd"
+        k = _table_lookup(cal.table, tws_kts, tack)
+        if k is not None:
+            return _apply_factor(raw_kts, k, f"table tws={tws_kts} tack={tack}")
+
+    return corrected_stw(raw_kts, heel_deg, cal.base, cal.heel_slope)

@@ -108,6 +108,18 @@ PARAMETERS: tuple[ParameterDef, ...] = (
         "number",
         "instrument_calibration",
     ),
+    # Breeze gate for the STW correction (#810): below this TWS the tack/heel
+    # term is suppressed (light air's paddlewheel bias is noisy and reverses
+    # sign), leaving only the base factor. 0 disables the gate. The TWS × tack
+    # table itself is a JSON blob in app_settings ("speed_cal_table"), not a
+    # flat parameter.
+    ParameterDef(
+        "speed_cal_gate_min_tws",
+        "Speed cal breeze gate (min TWS)",
+        "kt",
+        "number",
+        "instrument_calibration",
+    ),
     ParameterDef(
         "rudder_angle_offset",
         "Rudder angle offset",

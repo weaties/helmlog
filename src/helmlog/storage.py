@@ -42,6 +42,7 @@ from helmlog.nmea2000 import (
     SpeedRecord,
     WindRecord,
 )
+from helmlog.speed_cal import SpeedCal, parse_table
 from helmlog.video import VideoSession
 
 
@@ -2305,11 +2306,12 @@ class Storage:
         self._compass_offset_port: float = 0.0
         self._compass_offset_stbd: float = 0.0
         # Heel-dependent STW correction for the off-center paddlewheel (#810).
-        # corrected = raw / (base + slope * heel_deg). Loaded from boat_settings
-        # on connect; refresh_speed_cal() picks up admin changes. Defaults are
-        # the identity (base=1.0, slope=0.0) so untuned boats are unaffected.
-        self._speed_cal_base: float = 1.0
-        self._speed_cal_heel_slope: float = 0.0
+        # base/slope/gate come from boat_settings; the TWS × tack table is a
+        # JSON blob in app_settings. refresh_speed_cal() rebuilds this on
+        # connect and on admin changes. The default SpeedCal() is the identity
+        # (base=1.0, slope=0.0, no gate, empty table) so untuned boats are
+        # unaffected.
+        self._speed_cal: SpeedCal = SpeedCal()
         self._last_rudder_write: float = 0.0
         self._last_attitude_write: float = 0.0
         # Web response cache (#594). Optional; web.py binds a WebCache
@@ -2444,8 +2446,8 @@ class Storage:
             leeway_k=self._leeway_k,
             compass_offset_port=self._compass_offset_port,
             compass_offset_stbd=self._compass_offset_stbd,
-            speed_cal_base=self._speed_cal_base,
-            speed_cal_heel_slope=self._speed_cal_heel_slope,
+            speed_cal_base=self._speed_cal.base,
+            speed_cal_heel_slope=self._speed_cal.heel_slope,
         )
         if result is None:
             return
@@ -2577,31 +2579,46 @@ class Storage:
                     self._compass_offset_stbd = val
         return (self._compass_offset_port, self._compass_offset_stbd)
 
-    async def refresh_speed_cal(self) -> tuple[float, float]:
-        """Reload the heel-dependent STW correction coefficients (#810).
+    async def refresh_speed_cal(self) -> SpeedCal:
+        """Rebuild the cached STW correction config ``self._speed_cal`` (#810).
 
-        Reads ``boat_settings.speed_cal_base`` / ``speed_cal_heel_slope`` into
-        the cached ``self._speed_cal_base`` / ``self._speed_cal_heel_slope``.
-        Returns ``(base, slope)``. Called from ``connect()`` and on every
-        settings write that touches either parameter, so admin tuning takes
-        effect without a restart."""
+        Reads ``speed_cal_base`` / ``speed_cal_heel_slope`` /
+        ``speed_cal_gate_min_tws`` from ``boat_settings`` and the TWS × tack
+        table (``speed_cal_table``, a JSON blob) from ``app_settings``. Missing
+        values fall back to the identity defaults. Called from ``connect()`` and
+        on every settings write that touches a coefficient, so admin tuning
+        takes effect without a restart. Returns the new ``SpeedCal``."""
+        import contextlib
+
+        base, slope, gate = 1.0, 0.0, 0.0
         try:
             rows = await self.current_boat_settings(race_id=None)
         except Exception:
-            return (self._speed_cal_base, self._speed_cal_heel_slope)
-        import contextlib
-
+            rows = []
         for row in rows:
             param = row["parameter"]
-            if param not in ("speed_cal_base", "speed_cal_heel_slope"):
+            if param not in ("speed_cal_base", "speed_cal_heel_slope", "speed_cal_gate_min_tws"):
                 continue
             with contextlib.suppress(TypeError, ValueError):
                 val = float(row["value"])
                 if param == "speed_cal_base":
-                    self._speed_cal_base = val
+                    base = val
+                elif param == "speed_cal_heel_slope":
+                    slope = val
                 else:
-                    self._speed_cal_heel_slope = val
-        return (self._speed_cal_base, self._speed_cal_heel_slope)
+                    gate = val
+
+        table_json: str | None = None
+        with contextlib.suppress(Exception):
+            table_json = await self.get_setting("speed_cal_table")
+
+        self._speed_cal = SpeedCal(
+            base=base,
+            heel_slope=slope,
+            gate_min_tws=gate,
+            table=parse_table(table_json),
+        )
+        return self._speed_cal
 
     async def refresh_smoothing(self) -> dict[str, float]:
         """Reload per-channel time constants from ``app_settings`` and apply
@@ -10403,7 +10420,10 @@ class Storage:
             await self.refresh_leeway_k()
         if any(e["parameter"] in ("compass_offset_port", "compass_offset_stbd") for e in entries):
             await self.refresh_compass_offsets()
-        if any(e["parameter"] in ("speed_cal_base", "speed_cal_heel_slope") for e in entries):
+        if any(
+            e["parameter"] in ("speed_cal_base", "speed_cal_heel_slope", "speed_cal_gate_min_tws")
+            for e in entries
+        ):
             await self.refresh_speed_cal()
         return ids
 
