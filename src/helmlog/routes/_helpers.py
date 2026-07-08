@@ -426,6 +426,28 @@ SETTINGS_DEFS: tuple[SettingDef, ...] = (
             "Only used for sibling captures; takes effect on retranscribe."
         ),
     ),
+    SettingDef(
+        key="DISPLAY_REFRESH_SECONDS",
+        label="E-paper refresh interval (seconds)",
+        input_type="number",
+        default="5",
+        help_text=(
+            "How often the remote e-paper display (LilyGo T5-S3) fetches and "
+            "redraws. Sent to the device in the X-Refresh-Seconds header, so "
+            "changing it here retunes the panel without reflashing."
+        ),
+    ),
+    SettingDef(
+        key="DISPLAY_FULL_REFRESH_SECONDS",
+        label="E-paper full-refresh interval (seconds)",
+        input_type="number",
+        default="300",
+        help_text=(
+            "How often the e-paper display does a full flash-clear to wipe "
+            "ghosting (between these, it uses lighter redraws). Sent in the "
+            "X-Full-Refresh-Seconds header."
+        ),
+    ),
 )
 
 SETTINGS_BY_KEY: dict[str, SettingDef] = {s.key: s for s in SETTINGS_DEFS}
