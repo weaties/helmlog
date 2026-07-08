@@ -1,22 +1,19 @@
-"""Render the remote e-paper display image (#820).
+"""Render the remote e-paper display image (#820, #822).
 
 HelmLog drives a LilyGo T5-S3 4.7" e-paper panel (960x540, 16 grey levels)
 as a cockpit instrument repeater.  Rather than lay out fonts on the ESP32,
 the panel is a thin frame-buffer client: it fetches a pre-rendered image
 from HelmLog and blits it.  This module does the rendering with Pillow.
 
-The layout shows six live values plus a derived one:
+#820 shipped one fixed layout.  #822 makes a *screen* data-driven — a
+``template`` (grid geometry) plus ``slots`` bound to metrics, defined in
+``display_screens.py``.  This module turns a resolved :class:`Screen` into
+pixels via :func:`render_screen`, renders the touch :func:`render_menu`, and
+packs frames into the device's 4-bit framebuffer.
 
-    STW   boat speed through water          (bsp_kts)
-    VMG   velocity made good to wind        (derived: STW * cos(TWA))
-    TWA   true wind angle                   (twa_deg)
-    TWS   true wind speed                   (tws_kts)
-    AWA   apparent wind angle               (awa_deg)
-    AWS   apparent wind speed               (aws_kts)
-
-Rendering is a pure function of the instrument snapshot so it is trivially
-testable and the same code path serves both the human-preview ``.png`` and
-the device ``.raw`` endpoints in ``routes/display.py``.
+Rendering is a pure function of the screen config + instrument snapshot so it
+is trivially testable, and the same code path serves both the human-preview
+``.png`` and the device ``.raw`` endpoints in ``routes/display.py``.
 """
 
 from __future__ import annotations
@@ -30,17 +27,42 @@ from zoneinfo import ZoneInfo
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from helmlog.display_screens import (
+    HEADER_H,
+    HEIGHT,
+    METRICS,
+    TEMPLATES,
+    WIDTH,
+    Screen,
+    Slot,
+    SlotBinding,
+    compute_vmg,
+    default_screens,
+    enabled_screens,
+    metric_value,
+    resolve_format,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from datetime import datetime
 
+# Re-exported so existing importers (tests, #820 callers) keep working after
+# the geometry constants and VMG math moved into display_screens.
+__all__ = [
+    "HEIGHT",
+    "WIDTH",
+    "compute_vmg",
+    "menu_regions",
+    "pack_epd_4bit",
+    "render_display",
+    "render_menu",
+    "render_screen",
+]
+
 # Pillow returns a FreeType face for a real .ttf and a bitmap face from
 # load_default(); draw.text/textbbox accept either.
 type AnyFont = ImageFont.FreeTypeFont | ImageFont.ImageFont
-
-# Panel geometry (LilyGo T5-S3 4.7"). Origin top-left, landscape.
-WIDTH = 960
-HEIGHT = 540
 
 # Greyscale values (8-bit "L"); the device quantises to 16 levels.
 BLACK = 0
@@ -67,19 +89,6 @@ def _font(size: int, *, bold: bool = True) -> AnyFont:
         return ImageFont.load_default()
 
 
-def compute_vmg(stw_kts: float | None, twa_deg: float | None) -> float | None:
-    """Velocity made good to the wind: ``STW * cos(TWA)``.
-
-    Matches HelmLog's semantic-layer definition (see ``semantic_layer.py``).
-    Positive upwind (TWA near 0), negative downwind (TWA near 180) — i.e. the
-    component of boat speed directly toward the true-wind direction.  Returns
-    None if either input is missing.
-    """
-    if stw_kts is None or twa_deg is None:
-        return None
-    return round(stw_kts * math.cos(math.radians(twa_deg)), 2)
-
-
 def _fmt(value: float | None, decimals: int) -> str:
     """Format a number, or an em-dash placeholder when unavailable."""
     if value is None:
@@ -92,6 +101,34 @@ def _fmt_angle(value: float | None) -> str:
     if value is None:
         return "—"
     return f"{round(value)}°"
+
+
+def _local_clock(now: datetime, tz: str) -> str:
+    try:
+        local = now.astimezone(ZoneInfo(tz))
+    except Exception:  # noqa: BLE001 — bad tz string shouldn't break the screen
+        local = now
+    return local.strftime("%H:%M:%S")
+
+
+def _format_metric_value(fmt: str, value: float | None, *, now: datetime, tz: str) -> str:
+    """Render a metric value string per its concrete format token."""
+    if fmt == "clock":
+        return _local_clock(now, tz)
+    if fmt == "angle":
+        return _fmt_angle(value)
+    decimals = {"num0": 0, "num1": 1, "num2": 2}.get(fmt, 1)
+    return _fmt(value, decimals)
+
+
+def _slot_label(binding: SlotBinding, fmt: str) -> str:
+    """The cell label: override or the metric's name, plus its unit."""
+    metric = METRICS[binding.metric]
+    label = binding.label if binding.label is not None else metric.label
+    # Only numeric readings carry a unit; angles/clock read cleaner without one.
+    if metric.unit and fmt in ("num0", "num1", "num2"):
+        return f"{label}  {metric.unit}"
+    return label
 
 
 def _centered_text(
@@ -124,8 +161,158 @@ def _cell(
     """Draw one labelled value cell: small label top-left, big value centered."""
     x0, y0, x1, y1 = box
     # Labels in black: mid-grey renders too faint on the e-paper panel.
-    draw.text((x0 + 18, y0 + 12), label, font=_font(label_size), fill=BLACK)
+    if label:
+        draw.text((x0 + 18, y0 + 12), label, font=_font(label_size), fill=BLACK)
     _centered_text(draw, (x0, y0 + label_size // 2, x1, y1), value, _font(value_size))
+
+
+def _draw_header(
+    draw: ImageDraw.ImageDraw,
+    *,
+    title: str,
+    now: datetime,
+    tz: str,
+    badge: str | None,
+) -> None:
+    """Draw the shared black header strip: title left, clock + badge right."""
+    draw.rectangle((0, 0, WIDTH, HEADER_H), fill=BLACK)
+    draw.text((20, 14), title, font=_font(40), fill=WHITE)
+
+    clock = _local_clock(now, tz)
+    clock_font = _font(30)
+    c_w = draw.textbbox((0, 0), clock, font=clock_font)[2]
+    if badge:
+        badge_font = _font(30)
+        b_w = draw.textbbox((0, 0), badge, font=badge_font)[2]
+        draw.text((WIDTH - b_w - 20, 18), badge, font=badge_font, fill=WHITE)
+        draw.text((WIDTH - b_w - c_w - 54, 18), clock, font=clock_font, fill=WHITE)
+    else:
+        draw.text((WIDTH - c_w - 20, 18), clock, font=clock_font, fill=WHITE)
+
+
+def _draw_compass(
+    draw: ImageDraw.ImageDraw,
+    slot: Slot,
+    binding: SlotBinding | None,
+    instruments: Mapping[str, float | None],
+) -> None:
+    """Draw a compass dial in *slot*: a ring, cardinal marks, a needle at the
+    bound heading metric's bearing, and the value at the centre.
+    """
+    x0, y0, x1, y1 = slot.box
+    cx = (x0 + x1) / 2
+    cy = (y0 + y1) / 2
+    radius = min(x1 - x0, y1 - y0) / 2 - 40
+
+    draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), outline=GREY, width=3)
+
+    # Cardinal ticks + letters (N up, clockwise).
+    for label, bearing_deg in (("N", 0), ("E", 90), ("S", 180), ("W", 270)):
+        rad = math.radians(bearing_deg)
+        ox = cx + radius * math.sin(rad)
+        oy = cy - radius * math.cos(rad)
+        ix = cx + (radius - 18) * math.sin(rad)
+        iy = cy - (radius - 18) * math.cos(rad)
+        draw.line((ix, iy, ox, oy), fill=GREY, width=3)
+        _centered_text(
+            draw,
+            (int(ox - 20), int(oy - 20), int(ox + 20), int(oy + 20)),
+            label,
+            _font(26),
+            fill=BLACK,
+        )
+
+    bearing = metric_value(binding.metric, instruments) if binding is not None else None
+    if bearing is not None:
+        rad = math.radians(bearing)
+        tip = (cx + (radius - 6) * math.sin(rad), cy - (radius - 6) * math.cos(rad))
+        left = math.radians(bearing + 150)
+        right = math.radians(bearing - 150)
+        base_r = 26
+        draw.polygon(
+            [
+                tip,
+                (cx + base_r * math.sin(left), cy - base_r * math.cos(left)),
+                (cx, cy),
+                (cx + base_r * math.sin(right), cy - base_r * math.cos(right)),
+            ],
+            fill=BLACK,
+        )
+
+    metric = METRICS[binding.metric] if binding is not None else None
+    label = binding.label if binding and binding.label else (metric.label if metric else "")
+    if label:
+        _centered_text(
+            draw,
+            (int(cx - 100), int(cy - radius / 2 - 6), int(cx + 100), int(cy - radius / 2 + 26)),
+            label,
+            _font(slot.label_size),
+            fill=BLACK,
+        )
+    _centered_text(
+        draw,
+        (
+            int(cx - 130),
+            int(cy - slot.value_size / 2),
+            int(cx + 130),
+            int(cy + slot.value_size / 2),
+        ),
+        _fmt_angle(bearing),
+        _font(slot.value_size),
+    )
+
+
+def render_screen(
+    screen: Screen,
+    instruments: Mapping[str, float | None],
+    *,
+    now: datetime,
+    tz: str = "UTC",
+    status: str | None = None,
+) -> Image.Image:
+    """Render *screen* to a 960x540 greyscale ``"L"`` image.
+
+    *instruments* is a ``latest_instruments()`` snapshot.  *status* overrides
+    the header badge; when None it is derived — "NO DATA" if the snapshot has
+    no headline value, otherwise "LIVE".
+    """
+    if status is None:
+        any_data = any(instruments.get(k) is not None for k in ("bsp_kts", "twa_deg", "tws_kts"))
+        status = "LIVE" if any_data else "NO DATA"
+
+    img = Image.new("L", (WIDTH, HEIGHT), WHITE)
+    draw = ImageDraw.Draw(img)
+    _draw_header(draw, title="HELMLOG", now=now, tz=tz, badge=status)
+
+    template = TEMPLATES.get(screen.template)
+    if template is None:  # defensive: parse_screens validates this
+        template = TEMPLATES["single"]
+
+    for slot in template.slots:
+        binding = screen.slots.get(slot.id)
+        if slot.kind == "compass":
+            _draw_compass(draw, slot, binding, instruments)
+            continue
+        if binding is None:
+            _cell(draw, slot.box, "", "—", value_size=slot.value_size, label_size=slot.label_size)
+            continue
+        fmt = resolve_format(binding.metric, binding.fmt)
+        value = metric_value(binding.metric, instruments)
+        text = _format_metric_value(fmt, value, now=now, tz=tz)
+        _cell(
+            draw,
+            slot.box,
+            _slot_label(binding, fmt),
+            text,
+            value_size=slot.value_size,
+            label_size=slot.label_size,
+        )
+
+    # Separators drawn last so cells sit on top.
+    for line in template.separators:
+        draw.line(line, fill=GREY, width=3)
+
+    return img
 
 
 def render_display(
@@ -135,94 +322,72 @@ def render_display(
     tz: str = "UTC",
     status: str | None = None,
 ) -> Image.Image:
-    """Render the 960x540 instrument repeater to a greyscale ``"L"`` image.
+    """Render the default #820 layout (kept for back-compat).
 
-    *instruments* is a ``latest_instruments()`` snapshot.  *status* overrides
-    the header badge; when None it is derived — "NO DATA" if the whole
-    snapshot is empty, otherwise "LIVE".
+    Equivalent to rendering the first seeded screen (``Wind & Speed``); the
+    ``?screen=``-less endpoints use this so behaviour is unchanged from #820.
     """
-    stw = instruments.get("bsp_kts")
-    twa = instruments.get("twa_deg")
-    tws = instruments.get("tws_kts")
-    awa = instruments.get("awa_deg")
-    aws = instruments.get("aws_kts")
-    vmg = compute_vmg(stw, twa)
+    return render_screen(default_screens()[0], instruments, now=now, tz=tz, status=status)
 
-    if status is None:
-        any_data = any(instruments.get(k) is not None for k in ("bsp_kts", "twa_deg", "tws_kts"))
-        status = "LIVE" if any_data else "NO DATA"
 
+# ---------------------------------------------------------------------------
+# Touch menu (#822 milestone 2)
+# ---------------------------------------------------------------------------
+
+_MENU_COLS = 2
+
+
+def _menu_tiles(screens: list[Screen]) -> list[tuple[Screen, tuple[int, int, int, int]]]:
+    """Lay enabled screens out as a grid of tiles below the header."""
+    items = enabled_screens(screens)
+    if not items:
+        return []
+    rows = (len(items) + _MENU_COLS - 1) // _MENU_COLS
+    tile_w = WIDTH // _MENU_COLS
+    tile_h = (HEIGHT - HEADER_H) // rows
+    tiles: list[tuple[Screen, tuple[int, int, int, int]]] = []
+    for i, screen in enumerate(items):
+        col = i % _MENU_COLS
+        row = i // _MENU_COLS
+        x0 = col * tile_w
+        y0 = HEADER_H + row * tile_h
+        tiles.append((screen, (x0, y0, x0 + tile_w, y0 + tile_h)))
+    return tiles
+
+
+def menu_regions(screens: list[Screen]) -> list[dict[str, object]]:
+    """Tap regions for the touch menu: ``[{x, y, w, h, id, name}, …]``.
+
+    Shares geometry with :func:`render_menu` so a tap maps to exactly the tile
+    the device drew.  Only enabled screens appear, ordered like the menu.
+    """
+    return [
+        {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "id": s.id, "name": s.name}
+        for s, (x0, y0, x1, y1) in _menu_tiles(screens)
+    ]
+
+
+def render_menu(
+    screens: list[Screen],
+    *,
+    now: datetime,
+    tz: str = "UTC",
+) -> Image.Image:
+    """Render the screen-picker menu: a numbered tile per enabled screen."""
     img = Image.new("L", (WIDTH, HEIGHT), WHITE)
     draw = ImageDraw.Draw(img)
+    _draw_header(draw, title="SELECT SCREEN", now=now, tz=tz, badge=None)
 
-    # --- Header strip -----------------------------------------------------
-    header_h = 66
-    draw.rectangle((0, 0, WIDTH, header_h), fill=BLACK)
-    draw.text((20, 14), "HELMLOG", font=_font(40), fill=WHITE)
+    tiles = _menu_tiles(screens)
+    if not tiles:
+        _centered_text(draw, (0, HEADER_H, WIDTH, HEIGHT), "No screens", _font(60))
+        return img
 
-    try:
-        local = now.astimezone(ZoneInfo(tz))
-    except Exception:  # noqa: BLE001 — bad tz string shouldn't break the screen
-        local = now
-    clock = local.strftime("%H:%M:%S")
-    badge = status
-    badge_font = _font(30)
-    clock_font = _font(30)
-    b_w = draw.textbbox((0, 0), badge, font=badge_font)[2]
-    c_w = draw.textbbox((0, 0), clock, font=clock_font)[2]
-    draw.text((WIDTH - b_w - 20, 18), badge, font=badge_font, fill=WHITE)
-    draw.text((WIDTH - b_w - c_w - 54, 18), clock, font=clock_font, fill=WHITE)
-
-    # --- Grid -------------------------------------------------------------
-    # Row 1: STW | VMG  (the two headline numbers)
-    # Row 2: TWA | TWS | AWA | AWS
-    row1_top = header_h
-    row1_bot = header_h + 268
-    row2_bot = HEIGHT
-    mid_x = WIDTH // 2
-
-    _cell(
-        draw,
-        (0, row1_top, mid_x, row1_bot),
-        "STW  kts",
-        _fmt(stw, 1),
-        value_size=180,
-        label_size=34,
-    )
-    _cell(
-        draw,
-        (mid_x, row1_top, WIDTH, row1_bot),
-        "VMG  kts",
-        _fmt(vmg, 1),
-        value_size=180,
-        label_size=34,
-    )
-
-    col_w = WIDTH // 4
-    row2_cells = (
-        ("TWA", _fmt_angle(twa)),
-        ("TWS  kts", _fmt(tws, 1)),
-        ("AWA", _fmt_angle(awa)),
-        ("AWS  kts", _fmt(aws, 1)),
-    )
-    for i, (label, value) in enumerate(row2_cells):
-        x0 = i * col_w
-        _cell(
-            draw,
-            (x0, row1_bot, x0 + col_w, row2_bot),
-            label,
-            value,
-            value_size=86,
-            label_size=30,
-        )
-
-    # --- Separators (drawn last so cells sit on top) ----------------------
-    draw.line((0, row1_bot, WIDTH, row1_bot), fill=GREY, width=3)
-    draw.line((mid_x, row1_top, mid_x, row1_bot), fill=GREY, width=3)
-    for i in range(1, 4):
-        x = i * col_w
-        draw.line((x, row1_bot, x, row2_bot), fill=GREY, width=3)
-
+    for i, (screen, box) in enumerate(tiles, start=1):
+        x0, y0, x1, y1 = box
+        draw.rectangle((x0 + 6, y0 + 6, x1 - 6, y1 - 6), outline=GREY, width=3)
+        draw.text((x0 + 22, y0 + 18), str(i), font=_font(40), fill=BLACK)
+        _centered_text(draw, (x0 + 60, y0, x1, y1), screen.name, _font(48))
     return img
 
 
