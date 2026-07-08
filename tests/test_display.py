@@ -10,7 +10,13 @@ import httpx
 import pytest
 from PIL import Image
 
-from helmlog.display_render import HEIGHT, WIDTH, compute_vmg, render_display
+from helmlog.display_render import (
+    HEIGHT,
+    WIDTH,
+    compute_vmg,
+    pack_epd_4bit,
+    render_display,
+)
 from helmlog.nmea2000 import PGN_SPEED_THROUGH_WATER, PGN_WIND_DATA, SpeedRecord, WindRecord
 from helmlog.web import create_app
 
@@ -45,6 +51,66 @@ def test_render_empty_snapshot_is_no_data() -> None:
     # All-None snapshot must still render a full-size image (status "NO DATA").
     img = render_display(dict.fromkeys(("bsp_kts", "twa_deg", "tws_kts"), None), now=_NOW)
     assert img.size == (WIDTH, HEIGHT)
+
+
+def test_pack_epd_size() -> None:
+    img = Image.new("L", (WIDTH, HEIGHT), 255)
+    packed = pack_epd_4bit(img)
+    assert len(packed) == WIDTH * HEIGHT // 2
+
+
+def test_pack_epd_white_and_black() -> None:
+    white = pack_epd_4bit(Image.new("L", (WIDTH, HEIGHT), 255))
+    black = pack_epd_4bit(Image.new("L", (WIDTH, HEIGHT), 0))
+    assert set(white) == {0xFF}  # 0xF is white in both nibbles
+    assert set(black) == {0x00}
+
+
+def test_pack_epd_nibble_layout() -> None:
+    # Column 0 black, column 1 white, rest white. The first byte of row 0
+    # holds (even=col0=black low nibble, odd=col1=white high nibble) = 0xF0.
+    img = Image.new("L", (WIDTH, HEIGHT), 255)
+    for y in range(HEIGHT):
+        img.putpixel((0, y), 0)
+    packed = pack_epd_4bit(img)
+    assert packed[0] == 0xF0
+
+
+def test_pack_epd_invert() -> None:
+    # Inverting an all-white image yields all-black packing.
+    assert set(pack_epd_4bit(Image.new("L", (WIDTH, HEIGHT), 255), invert=True)) == {0x00}
+
+
+def test_pack_epd_rejects_wrong_size() -> None:
+    with pytest.raises(ValueError, match="expected"):
+        pack_epd_4bit(Image.new("L", (100, 100), 255))
+
+
+@pytest.mark.asyncio
+async def test_display_raw_endpoint(storage: Storage) -> None:
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/display.raw")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/octet-stream"
+    assert len(resp.content) == WIDTH * HEIGHT // 2
+    # Server-controlled refresh cadence travels with the frame.
+    assert int(resp.headers["x-refresh-seconds"]) == 5  # default
+    assert int(resp.headers["x-full-refresh-seconds"]) == 300  # default
+
+
+@pytest.mark.asyncio
+async def test_display_raw_refresh_header_follows_setting(storage: Storage) -> None:
+    await storage.set_setting("DISPLAY_REFRESH_SECONDS", "12")
+    app = create_app(storage)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/display.raw")
+    assert int(resp.headers["x-refresh-seconds"]) == 12
 
 
 @pytest.mark.asyncio

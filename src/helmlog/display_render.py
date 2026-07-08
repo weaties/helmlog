@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 if TYPE_CHECKING:
@@ -222,3 +223,33 @@ def render_display(
         draw.line((x, row1_bot, x, row2_bot), fill=GREY, width=3)
 
     return img
+
+
+def pack_epd_4bit(img: Image.Image, *, invert: bool = False) -> bytes:
+    """Pack an ``"L"`` image into the LilyGo EPD47 4-bit framebuffer layout.
+
+    The panel framebuffer is ``WIDTH/2`` bytes per row, 2 pixels per byte, 4
+    bits each — the top nibble of the 8-bit grey value.  Per the library's
+    ``epd_draw_pixel()``, the even-x pixel occupies the low nibble and the
+    odd-x pixel the high nibble; ``0x0`` is black and ``0xF`` white, which
+    matches our ``"L"`` image (0 black, 255 white).  The returned buffer is
+    exactly ``WIDTH * HEIGHT / 2`` bytes, ready to stream straight into the
+    device framebuffer with no decoding.
+
+    *invert* flips black/white before packing — a bring-up escape hatch in
+    case a given panel's grayscale polarity is reversed, so it can be fixed
+    from the server without reflashing.
+    """
+    if img.mode != "L":
+        img = img.convert("L")
+    if img.size != (WIDTH, HEIGHT):
+        raise ValueError(f"expected {WIDTH}x{HEIGHT} image, got {img.size[0]}x{img.size[1]}")
+
+    arr = np.frombuffer(img.tobytes(), dtype=np.uint8).reshape(HEIGHT, WIDTH)
+    if invert:
+        arr = 255 - arr
+    nib = (arr >> 4).astype(np.uint8)  # 0..15, one 4-bit level per pixel
+    even = nib[:, 0::2]  # even-x pixels → low nibble
+    odd = nib[:, 1::2]  # odd-x pixels → high nibble
+    packed = ((odd << 4) | even).astype(np.uint8)
+    return packed.tobytes()
