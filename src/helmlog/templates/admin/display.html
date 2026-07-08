@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% block title %}Display Screens — HelmLog{% endblock %}
+{% block extra_css %}
+<style>
+h1{font-size:1.3rem;font-weight:700;color:var(--accent)}
+.card{background:var(--bg-secondary);border-radius:12px;padding:16px;margin-bottom:12px}
+.layout{display:grid;grid-template-columns:minmax(240px,320px) 1fr;gap:12px;align-items:start}
+@media(max-width:760px){.layout{grid-template-columns:1fr}}
+.screen-list{list-style:none;padding:0;margin:0}
+.screen-list li{display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--border);cursor:pointer;font-size:.86rem}
+.screen-list li.active{background:var(--bg-input);border-left:3px solid var(--accent)}
+.screen-list li .nm{flex:1;font-weight:600}
+.screen-list li .tpl{font-size:.72rem;color:var(--text-secondary)}
+.muted{color:var(--text-secondary);font-size:.75rem}
+.btn-sm{padding:6px 10px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);font-size:.78rem;cursor:pointer;color:var(--text-primary)}
+.btn-primary{color:var(--accent);border-color:var(--accent-strong)}
+.btn-del{color:var(--danger);border-color:var(--danger)}
+label.fld{display:block;font-size:.74rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 3px}
+input.inline,select.inline{background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:6px 8px;color:var(--text-primary);font-size:.85rem;width:100%;box-sizing:border-box}
+.slot-row{display:grid;grid-template-columns:70px 1fr 1fr 110px;gap:8px;align-items:center;margin-bottom:6px}
+.slot-row .slot-id{font-family:monospace;font-size:.78rem;color:var(--text-secondary)}
+.preview-wrap{margin-top:12px;text-align:center}
+.preview-wrap img{max-width:100%;border:1px solid var(--border);border-radius:6px;background:#fff}
+#flash{font-size:.8rem;margin:6px 0;min-height:1.1em}
+.toolbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+</style>
+{% endblock %}
+{% block content %}
+<h1 style="margin-bottom:6px">Display Screens</h1>
+<p class="muted" style="margin-bottom:12px">
+  Compose the screens the e-paper repeater (LilyGo T5-S3) can show. Each screen
+  is a <em>template</em> with <em>slots</em> bound to metrics. The device picks a
+  screen via its touch menu; HelmLog does not push. Save to apply.
+</p>
+
+<div class="card">
+  <div class="toolbar">
+    <button class="btn-sm btn-primary" onclick="addScreen()">+ Add screen</button>
+    <button class="btn-sm btn-primary" onclick="saveAll()">Save all</button>
+    <span style="flex:1"></span>
+    <span id="flash"></span>
+  </div>
+
+  <div class="layout">
+    <div>
+      <ul class="screen-list" id="screen-list"></ul>
+    </div>
+    <div id="editor"><p class="muted">Select or add a screen to edit.</p></div>
+  </div>
+</div>
+
+<script>
+let CATALOG = {templates: [], metrics: [], formats: []};
+let SCREENS = [];
+let selectedId = null;
+let previewTimer = null;
+
+function esc(s){return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function flash(msg, err){const el = document.getElementById('flash'); el.textContent = msg; el.style.color = err ? 'var(--danger)' : 'var(--text-secondary)';}
+function templateById(id){return CATALOG.templates.find(t => t.id === id);}
+
+async function load(){
+  const [cat, scr] = await Promise.all([
+    fetch('/api/admin/display/catalog').then(r => r.json()),
+    fetch('/api/admin/display/screens').then(r => r.json()),
+  ]);
+  CATALOG = cat;
+  SCREENS = scr;
+  if (SCREENS.length && !selectedId) selectedId = SCREENS[0].id;
+  renderList();
+  renderEditor();
+}
+
+function renderList(){
+  const ul = document.getElementById('screen-list');
+  SCREENS.sort((a,b) => (a.order - b.order) || a.id.localeCompare(b.id));
+  ul.innerHTML = SCREENS.map(s =>
+    '<li class="' + (s.id === selectedId ? 'active' : '') + '" onclick="selectScreen(\'' + esc(s.id) + '\')">'
+    + '<span class="nm">' + esc(s.name) + (s.enabled ? '' : ' <span class="muted">(off)</span>') + '</span>'
+    + '<span class="tpl">' + esc(s.template) + '</span>'
+    + '</li>'
+  ).join('') || '<li class="muted">No screens yet.</li>';
+}
+
+function selectScreen(id){selectedId = id; renderList(); renderEditor();}
+
+function currentScreen(){return SCREENS.find(s => s.id === selectedId);}
+
+function renderEditor(){
+  const s = currentScreen();
+  const ed = document.getElementById('editor');
+  if (!s){ed.innerHTML = '<p class="muted">Select or add a screen to edit.</p>'; return;}
+  const tpl = templateById(s.template);
+  const metricOpts = CATALOG.metrics.map(m => '<option value="' + m.key + '">' + esc(m.label) + (m.unit ? ' (' + esc(m.unit) + ')' : '') + '</option>').join('');
+  const fmtOpts = CATALOG.formats.map(f => '<option value="' + f + '">' + f + '</option>').join('');
+  const slotRows = (tpl ? tpl.slots : []).map(slot => {
+    const b = s.slots[slot.id] || {metric: '', label: null, fmt: 'auto'};
+    return '<div class="slot-row" data-slot="' + esc(slot.id) + '">'
+      + '<span class="slot-id">' + esc(slot.id) + '</span>'
+      + '<select class="inline sl-metric" onchange="onEdit()"><option value="">—</option>' + metricOpts + '</select>'
+      + '<input class="inline sl-label" placeholder="label (optional)" oninput="onEdit()" />'
+      + '<select class="inline sl-fmt" onchange="onEdit()">' + fmtOpts + '</select>'
+      + '</div>';
+  }).join('');
+
+  ed.innerHTML =
+      '<label class="fld">Name</label><input id="ed-name" class="inline" oninput="onEdit()" />'
+    + '<div style="display:grid;grid-template-columns:1fr 90px 90px;gap:8px">'
+    +   '<div><label class="fld">Template</label><select id="ed-template" class="inline" onchange="onTemplateChange()">'
+    +     CATALOG.templates.map(t => '<option value="' + t.id + '">' + esc(t.name) + '</option>').join('') + '</select></div>'
+    +   '<div><label class="fld">Order</label><input id="ed-order" class="inline" type="number" oninput="onEdit()" /></div>'
+    +   '<div><label class="fld">Enabled</label><select id="ed-enabled" class="inline" onchange="onEdit()"><option value="true">Yes</option><option value="false">No</option></select></div>'
+    + '</div>'
+    + '<label class="fld">Slots (slot · metric · label · format)</label>' + slotRows
+    + '<div style="margin-top:12px;display:flex;gap:6px">'
+    +   '<button class="btn-sm btn-del" onclick="deleteScreen()">Delete screen</button>'
+    + '</div>'
+    + '<div class="preview-wrap"><label class="fld" style="text-align:left">Live preview</label><img id="preview" alt="preview" /></div>';
+
+  document.getElementById('ed-name').value = s.name;
+  document.getElementById('ed-template').value = s.template;
+  document.getElementById('ed-order').value = s.order;
+  document.getElementById('ed-enabled').value = s.enabled ? 'true' : 'false';
+  if (tpl) tpl.slots.forEach(slot => {
+    const row = ed.querySelector('.slot-row[data-slot="' + slot.id + '"]');
+    if (!row) return;
+    const b = s.slots[slot.id] || {};
+    row.querySelector('.sl-metric').value = b.metric || '';
+    row.querySelector('.sl-label').value = b.label || '';
+    row.querySelector('.sl-fmt').value = b.fmt || 'auto';
+  });
+  schedulePreview();
+}
+
+function readEditorInto(s){
+  s.name = document.getElementById('ed-name').value.trim();
+  s.template = document.getElementById('ed-template').value;
+  s.order = parseInt(document.getElementById('ed-order').value, 10) || 0;
+  s.enabled = document.getElementById('ed-enabled').value === 'true';
+  const slots = {};
+  document.querySelectorAll('.slot-row').forEach(row => {
+    const metric = row.querySelector('.sl-metric').value;
+    if (!metric) return;
+    const label = row.querySelector('.sl-label').value.trim();
+    const fmt = row.querySelector('.sl-fmt').value;
+    const b = {metric: metric, fmt: fmt};
+    if (label) b.label = label;
+    slots[row.dataset.slot] = b;
+  });
+  s.slots = slots;
+}
+
+function onEdit(){
+  const s = currentScreen();
+  if (!s) return;
+  readEditorInto(s);
+  renderList();
+  schedulePreview();
+}
+
+function onTemplateChange(){
+  const s = currentScreen();
+  if (!s) return;
+  s.template = document.getElementById('ed-template').value;
+  // Keep bindings whose slot id still exists in the new template.
+  const tpl = templateById(s.template);
+  const valid = new Set((tpl ? tpl.slots : []).map(x => x.id));
+  const kept = {};
+  Object.keys(s.slots || {}).forEach(k => {if (valid.has(k)) kept[k] = s.slots[k];});
+  s.slots = kept;
+  renderEditor();
+}
+
+function schedulePreview(){
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(updatePreview, 300);
+}
+
+async function updatePreview(){
+  const s = currentScreen();
+  const img = document.getElementById('preview');
+  if (!s || !img) return;
+  const r = await fetch('/api/admin/display/preview.png', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(s),
+  });
+  if (!r.ok){img.removeAttribute('src'); flash('Preview: ' + (await r.json()).detail, true); return;}
+  const blob = await r.blob();
+  if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+  const url = URL.createObjectURL(blob);
+  img.dataset.url = url;
+  img.src = url;
+}
+
+function slugify(name){return (name || 'screen').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'screen';}
+
+function addScreen(){
+  let base = 'screen', id = base, n = 1;
+  while (SCREENS.some(s => s.id === id)) id = base + '-' + (++n);
+  const order = SCREENS.reduce((m, s) => Math.max(m, s.order), -1) + 1;
+  const tpl = CATALOG.templates[0];
+  SCREENS.push({id: id, name: 'New Screen', template: tpl.id, order: order, enabled: true, slots: {}});
+  selectedId = id;
+  renderList();
+  renderEditor();
+}
+
+function deleteScreen(){
+  SCREENS = SCREENS.filter(s => s.id !== selectedId);
+  selectedId = SCREENS.length ? SCREENS[0].id : null;
+  renderList();
+  renderEditor();
+}
+
+async function saveAll(){
+  // Re-derive ids from names so they stay stable + unique.
+  const seen = new Set();
+  SCREENS.forEach(s => {
+    let id = slugify(s.name), base = id, n = 1;
+    while (seen.has(id)) id = base + '-' + (++n);
+    if (s.id === selectedId) selectedId = id;
+    s.id = id;
+    seen.add(id);
+  });
+  const r = await fetch('/api/admin/display/screens', {
+    method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(SCREENS),
+  });
+  if (!r.ok){flash('Save failed: ' + (await r.json()).detail, true); return;}
+  SCREENS = await r.json();
+  flash('Saved ' + SCREENS.length + ' screen(s).');
+  renderList();
+  renderEditor();
+}
+
+load();
+</script>
+{% endblock %}
