@@ -123,7 +123,8 @@ def _cell(
 ) -> None:
     """Draw one labelled value cell: small label top-left, big value centered."""
     x0, y0, x1, y1 = box
-    draw.text((x0 + 18, y0 + 12), label, font=_font(label_size), fill=DARK)
+    # Labels in black: mid-grey renders too faint on the e-paper panel.
+    draw.text((x0 + 18, y0 + 12), label, font=_font(label_size), fill=BLACK)
     _centered_text(draw, (x0, y0 + label_size // 2, x1, y1), value, _font(value_size))
 
 
