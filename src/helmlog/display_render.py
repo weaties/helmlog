@@ -334,36 +334,44 @@ def render_display(
 # Touch menu (#822 milestone 2)
 # ---------------------------------------------------------------------------
 
-_MENU_COLS = 2
-
 
 def _menu_tiles(screens: list[Screen]) -> list[tuple[Screen, tuple[int, int, int, int]]]:
-    """Lay enabled screens out as a grid of tiles below the header."""
+    """Lay enabled screens out as full-width rows, top to bottom.
+
+    A single column (rather than a grid) makes tap hit-testing one-dimensional:
+    with the panel mounted in any rotation the firmware only has to get one axis
+    right, which removes the class of touch/orientation mismatch flagged in
+    eink-screen#1.  Tiles are also larger and easier to hit.
+    """
     items = enabled_screens(screens)
     if not items:
         return []
-    rows = (len(items) + _MENU_COLS - 1) // _MENU_COLS
-    tile_w = WIDTH // _MENU_COLS
-    tile_h = (HEIGHT - HEADER_H) // rows
-    tiles: list[tuple[Screen, tuple[int, int, int, int]]] = []
-    for i, screen in enumerate(items):
-        col = i % _MENU_COLS
-        row = i // _MENU_COLS
-        x0 = col * tile_w
-        y0 = HEADER_H + row * tile_h
-        tiles.append((screen, (x0, y0, x0 + tile_w, y0 + tile_h)))
-    return tiles
+    tile_h = (HEIGHT - HEADER_H) // len(items)
+    return [
+        (screen, (0, HEADER_H + i * tile_h, WIDTH, HEADER_H + (i + 1) * tile_h))
+        for i, screen in enumerate(items)
+    ]
 
 
 def menu_regions(screens: list[Screen]) -> list[dict[str, object]]:
-    """Tap regions for the touch menu: ``[{x, y, w, h, id, name}, …]``.
+    """Tap regions for the touch menu: ``[{index, x, y, w, h, id, name}, …]``.
 
     Shares geometry with :func:`render_menu` so a tap maps to exactly the tile
     the device drew.  Only enabled screens appear, ordered like the menu.
+    ``index`` is the 1-based number drawn on the tile — the firmware can hit-test
+    by rectangle *or*, as a fallback, select by the tile number it drew.
     """
     return [
-        {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "id": s.id, "name": s.name}
-        for s, (x0, y0, x1, y1) in _menu_tiles(screens)
+        {
+            "index": i,
+            "x": x0,
+            "y": y0,
+            "w": x1 - x0,
+            "h": y1 - y0,
+            "id": s.id,
+            "name": s.name,
+        }
+        for i, (s, (x0, y0, x1, y1)) in enumerate(_menu_tiles(screens), start=1)
     ]
 
 

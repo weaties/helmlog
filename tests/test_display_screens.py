@@ -225,6 +225,18 @@ def test_menu_regions_are_within_panel_bounds() -> None:
         assert r["y"] + r["h"] <= HEIGHT  # type: ignore[operator]
 
 
+def test_menu_regions_are_single_column_and_indexed() -> None:
+    # Single column: every tile spans the full width, stacked top→bottom with
+    # a sequential 1-based index (robustness aid for rotated-panel hit-testing).
+    regions = menu_regions(default_screens())
+    assert [r["index"] for r in regions] == list(range(1, len(regions) + 1))
+    assert all(r["x"] == 0 and r["w"] == WIDTH for r in regions)
+    ys = [r["y"] for r in regions]
+    assert ys == sorted(ys)
+    for a, b in zip(regions, regions[1:], strict=False):
+        assert a["y"] + a["h"] <= b["y"]  # type: ignore[operator]  # no overlap
+
+
 def test_menu_regions_empty_when_none_enabled() -> None:
     screens = [Screen(id="a", name="A", template="single", enabled=False)]
     assert menu_regions(screens) == []

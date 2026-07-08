@@ -14,8 +14,8 @@ Device-facing (viewer auth):
 - ``GET /api/display/screens`` — enabled screens ``[{id, name, order}]`` for
   the device to build its touch menu.
 - ``GET /api/display/menu.png`` / ``.raw`` — the menu image.
-- ``GET /api/display/menu`` — tap regions ``[{x, y, w, h, id, name}]`` so a
-  touch maps to a screen.
+- ``GET /api/display/menu`` — tap regions ``[{index, x, y, w, h, id, name}]``
+  so a touch maps to a screen.
 
 Composer (admin auth):
 - ``GET/PUT /api/admin/display/screens`` — read/replace the full screen list.
@@ -232,7 +232,7 @@ async def api_display_menu_regions(
     request: Request,
     _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
 ) -> JSONResponse:
-    """Tap regions ``[{x, y, w, h, id, name}]`` matching the menu image tiles."""
+    """Tap regions ``[{index, x, y, w, h, id, name}]`` matching the menu tiles."""
     screens = await _load_screens(request)
     return JSONResponse(menu_regions(screens))
 
