@@ -182,7 +182,7 @@ those rules here. The non-enforceable ones:
 | Read device paths from `.env` / config (`.env.example` is the reference). | Hardcode `/dev/can0` or similar paths. |
 | Keep `main.py` as wiring only — start the loop, no business logic. | Mix decode/storage/web logic into `main.py`. |
 | Add deps via `uv add <pkg>` then `uv sync`; verify the import. | Edit `pyproject.toml` by hand for deps, or use `uv pip install`. |
-| After a pull or branch switch, run `uv sync` (or `./scripts/deploy.sh` on the Pi). | Assume the venv is up to date — the Pi service runs `--no-sync`. |
+| After a local pull or branch switch, run `uv sync`. Deploy to the Pi from the web **Deploy admin** (`/admin/deployment`). | Hand-run `./scripts/deploy.sh` / `systemctl` on the Pi as the routine path, or assume the venv is up to date — the service runs `--no-sync`. |
 | Commit + push every change before stopping work. | Leave uncommitted edits on the Pi — the next deploy wipes them. |
 | Run `uv run pytest tests/integration/ -v` for federation/co-op/peer-API changes. | Skip integration tests for federation work because unit tests pass. |
 | Keep `.db` files and the `data/` directory out of git. | Commit `helmlog.db` or other local data. |
@@ -204,6 +204,13 @@ review (`docs/data-licensing.md`) + a structured spec before implementation. See
 </important>
 
 <important if="working on the Pi (deployed device, not Mac dev)">
+- **Deploys go through the web Deploy admin** (`/admin/deployment`, nav →
+  "Deploy"), not by hand. Set the **tracked branch** + mode there; in evergreen
+  mode the Pi's auto-deployer (polls ~every 300 s) pulls, `uv sync`s, and
+  restarts on its own when that branch advances. The same page promotes
+  `main → stage → live`. `scripts/deploy.sh` / `sudo systemctl restart helmlog`
+  are the underlying fallback for when the web UI is unreachable (see
+  `/deploy-pi`).
 - After `uv add <pkg>` or any dependency change, restart the service:
   `sudo systemctl restart helmlog`. The service runs with `--no-sync` and
   trusts the venv.
