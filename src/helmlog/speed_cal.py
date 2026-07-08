@@ -94,16 +94,23 @@ def corrected_stw(
 #
 # Live-data regression showed the off-center paddlewheel's tack bias is not a
 # simple function of heel: it *reverses sign* with wind speed (port over-reads
-# most at 12–15 kt but under-reads below ~9 kt), so a single heel slope can't
-# fit it. Two data-driven refinements live here:
+# most at 12–15 kt but under-reads below ~9 kt) AND differs upwind vs downwind,
+# so a single heel slope can't fit it. Two data-driven refinements live here:
 #
 #   * a **breeze gate** — below ``gate_min_tws`` the noisy, sign-reversing
 #     light-air regime is left alone (only the base mean factor applies), and
-#   * a **TWS × tack lookup table** — per-(TWS bin, tack) factors, the model the
-#     data actually supports, used wherever TWS is known (the polar path).
+#   * a **TWS × point-of-sail × tack lookup table** — per-(TWS bin, upwind/
+#     downwind, tack) factors, the model the data actually supports, used
+#     wherever TWS + point-of-sail are known (the polar path).
 #
 # The heel-linear ``corrected_stw`` above remains the fallback for callers
-# without TWS (the live set/drift compute) and when no table bin matches.
+# without TWS/point-of-sail (the live set/drift compute) and when no bin matches.
+
+# Valid point-of-sail labels for a table entry (must match polar._point_of_sail).
+_POINTS_OF_SAIL = ("upwind", "downwind")
+
+# One resolved table entry: (tws_min, tws_max, point_of_sail, port_k, stbd_k).
+TableRow = tuple[float, float, str, float, float]
 
 
 @dataclass(frozen=True)
@@ -116,53 +123,66 @@ class SpeedCal:
             fallback. Default 0.0.
         gate_min_tws: Below this TWS (kt) the tack/heel term is suppressed and
             only ``base`` applies. 0.0 disables the gate.
-        table: Sorted ``(tws_min, tws_max, port_k, stbd_k)`` bins; ``tws_max``
-            exclusive. Empty → no table.
+        table: Sorted ``(tws_min, tws_max, point_of_sail, port_k, stbd_k)``
+            bins; ``tws_max`` exclusive, ``point_of_sail`` in ``upwind`` /
+            ``downwind``. Empty → no table.
     """
 
     base: float = 1.0
     heel_slope: float = 0.0
     gate_min_tws: float = 0.0
-    table: tuple[tuple[float, float, float, float], ...] = field(default_factory=tuple)
+    table: tuple[TableRow, ...] = field(default_factory=tuple)
 
 
 DEFAULT_CAL = SpeedCal()
 
 
-def parse_table(
-    spec: str | list[dict[str, Any]] | None,
-) -> tuple[tuple[float, float, float, float], ...]:
-    """Parse a TWS × tack table from a JSON string (or already-decoded list).
+def parse_table(spec: str | list[dict[str, Any]] | None) -> tuple[TableRow, ...]:
+    """Parse a TWS × point-of-sail × tack table from JSON (or a decoded list).
 
-    Each entry is ``{"tws_min":.., "tws_max":.., "port":.., "stbd":..}``. Bins
-    are returned sorted by ``tws_min``. Empty/blank/malformed input yields an
-    empty table (correction disabled) rather than raising — a bad admin value
-    must never take out the read path.
+    Each entry is
+    ``{"tws_min":.., "tws_max":.., "pos":"upwind"|"downwind", "port":.., "stbd":..}``.
+    Rows are returned sorted by ``(tws_min, pos)``. Empty/blank/malformed input —
+    including an unknown ``pos`` label — yields an empty table (correction
+    disabled) rather than raising: a bad admin value must never take out the
+    read path.
     """
     if not spec:
         return ()
     try:
         rows = json.loads(spec) if isinstance(spec, str) else spec
-        parsed = tuple(
-            (float(r["tws_min"]), float(r["tws_max"]), float(r["port"]), float(r["stbd"]))
-            for r in rows
-        )
+        parsed = []
+        for r in rows:
+            pos = str(r["pos"])
+            if pos not in _POINTS_OF_SAIL:
+                raise ValueError(f"unknown point-of-sail {pos!r}")
+            parsed.append(
+                (
+                    float(r["tws_min"]),
+                    float(r["tws_max"]),
+                    pos,
+                    float(r["port"]),
+                    float(r["stbd"]),
+                )
+            )
     except (ValueError, TypeError, KeyError) as e:
         logger.warning(
             "speed_cal: ignoring malformed speed_cal_table ({}): {}", type(e).__name__, e
         )
         return ()
-    return tuple(sorted(parsed, key=lambda r: r[0]))
+    return tuple(sorted(parsed, key=lambda r: (r[0], r[2])))
 
 
 def _table_lookup(
-    table: tuple[tuple[float, float, float, float], ...],
+    table: tuple[TableRow, ...],
     tws_kts: float,
+    point_of_sail: str,
     tack: str,
 ) -> float | None:
-    """Return the ``k`` for the bin containing ``tws_kts`` on ``tack``, or None."""
-    for lo, hi, port_k, stbd_k in table:
-        if lo <= tws_kts < hi:
+    """Return ``k`` for the bin matching ``tws_kts`` + ``point_of_sail`` on
+    ``tack``, or None if no bin matches."""
+    for lo, hi, pos, port_k, stbd_k in table:
+        if lo <= tws_kts < hi and pos == point_of_sail:
             return port_k if tack == "port" else stbd_k
     return None
 
@@ -172,6 +192,7 @@ def resolve_stw(
     heel_deg: float | None,
     tws_kts: float | None,
     cal: SpeedCal = DEFAULT_CAL,
+    point_of_sail: str | None = None,
 ) -> float | None:
     """Correct STW using the full model: gate → table → heel-linear fallback.
 
@@ -179,10 +200,11 @@ def resolve_stw(
         1. Invalid ``raw_kts`` (None / ≤ 0) is passed through unchanged.
         2. **Gate:** if ``tws_kts`` is known and below ``gate_min_tws``, apply
            only ``base`` (light air's tack bias is noisy and sign-reversing).
-        3. **Table:** if a table is configured and both ``tws_kts`` and
-           ``heel_deg`` are known, use the matching ``(TWS bin, tack)`` factor.
+        3. **Table:** if a table is configured and ``tws_kts``, ``heel_deg`` and
+           ``point_of_sail`` are all known, use the matching
+           ``(TWS bin, point-of-sail, tack)`` factor.
         4. **Fallback:** heel-linear ``corrected_stw`` (base + slope·heel) when
-           there's no table, no TWS, or no matching bin.
+           there's no table, a missing input, or no matching bin.
     """
     if raw_kts is None or raw_kts <= 0.0:
         return raw_kts
@@ -190,10 +212,10 @@ def resolve_stw(
     if tws_kts is not None and cal.gate_min_tws > 0.0 and tws_kts < cal.gate_min_tws:
         return _apply_factor(raw_kts, cal.base, f"gated tws={tws_kts}<{cal.gate_min_tws}")
 
-    if cal.table and tws_kts is not None and heel_deg is not None:
+    if cal.table and tws_kts is not None and heel_deg is not None and point_of_sail is not None:
         tack = "port" if heel_deg > 0 else "stbd"
-        k = _table_lookup(cal.table, tws_kts, tack)
+        k = _table_lookup(cal.table, tws_kts, point_of_sail, tack)
         if k is not None:
-            return _apply_factor(raw_kts, k, f"table tws={tws_kts} tack={tack}")
+            return _apply_factor(raw_kts, k, f"table tws={tws_kts} {point_of_sail} tack={tack}")
 
     return corrected_stw(raw_kts, heel_deg, cal.base, cal.heel_slope)

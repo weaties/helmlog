@@ -207,10 +207,10 @@ async def test_speed_cal_table_loaded_from_app_settings(storage: Storage) -> Non
     parses it into the cached SpeedCal (#810)."""
     await storage.set_setting(
         "speed_cal_table",
-        '[{"tws_min":12,"tws_max":15,"port":1.065,"stbd":1.02}]',
+        '[{"tws_min":12,"tws_max":15,"pos":"upwind","port":1.065,"stbd":1.02}]',
     )
     await storage.refresh_speed_cal()
-    assert storage._speed_cal.table == ((12.0, 15.0, 1.065, 1.02),)
+    assert storage._speed_cal.table == ((12.0, 15.0, "upwind", 1.065, 1.02),)
 
 
 @pytest.mark.asyncio

@@ -100,7 +100,8 @@ class TestSaneBandGuard:
 
 
 class TestParseTable:
-    """parse_table accepts a JSON list of TWS bins with per-tack factors."""
+    """parse_table accepts a JSON list of (TWS bin, point-of-sail) entries with
+    per-tack factors."""
 
     def test_empty_inputs_give_empty_table(self) -> None:
         assert parse_table("") == ()
@@ -109,18 +110,33 @@ class TestParseTable:
 
     def test_parses_and_sorts_bins(self) -> None:
         spec = (
-            '[{"tws_min":12,"tws_max":15,"port":1.065,"stbd":1.020},'
-            ' {"tws_min":9,"tws_max":12,"port":1.05,"stbd":1.06}]'
+            '[{"tws_min":12,"tws_max":15,"pos":"upwind","port":1.065,"stbd":1.020},'
+            ' {"tws_min":9,"tws_max":12,"pos":"upwind","port":1.05,"stbd":1.06}]'
         )
         table = parse_table(spec)
         assert table == (
-            (9.0, 12.0, 1.05, 1.06),
-            (12.0, 15.0, 1.065, 1.020),
+            (9.0, 12.0, "upwind", 1.05, 1.06),
+            (12.0, 15.0, "upwind", 1.065, 1.020),
         )
 
+    def test_sorts_by_tws_then_pos(self) -> None:
+        spec = (
+            '[{"tws_min":9,"tws_max":12,"pos":"upwind","port":1.0,"stbd":1.0},'
+            ' {"tws_min":9,"tws_max":12,"pos":"downwind","port":1.1,"stbd":1.1}]'
+        )
+        table = parse_table(spec)
+        # downwind sorts before upwind alphabetically at the same TWS
+        assert [row[2] for row in table] == ["downwind", "upwind"]
+
     def test_accepts_already_parsed_list(self) -> None:
-        table = parse_table([{"tws_min": 9, "tws_max": 12, "port": 1.05, "stbd": 1.06}])
-        assert table == ((9.0, 12.0, 1.05, 1.06),)
+        table = parse_table(
+            [{"tws_min": 9, "tws_max": 12, "pos": "downwind", "port": 1.05, "stbd": 1.06}]
+        )
+        assert table == ((9.0, 12.0, "downwind", 1.05, 1.06),)
+
+    def test_rejects_bad_pos(self) -> None:
+        # An unknown point-of-sail label discards the whole table (fail safe).
+        assert parse_table('[{"tws_min":9,"tws_max":12,"pos":"reach","port":1.0,"stbd":1.0}]') == ()
 
     def test_malformed_json_yields_empty(self) -> None:
         assert parse_table("{not json") == ()
@@ -133,48 +149,72 @@ class TestResolveStw:
         # SpeedCal already defaults base=1.0 / slope=0 / gate=0 / empty table.
         return SpeedCal(**kw)  # type: ignore[arg-type]
 
+    _UP = ((12.0, 15.0, "upwind", 1.10, 1.05),)
+    _UP_DOWN = (
+        (12.0, 15.0, "upwind", 1.10, 1.05),
+        (12.0, 15.0, "downwind", 1.20, 1.15),
+    )
+
     def test_default_cal_is_identity(self) -> None:
-        assert resolve_stw(6.0, 12.0, 14.0, SpeedCal()) == 6.0
+        assert resolve_stw(6.0, 12.0, 14.0, SpeedCal(), "upwind") == 6.0
         assert resolve_stw(6.0, None, None, SpeedCal()) == 6.0
 
-    def test_table_used_for_matching_tws_and_tack(self) -> None:
-        cal = self._cal(table=((12.0, 15.0, 1.10, 1.05),))
-        # port tack (heel>0), tws in bin → k=1.10
-        assert resolve_stw(6.6, 10.0, 13.0, cal) == pytest.approx(6.0)
+    def test_table_used_for_matching_tws_pos_and_tack(self) -> None:
+        cal = self._cal(table=self._UP)
+        # port tack (heel>0), tws in bin, upwind → k=1.10
+        assert resolve_stw(6.6, 10.0, 13.0, cal, "upwind") == pytest.approx(6.0)
         # starboard tack (heel<0) → k=1.05
-        assert resolve_stw(6.3, -10.0, 13.0, cal) == pytest.approx(6.0)
+        assert resolve_stw(6.3, -10.0, 13.0, cal, "upwind") == pytest.approx(6.0)
+
+    def test_upwind_and_downwind_select_different_factors(self) -> None:
+        cal = self._cal(table=self._UP_DOWN)
+        # port, same TWS: upwind uses 1.10, downwind uses 1.20
+        assert resolve_stw(6.6, 10.0, 13.0, cal, "upwind") == pytest.approx(6.0)
+        assert resolve_stw(7.2, 10.0, 13.0, cal, "downwind") == pytest.approx(6.0)
+
+    def test_pos_miss_falls_back_to_heel_linear(self) -> None:
+        # Table only has upwind; a downwind sample → heel-linear fallback.
+        cal = self._cal(base=1.0, heel_slope=0.01, table=self._UP)
+        assert resolve_stw(6.6, 10.0, 13.0, cal, "downwind") == pytest.approx(6.0)
+
+    def test_no_pos_uses_heel_linear_even_with_table(self) -> None:
+        cal = self._cal(base=1.0, heel_slope=0.01, table=self._UP)
+        assert resolve_stw(6.6, 10.0, 13.0, cal, None) == pytest.approx(6.0)
 
     def test_gate_suppresses_correction_in_light_air(self) -> None:
         # Below the gate: table + slope ignored, only base applies.
         cal = self._cal(
-            base=1.0, heel_slope=0.05, gate_min_tws=10.0, table=((0.0, 30.0, 1.2, 1.2),)
+            base=1.0,
+            heel_slope=0.05,
+            gate_min_tws=10.0,
+            table=((0.0, 30.0, "upwind", 1.2, 1.2),),
         )
-        assert resolve_stw(6.0, 15.0, 8.0, cal) == 6.0  # k=base=1.0
+        assert resolve_stw(6.0, 15.0, 8.0, cal, "upwind") == 6.0  # k=base=1.0
 
     def test_gate_applies_base_even_in_light_air(self) -> None:
-        cal = self._cal(base=1.09, gate_min_tws=10.0, table=((0.0, 30.0, 1.2, 1.2),))
-        assert resolve_stw(6.54, 15.0, 8.0, cal) == pytest.approx(6.0)  # k=base=1.09
+        cal = self._cal(base=1.09, gate_min_tws=10.0, table=((0.0, 30.0, "upwind", 1.2, 1.2),))
+        assert resolve_stw(6.54, 15.0, 8.0, cal, "upwind") == pytest.approx(6.0)  # k=base
 
     def test_table_miss_falls_back_to_heel_linear(self) -> None:
         # TWS outside every bin → heel-linear (base+slope).
-        cal = self._cal(base=1.0, heel_slope=0.01, table=((12.0, 15.0, 1.2, 1.2),))
-        assert resolve_stw(6.6, 10.0, 20.0, cal) == pytest.approx(6.0)  # k=1.0+0.01*10=1.1
+        cal = self._cal(base=1.0, heel_slope=0.01, table=self._UP)
+        assert resolve_stw(6.6, 10.0, 20.0, cal, "upwind") == pytest.approx(6.0)
 
     def test_no_tws_uses_heel_linear_even_with_table(self) -> None:
-        cal = self._cal(base=1.0, heel_slope=0.01, table=((12.0, 15.0, 1.2, 1.2),))
-        assert resolve_stw(6.6, 10.0, None, cal) == pytest.approx(6.0)
+        cal = self._cal(base=1.0, heel_slope=0.01, table=self._UP)
+        assert resolve_stw(6.6, 10.0, None, cal, "upwind") == pytest.approx(6.0)
 
     def test_no_heel_with_table_falls_back(self) -> None:
         # Can't pick a tack without heel → heel-linear (k=base).
-        cal = self._cal(base=1.09, table=((12.0, 15.0, 1.2, 1.2),))
-        assert resolve_stw(6.54, None, 13.0, cal) == pytest.approx(6.0)
+        cal = self._cal(base=1.09, table=self._UP)
+        assert resolve_stw(6.54, None, 13.0, cal, "upwind") == pytest.approx(6.0)
 
     def test_invalid_speed_passthrough(self) -> None:
-        cal = self._cal(table=((12.0, 15.0, 1.2, 1.2),))
-        assert resolve_stw(None, 10.0, 13.0, cal) is None
-        assert resolve_stw(0.0, 10.0, 13.0, cal) == 0.0
+        cal = self._cal(table=self._UP)
+        assert resolve_stw(None, 10.0, 13.0, cal, "upwind") is None
+        assert resolve_stw(0.0, 10.0, 13.0, cal, "upwind") == 0.0
 
     def test_table_band_guard(self) -> None:
         # A table factor outside [0.5, 2.0] falls back to raw.
-        cal = self._cal(table=((12.0, 15.0, 3.0, 3.0),))
-        assert resolve_stw(6.0, 10.0, 13.0, cal) == 6.0
+        cal = self._cal(table=((12.0, 15.0, "upwind", 3.0, 3.0),))
+        assert resolve_stw(6.0, 10.0, 13.0, cal, "upwind") == 6.0

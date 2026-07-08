@@ -1185,27 +1185,44 @@ class TestPolarStwCorrection:
         assert result.cells[0].session_mean_bsp == pytest.approx(6.0 / 1.1, rel=1e-4)
 
     @pytest.mark.asyncio
-    async def test_baseline_uses_tws_tack_table(self, storage: Storage) -> None:
-        """A TWS × tack table (app_settings JSON) drives the baseline correction:
-        port tack in the 9-12 kt bin → k=1.2 → 6.0/1.2 = 5.0."""
+    async def test_baseline_uses_tws_pos_tack_table(self, storage: Storage) -> None:
+        """A TWS × PoS × tack table (app_settings JSON) drives the baseline:
+        port tack, upwind, 9-12 kt bin → k=1.2 → 6.0/1.2."""
         await storage.set_setting(
             "speed_cal_table",
-            '[{"tws_min":9,"tws_max":12,"port":1.2,"stbd":1.1}]',
+            '[{"tws_min":9,"tws_max":12,"pos":"upwind","port":1.2,"stbd":1.1}]',
         )
         await storage.refresh_speed_cal()
         for i in range(1, 4):
-            await _make_session(storage, i, bsp=6.0, tws=10.0, twa=45.0, heel=10.0)  # port
+            await _make_session(storage, i, bsp=6.0, tws=10.0, twa=45.0, heel=10.0)  # upwind port
         await build_polar_baseline(storage)
         row = await storage.get_polar_point(_tws_bin(10.0), _twa_bin(45.0))
         assert row is not None
         assert row["mean_bsp"] == pytest.approx(6.0 / 1.2, rel=1e-4)
 
     @pytest.mark.asyncio
+    async def test_baseline_downwind_bin_not_applied_to_upwind(self, storage: Storage) -> None:
+        """A downwind-only table entry must NOT correct an upwind sample — it
+        falls back to the (identity) heel-linear, leaving BSP unchanged."""
+        await storage.set_setting(
+            "speed_cal_table",
+            '[{"tws_min":9,"tws_max":12,"pos":"downwind","port":1.2,"stbd":1.2}]',
+        )
+        await storage.refresh_speed_cal()
+        for i in range(1, 4):
+            await _make_session(storage, i, bsp=6.0, tws=10.0, twa=45.0, heel=10.0)  # upwind
+        await build_polar_baseline(storage)
+        row = await storage.get_polar_point(_tws_bin(10.0), _twa_bin(45.0))
+        assert row is not None
+        assert row["mean_bsp"] == pytest.approx(6.0, rel=1e-4)  # uncorrected
+
+    @pytest.mark.asyncio
     async def test_baseline_breeze_gate_suppresses_light_air(self, storage: Storage) -> None:
         """Below the gate the table is ignored and only base applies (k=base=1.0
         → no correction), even though a table bin covers this TWS."""
         await storage.set_setting(
-            "speed_cal_table", '[{"tws_min":0,"tws_max":30,"port":1.2,"stbd":1.2}]'
+            "speed_cal_table",
+            '[{"tws_min":0,"tws_max":30,"pos":"upwind","port":1.2,"stbd":1.2}]',
         )
         await _set_speed_cal_gate(storage, gate=12.0)
         for i in range(1, 4):

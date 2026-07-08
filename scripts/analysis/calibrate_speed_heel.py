@@ -22,9 +22,10 @@ is regressed on signed heel to recover ``a`` (intercept) and ``b`` (slope).
 
 The heel-linear fit is reported on a train/holdout split with R² and a sign
 check. In practice the live data shows the tack bias *reverses sign* with wind
-speed, so the heel slope fits poorly (low R²); the script therefore also emits
-a **TWS × tack table** (per-(TWS bin, tack) mean ``k``) plus a suggested
-**breeze gate** — the model the data actually supports.
+speed and differs upwind vs downwind, so the heel slope fits poorly (low R²);
+the script therefore also emits a **TWS × point-of-sail × tack table**
+(per-(TWS bin, upwind/downwind, tack) mean ``k``) plus a suggested **breeze
+gate** — the model the data actually supports.
 
 Usage
 -----
@@ -44,6 +45,7 @@ import os
 import sqlite3
 import sys
 from datetime import datetime, timedelta
+from typing import Any
 
 DB = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("HELMLOG_DB", "data/logger.db")
 
@@ -106,12 +108,12 @@ def load_aligned_with_heel(conn: sqlite3.Connection, start: str, end: str) -> li
             (start, end),
         )
     }
-    # Corvo logs true wind as reference=0 (wind_angle_deg IS signed TWA); TWS
-    # feeds the per-bin table fit.
+    # Corvo logs true wind as reference=0 (wind_angle_deg IS signed TWA); TWS +
+    # |TWA| feed the per-(TWS bin, point-of-sail) table fit.
     wb = {
-        r[0]: r[1]
+        r[0]: (r[1], r[2])
         for r in conn.execute(
-            "SELECT substr(ts,1,19), AVG(wind_speed_kts) FROM winds"
+            "SELECT substr(ts,1,19), AVG(wind_speed_kts), AVG(wind_angle_deg) FROM winds"
             " WHERE ts BETWEEN ? AND ? AND reference=0 GROUP BY substr(ts,1,19)",
             (start, end),
         )
@@ -119,6 +121,7 @@ def load_aligned_with_heel(conn: sqlite3.Connection, start: str, end: str) -> li
     out = []
     for k, bsp in sp.items():
         cog, sog = cg.get(k, (None, None))
+        w = wb.get(k)
         out.append(
             {
                 "k": k,
@@ -127,7 +130,8 @@ def load_aligned_with_heel(conn: sqlite3.Connection, start: str, end: str) -> li
                 "cog": cog,
                 "hdg": hd.get(k),
                 "heel": hl.get(k),
-                "tws": wb.get(k),
+                "tws": w[0] if w else None,
+                "twa_abs": abs(w[1]) if w else None,
             }
         )
     out.sort(key=lambda r: r["k"])
@@ -201,12 +205,23 @@ def race_current(rows: list[dict], legs: list[tuple[int, int]]) -> tuple[float, 
     return (sum(xs) / len(xs), sum(ys) / len(ys))
 
 
-def collect_samples(
-    conn: sqlite3.Connection, race: sqlite3.Row
-) -> list[tuple[float, float, float]]:
-    """Return (heel_signed, k_observed, tws) triples for one race's steady legs.
+# |TWA| below this is upwind, at or above is downwind (matches
+# polar.UPWIND_CUTOFF_DEG / _point_of_sail).
+UPWIND_CUTOFF_DEG = 90.0
 
-    ``tws`` is ``nan`` when no true-wind sample aligns to that second."""
+
+def _point_of_sail(twa_abs: float) -> str:
+    return "upwind" if twa_abs < UPWIND_CUTOFF_DEG else "downwind"
+
+
+# One collected sample: (heel_signed, k_observed, tws, point_of_sail).
+Sample = tuple[float, float, float, str]
+
+
+def collect_samples(conn: sqlite3.Connection, race: sqlite3.Row) -> list[Sample]:
+    """Return (heel_signed, k_observed, tws, point_of_sail) samples for one
+    race's steady legs. Samples without a true-wind fix (no TWS/TWA) are
+    dropped, since the table fit is keyed on both."""
     start = get_effective_start(conn, race)
     rows = load_aligned_with_heel(conn, start, str(race["end_utc"]))
     legs = list(detect_steady_legs(rows))
@@ -216,10 +231,12 @@ def collect_samples(
     if cur is None:
         return []
     cx, cy = cur
-    samples = []
+    samples: list[Sample] = []
     for a, b in legs:
         for x in rows[a:b]:
             if x["sog"] is None or x["cog"] is None or x["heel"] is None:
+                continue
+            if x["tws"] is None or x["twa_abs"] is None:
                 continue
             # GPS-through-water = ground velocity minus the estimated current.
             gx = x["sog"] * math.sin(math.radians(x["cog"])) - cx
@@ -228,42 +245,47 @@ def collect_samples(
             if gps_stw < MIN_GPS_STW:
                 continue
             k_obs = x["bsp"] / gps_stw
-            tws = x["tws"] if x["tws"] is not None else float("nan")
-            samples.append((x["heel"], k_obs, tws))
+            samples.append((x["heel"], k_obs, x["tws"], _point_of_sail(x["twa_abs"])))
     return samples
 
 
 # TWS bins for the emitted table (kt); tws_max exclusive.
 TABLE_TWS_BINS = [(0, 6), (6, 9), (9, 12), (12, 15), (15, 30)]
-# Minimum per-(bin, tack) samples before a bin is trusted / emitted.
+# Minimum per-(bin, pos, tack) samples before a bin is trusted / emitted.
 MIN_BIN_SAMPLES = 100
 
 
-def fit_table(
-    samples: list[tuple[float, float, float]],
-) -> tuple[list[dict[str, float]], float | None]:
-    """Fit per-(TWS bin, tack) mean k and return (table_rows, suggested_gate).
+def fit_table(samples: list[Sample]) -> tuple[list[dict[str, Any]], float | None]:
+    """Fit per-(TWS bin, point-of-sail, tack) mean k and return
+    (table_rows, suggested_gate).
 
     Tack is taken from heel sign (matching runtime ``resolve_stw``): heel > 0 =
-    port. A bin is emitted only when both tacks clear ``MIN_BIN_SAMPLES``. The
-    suggested gate is the lower edge of the lowest bin where port over-reads
-    starboard (``port_k > stbd_k``) — i.e. where the breeze regime begins and
-    the correction stops flipping sign.
+    port. A (bin, pos) cell is emitted only when both tacks clear
+    ``MIN_BIN_SAMPLES``. The suggested gate is the lower edge of the lowest
+    **upwind** bin where port over-reads starboard (``port_k > stbd_k``) — where
+    the breeze regime begins and the tack bias stops flipping sign.
     """
-    rows: list[dict[str, float]] = []
+    rows: list[dict[str, Any]] = []
     gate: float | None = None
     for lo, hi in TABLE_TWS_BINS:
-        port = [k for h, k, t in samples if t == t and lo <= t < hi and h > 0]
-        stbd = [k for h, k, t in samples if t == t and lo <= t < hi and h < 0]
-        if len(port) < MIN_BIN_SAMPLES or len(stbd) < MIN_BIN_SAMPLES:
-            continue
-        pk = sum(port) / len(port)
-        sk = sum(stbd) / len(stbd)
-        rows.append(
-            {"tws_min": float(lo), "tws_max": float(hi), "port": round(pk, 4), "stbd": round(sk, 4)}
-        )
-        if gate is None and pk > sk:
-            gate = float(lo)
+        for pos in ("upwind", "downwind"):
+            port = [k for h, k, t, p in samples if p == pos and lo <= t < hi and h > 0]
+            stbd = [k for h, k, t, p in samples if p == pos and lo <= t < hi and h < 0]
+            if len(port) < MIN_BIN_SAMPLES or len(stbd) < MIN_BIN_SAMPLES:
+                continue
+            pk = sum(port) / len(port)
+            sk = sum(stbd) / len(stbd)
+            rows.append(
+                {
+                    "tws_min": float(lo),
+                    "tws_max": float(hi),
+                    "pos": pos,
+                    "port": round(pk, 4),
+                    "stbd": round(sk, 4),
+                }
+            )
+            if gate is None and pos == "upwind" and pk > sk:
+                gate = float(lo)
     return rows, gate
 
 
@@ -307,8 +329,8 @@ def main() -> int:
 
     # Split races into train / holdout (odd/even) so the reported fit is
     # validated out-of-sample rather than just echoing its own data.
-    train: list[tuple[float, float, float]] = []
-    holdout: list[tuple[float, float, float]] = []
+    train: list[Sample] = []
+    holdout: list[Sample] = []
     used_races = 0
     for idx, race in enumerate(races):
         s = collect_samples(conn, race)
@@ -325,14 +347,14 @@ def main() -> int:
         )
         return 1
 
-    hx = [h for h, _, _ in train]
-    hy = [k for _, k, _ in train]
+    hx = [h for h, _, _, _ in train]
+    hy = [k for _, k, _, _ in train]
     a, b, r2_train = linreg(hx, hy)
-    r2_holdout = r2_on([h for h, _, _ in holdout], [k for _, k, _ in holdout], a, b)
+    r2_holdout = r2_on([h for h, _, _, _ in holdout], [k for _, k, _, _ in holdout], a, b)
 
     # Per-tack means as a sanity read on the residual the model should remove.
-    port = [k for h, k, _ in train if h > 0]
-    stbd = [k for h, k, _ in train if h < 0]
+    port = [k for h, k, _, _ in train if h > 0]
+    stbd = [k for h, k, _, _ in train if h < 0]
     port_mean = sum(port) / len(port) if port else float("nan")
     stbd_mean = sum(stbd) / len(stbd) if stbd else float("nan")
 
@@ -356,28 +378,28 @@ def main() -> int:
     if r2_holdout < 0.05:
         print(
             "NOTE: near-zero holdout R^2 — heel is a poor *continuous* predictor."
-            " Prefer the TWS x tack table below (speed_cal_table) + breeze gate"
-            " over deploying the heel slope b."
+            " Prefer the TWS x PoS x tack table below (speed_cal_table) + breeze"
+            " gate over deploying the heel slope b."
         )
     print()
 
-    # TWS x tack table — the model the data actually supports. Fit on the full
-    # sample set (train+holdout) since this is the deployable artifact.
+    # TWS × point-of-sail × tack table — the model the data supports. Fit on the
+    # full sample set (train+holdout) since this is the deployable artifact.
     table, gate = fit_table(train + holdout)
-    print("TWS x tack table (k = paddlewheel / GPS-through-water):")
-    print(f"  {'TWS bin':<10}{'port_k':>9}{'stbd_k':>9}{'port-stbd':>11}")
+    print("TWS x PoS x tack table (k = paddlewheel / GPS-through-water):")
+    print(f"  {'TWS bin':<9}{'PoS':<10}{'port_k':>9}{'stbd_k':>9}{'port-stbd':>11}")
     for r in table:
         diff = (r["port"] - r["stbd"]) / r["stbd"] * 100
         lo, hi = int(r["tws_min"]), int(r["tws_max"])
-        print(f"  {f'{lo}-{hi}':<10}{r['port']:>9.4f}{r['stbd']:>9.4f}{diff:>+10.1f}%")
+        print(f"  {f'{lo}-{hi}':<9}{r['pos']:<10}{r['port']:>9.4f}{r['stbd']:>9.4f}{diff:>+10.1f}%")
     if not table:
-        print("  (no bin cleared the sample threshold — need more data)")
+        print("  (no (bin, PoS) cell cleared the sample threshold — need more data)")
     print()
     print("Paste into app_settings 'speed_cal_table':")
     print(f"  {json.dumps(table)}")
     if gate is not None:
         print(f"Suggested boat_settings 'speed_cal_gate_min_tws': {gate:.0f}")
-        print("  (below this TWS the tack bias reverses sign; gate suppresses it.)")
+        print("  (below this TWS the upwind tack bias reverses sign; gate suppresses it.)")
     return 0
 
 
