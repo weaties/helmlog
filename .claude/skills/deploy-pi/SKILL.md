@@ -6,7 +6,28 @@ disable-model-invocation: true
 
 # Deploying to the Raspberry Pi
 
-## Quick Deploy (after PR merges to main)
+## Deploy (preferred: the web Deploy admin)
+
+Deploys are driven from the **Deploy admin page** — `/admin/deployment`
+(nav → "Deploy") — **not by hand on the Pi**. The Pi runs an evergreen
+auto-deployer that polls the tracked branch (~every 300 s) and deploys when it
+changes.
+
+- **Point the Pi at a branch:** in the CONFIGURATION panel set **Track branch**
+  (and **Mode**), then Save. In **evergreen** mode it auto-deploys within one
+  poll interval whenever that branch advances. The CURRENT VERSION panel shows
+  the running/tracking sha and last-deploy status; the button reads "Up to
+  date" when nothing is pending and offers a deploy when the branch is ahead.
+- **Promote `main → stage → live`:** use the PROMOTION PIPELINE on the same page
+  (the `main → stage` / `stage → live` links) — promotions run via GitHub
+  Actions, not manual git. The `main → stage` gate needs a `RELEASES.md` entry
+  (see `/release-notes`); `stage → live` has no gate.
+
+So "deploy #N to corvopi-live" = set Track branch to the merged branch (usually
+`main`) on the Deploy page; switching branches is a config change there, not an
+ssh session.
+
+## Manual deploy (fallback — only when the web Deploy admin is unreachable)
 
 ```bash
 ssh <pi-user>@<pi-host>
@@ -14,8 +35,8 @@ cd ~/helmlog
 ./scripts/deploy.sh
 ```
 
-The script: pulls `main`, syncs Python deps, re-applies Tailscale Funnel
-routes, updates `PUBLIC_URL` in `.env`, restarts `helmlog`, prints status.
+The script: pulls the tracked branch, syncs Python deps, re-applies Tailscale
+Funnel routes, updates `PUBLIC_URL` in `.env`, restarts `helmlog`, prints status.
 
 ## Full Setup (if systemd units or apt packages changed)
 
