@@ -163,7 +163,15 @@ def validate(data_root: Path, expect_min_ts: str | None = None) -> tuple[int, li
     if not db_path.is_file():
         print(f"ERROR: {db_path} not found", file=sys.stderr)
         return 2, []
-    db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    # immutable=1, NOT mode=ro. `mode=ro` still creates a -shm (and can create a
+    # -wal) for a WAL-mode DB, so validating a snapshot resurrected the sidecar
+    # files backup.sh had just deleted — the check was mutating the thing it
+    # checks. immutable=1 promises SQLite the file cannot change, so it opens
+    # with no sidecars at all. It also ignores any WAL that happens to sit next
+    # to the DB, which is what we want: a copy whose recent data lives only in a
+    # stray WAL is not a trustworthy backup, and reading it without that WAL
+    # makes it fail the staleness check instead of passing on borrowed data.
+    db = sqlite3.connect(f"file:{db_path}?immutable=1", uri=True)
     try:
         # A corrupt DB (zeroed header, truncated .backup) only raises when we
         # actually read it — connect() is lazy. Report it as rc=2 rather than

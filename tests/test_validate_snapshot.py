@@ -164,6 +164,27 @@ def test_torn_copy_caught_per_table(tmp_path: Path) -> None:
     assert rc == 3
 
 
+def test_validation_does_not_mutate_the_snapshot(tmp_path: Path) -> None:
+    """Reading a backup must leave no trace on it.
+
+    `?mode=ro` still creates a `-shm` (and can create a `-wal`) for a WAL-mode
+    DB, so the validator was resurrecting the very sidecar files backup.sh had
+    just deleted — the tool meant to verify the backup was modifying it.
+    `immutable=1` is the only open mode that truly cannot write. (#807)
+    """
+    _make_db(tmp_path)
+    db = sqlite3.connect(tmp_path / "logger.db")
+    db.execute("PRAGMA journal_mode=WAL")  # what the live logger.db actually is
+    db.close()
+    for sidecar in ("logger.db-wal", "logger.db-shm"):
+        (tmp_path / sidecar).unlink(missing_ok=True)
+
+    rc, _ = validate_snapshot.validate(tmp_path)
+    assert rc == 0
+    assert not (tmp_path / "logger.db-wal").exists(), "validator recreated the WAL"
+    assert not (tmp_path / "logger.db-shm").exists(), "validator recreated the SHM"
+
+
 def test_fresh_db_passes_recency_check(tmp_path: Path) -> None:
     _make_db(tmp_path)
     _add_telemetry(tmp_path, ["2026-07-14T03:45:55.911000+00:00"])
