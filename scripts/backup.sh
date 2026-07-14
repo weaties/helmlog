@@ -395,6 +395,23 @@ run_rsync_step() {
 # the failure mode that silently broke every backup from 2026-06-16 on. (#807)
 PI_STAGE="$PI_STAGE_DIR/logger.db.snap"
 DB_SNAP_OK=0
+
+# Per-table newest record in the LIVE DB, read *before* staging. The .backup is
+# taken after this, so a faithful copy can only be newer. Comparing the snapshot
+# against this catches a copy that is valid SQLite but missing recent data.
+#
+# Per table, not one max() over the whole DB: 20260708T100002Z held races
+# current to 07-08 while positions and winds stopped at 06-30 — a torn copy with
+# race rows whose telemetry was absent. A whole-DB max reads 07-08 and calls that
+# fresh. Absolute age is useless as a signal (the boat sits idle for weeks
+# between regattas); fidelity to the source is the thing to assert. (#807)
+LIVE_MAX_TS=$($SSH "$PI" "sqlite3 -noheader -separator = 'file:$PI_HELMLOG_DIR/data/logger.db?mode=ro' \
+  \"SELECT 'positions', max(ts) FROM positions
+    UNION ALL SELECT 'winds', max(ts) FROM winds
+    UNION ALL SELECT 'races', max(start_utc) FROM races;\"" 2>/dev/null \
+  | grep -v '=$' | paste -sd, -)
+[ -n "$LIVE_MAX_TS" ] && log "  live DB newest records: $LIVE_MAX_TS"
+
 if $SSH "$PI" "mkdir -p '$PI_STAGE_DIR' && rm -f '$PI_STAGE'*; \
     sqlite3 '$PI_HELMLOG_DIR/data/logger.db' \".backup '$PI_STAGE'\" && \
     [ \"\$(sqlite3 'file:$PI_STAGE?immutable=1' 'PRAGMA quick_check;' 2>/dev/null | head -1)\" = ok ]" 2>/dev/null; then
@@ -432,21 +449,43 @@ fi
 # users.avatar_path row must point at a file that actually exists in the
 # snapshot. Silent losses here are how corvopi-tst1 ended up with 25 photo
 # rows pointing at empty directories (#676).
+#
+# Exit codes are graded (#807): orphaned rows (1) are a warning — the DB is
+# sound, some referenced file is missing. A corrupt (2) or stale (3) logger.db
+# means the backup did not capture the data at all, so it must FAIL the run and
+# skip rotation, keeping the last good snapshots on disk. Reporting those as a
+# mere WARN on an otherwise "SUCCESS" run is how the corruption went unnoticed
+# from 2026-06-16 to 2026-07-14.
 VALIDATOR="$SCRIPT_DIR/validate_snapshot.py"
+DB_INVALID=0
 if [ -f "$SNAP/data/logger.db" ] && [ -f "$VALIDATOR" ] && command -v python3 >/dev/null; then
   log "Step: Snapshot validation"
   VALIDATE_OUT="/tmp/helmlog-validate-$DATE.txt"
-  if python3 "$VALIDATOR" "$SNAP/data" > "$VALIDATE_OUT" 2>&1; then
-    log "  OK (all referenced files present)"
-    report_line "- **Snapshot validation**: OK (all referenced files present)"
+  VALIDATE_ARGS=("$SNAP/data")
+  [ -n "$LIVE_MAX_TS" ] && VALIDATE_ARGS+=(--expect-min-ts "$LIVE_MAX_TS")
+  if python3 "$VALIDATOR" "${VALIDATE_ARGS[@]}" > "$VALIDATE_OUT" 2>&1; then
+    log "  OK (all referenced files present; logger.db readable and current)"
+    report_line "- **Snapshot validation**: OK (files present; logger.db readable and current)"
   else
     rc=$?
-    log "  WARNING: orphaned DB rows detected (rc=$rc)"
-    report_line "- **Snapshot validation**: WARN (rc=$rc) — orphaned DB rows detected"
+    case "$rc" in
+      2) reason="logger.db is CORRUPT / unreadable" ;;
+      3) reason="logger.db is STALE — missing records present in the live DB" ;;
+      *) reason="orphaned DB rows detected" ;;
+    esac
+    if [ "$rc" -ge 2 ]; then
+      DB_INVALID=1
+      log "  FAIL: $reason (rc=$rc)"
+      report_line "- **Snapshot validation**: FAILED (rc=$rc) — $reason"
+      mark_failed "snapshot validation: $reason"
+    else
+      log "  WARNING: $reason (rc=$rc)"
+      report_line "- **Snapshot validation**: WARN (rc=$rc) — $reason"
+      mark_warning "Snapshot validation: orphaned rows (see report body)"
+    fi
     report_line '```'
     head -40 "$VALIDATE_OUT" >> "$REPORT" || true
     report_line '```'
-    mark_warning "Snapshot validation: orphaned rows (see report body)"
   fi
   rm -f "$VALIDATE_OUT"
 fi
@@ -543,6 +582,14 @@ if [ "$snap_bytes" -lt "$MIN_SNAPSHOT_BYTES" ]; then
   log "  FAIL: snapshot too small ($snap_bytes bytes)"
   report_line ""
   report_line "**Safety gate**: FAILED — snapshot size $snap_bytes bytes is below the $MIN_SNAPSHOT_BYTES-byte minimum. Rotation skipped; old snapshots preserved."
+  exit 11
+fi
+# A corrupt or stale logger.db must never rotate away the last good snapshots —
+# that is how a broken backup becomes an unrecoverable one. (#807)
+if [ "$DB_INVALID" = 1 ]; then
+  log "  FAIL: logger.db failed snapshot validation (corrupt or stale)"
+  report_line ""
+  report_line "**Safety gate**: FAILED — \`data/logger.db\` is corrupt or stale (see Snapshot validation above). Rotation skipped; old snapshots preserved."
   exit 11
 fi
 # logger.db must be a VALID SQLite database, not just present and large. The
