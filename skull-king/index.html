@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0c1526">
+<title>Skull King Scorer</title>
+<style>
+  :root{
+    --bg:#0c1526; --panel:#132039; --panel2:#1b2c4d; --line:#2a3f66;
+    --ink:#eaf1ff; --muted:#8ea3c9; --gold:#f2c14e; --gold2:#d99a2b;
+    --red:#e5484d; --green:#3ecf8e; --accent:#5b8cff;
+    --shadow:0 6px 24px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:radial-gradient(1200px 600px at 50% -10%,#1a2b4d 0%,var(--bg) 55%) fixed;
+    color:var(--ink);
+    font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-text-size-adjust:100%;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  .wrap{max-width:760px;margin:0 auto;padding:16px 14px 90px}
+  header.app{text-align:center;padding:10px 0 6px}
+  header.app h1{
+    margin:0;font-size:1.7rem;letter-spacing:.5px;
+    font-weight:800;color:var(--gold);
+    text-shadow:0 2px 0 rgba(0,0,0,.4);
+  }
+  header.app .sub{color:var(--muted);font-size:.82rem;margin-top:2px}
+  .skull{font-size:1.5rem;vertical-align:-2px}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:var(--shadow);padding:14px;margin:14px 0}
+  .card h2{margin:0 0 10px;font-size:1.05rem;color:var(--gold)}
+
+  label{display:block;font-size:.78rem;color:var(--muted);margin:0 0 4px}
+  input,select,button{font-family:inherit;font-size:1rem}
+  input[type=text],input[type=number]{
+    width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);
+    background:var(--panel2);color:var(--ink);outline:none}
+  input:focus{border-color:var(--accent)}
+  input[type=number]{text-align:center;font-weight:700;-moz-appearance:textfield}
+  input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+
+  button{cursor:pointer;border:none;border-radius:10px;padding:11px 16px;font-weight:700;color:#0c1526}
+  .btn-gold{background:linear-gradient(180deg,var(--gold),var(--gold2))}
+  .btn-ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  .btn-accent{background:var(--accent);color:#fff}
+  .btn-danger{background:transparent;color:var(--red);border:1px solid var(--red)}
+  button:active{transform:translateY(1px)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:10px;align-items:center}
+  .row.wrap{flex-wrap:wrap}
+  .grow{flex:1}
+
+  /* setup */
+  .player-row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+  .player-row .num{width:26px;text-align:center;color:var(--muted);font-weight:700}
+  .rm{background:transparent;color:var(--red);border:1px solid var(--line);
+     border-radius:10px;padding:0;width:42px;height:44px;font-size:1.2rem}
+
+  /* scoreboard */
+  .board{display:flex;flex-direction:column;gap:8px}
+  .board .p{display:flex;align-items:center;gap:10px;background:var(--panel2);
+    border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+  .board .p .rank{width:26px;height:26px;border-radius:50%;flex:none;display:grid;place-items:center;
+    font-weight:800;font-size:.85rem;background:var(--line);color:var(--ink)}
+  .board .p.lead .rank{background:var(--gold);color:#0c1526}
+  .board .p .name{font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .board .p .tot{font-weight:800;font-size:1.15rem;font-variant-numeric:tabular-nums}
+  .board .p .delta{font-size:.72rem;color:var(--muted);width:52px;text-align:right}
+
+  /* round nav */
+  .rounds{display:flex;gap:6px;overflow-x:auto;padding:4px 2px;margin:0 -2px;-webkit-overflow-scrolling:touch}
+  .rounds button{flex:none;width:44px;height:44px;padding:0;border-radius:10px;background:var(--panel2);
+    color:var(--muted);border:1px solid var(--line);font-weight:700}
+  .rounds button.active{background:var(--gold);color:#0c1526;border-color:var(--gold)}
+  .rounds button.done{color:var(--ink)}
+  .rounds button.done::after{content:"•";color:var(--green);position:relative;top:-9px;left:8px;font-size:.7rem}
+
+  .round-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+  .round-head .cards{color:var(--muted);font-size:.82rem}
+
+  /* per-player entry */
+  .entry{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px}
+  .entry .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .entry .top .nm{font-weight:700}
+  .entry .top .rs{font-weight:800;font-variant-numeric:tabular-nums;padding:2px 10px;border-radius:8px;background:var(--line)}
+  .entry .top .rs.pos{background:rgba(62,207,142,.18);color:var(--green)}
+  .entry .top .rs.neg{background:rgba(229,72,77,.18);color:var(--red)}
+  .fields{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .fields .f label{text-align:center}
+  .stepper{display:flex;align-items:stretch;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)}
+  .stepper button{width:36px;padding:0;border-radius:0;background:var(--panel);color:var(--gold);font-size:1.3rem;font-weight:700}
+  .stepper input{border:none;border-radius:0;background:transparent}
+  .bonus-hint{font-size:.7rem;color:var(--muted);text-align:center;margin-top:2px}
+
+  details.ref{margin-top:6px}
+  details.ref summary{cursor:pointer;color:var(--accent);font-size:.85rem;font-weight:600;list-style:none}
+  details.ref summary::-webkit-details-marker{display:none}
+  details.ref summary::before{content:"▸ ";}
+  details.ref[open] summary::before{content:"▾ ";}
+  .ref table{width:100%;border-collapse:collapse;margin-top:8px;font-size:.82rem}
+  .ref td{padding:5px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+  .ref td:last-child{text-align:right;font-weight:700;color:var(--gold);white-space:nowrap}
+  .ref .note{color:var(--muted);font-size:.75rem;margin-top:8px}
+
+  /* full sheet */
+  .sheet-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px}
+  table.sheet{border-collapse:collapse;width:100%;font-size:.8rem;min-width:max-content}
+  table.sheet th,table.sheet td{border:1px solid var(--line);padding:6px 8px;text-align:center;white-space:nowrap}
+  table.sheet th{background:var(--panel2);color:var(--gold);position:sticky;top:0}
+  table.sheet td.rnd{color:var(--muted);font-weight:700;background:var(--panel2)}
+  table.sheet td.run{font-weight:800;font-variant-numeric:tabular-nums}
+  table.sheet tr.totrow td{background:var(--panel2);font-weight:800;color:var(--gold)}
+  .pos{color:var(--green)} .neg{color:var(--red)}
+
+  footer.bar{position:fixed;left:0;right:0;bottom:0;background:rgba(12,21,38,.92);
+    backdrop-filter:blur(8px);border-top:1px solid var(--line);
+    padding:10px 14px calc(10px + env(safe-area-inset-bottom));z-index:20}
+  footer.bar .wrap2{max-width:760px;margin:0 auto;display:flex;gap:10px}
+  footer.bar button{flex:1}
+
+  .banner{background:linear-gradient(180deg,var(--gold),var(--gold2));color:#0c1526;
+    border-radius:14px;padding:16px;text-align:center;font-weight:800;margin:14px 0}
+  .banner .big{font-size:1.5rem;display:block}
+  .hide{display:none!important}
+  .center{text-align:center}
+  .muted{color:var(--muted)}
+  .toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--panel2);
+    border:1px solid var(--line);color:var(--ink);padding:10px 16px;border-radius:12px;
+    box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:opacity .2s;z-index:30;font-size:.9rem}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="app">
+    <h1><span class="skull">☠️</span> Skull King</h1>
+    <div class="sub">Score keeper — 10 rounds</div>
+  </header>
+
+  <!-- ============ SETUP ============ -->
+  <section id="setup" class="card">
+    <h2>Players</h2>
+    <div id="playerList"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn-ghost grow" id="addPlayer">＋ Add player</button>
+    </div>
+    <button class="btn-gold" id="startBtn" style="width:100%;margin-top:12px">Start game</button>
+    <details class="ref">
+      <summary>How scoring works</summary>
+      <table>
+        <tr><td><b>Bid met exactly</b> (bid ≥ 1)</td><td>20 × bid</td></tr>
+        <tr><td><b>Bid missed</b> (bid ≥ 1)</td><td>−10 × miss</td></tr>
+        <tr><td><b>Bid 0 — succeeded</b></td><td>10 × round</td></tr>
+        <tr><td><b>Bid 0 — failed</b></td><td>−10 × round</td></tr>
+      </table>
+      <div class="note">Bonus points count <b>only</b> when you hit your bid exactly.
+      Each round you're dealt cards equal to the round number (1 → 10).</div>
+    </details>
+  </section>
+
+  <!-- ============ GAME ============ -->
+  <section id="game" class="hide">
+
+    <div class="card">
+      <h2>Scoreboard</h2>
+      <div id="board" class="board"></div>
+    </div>
+
+    <div class="card">
+      <div class="rounds" id="roundNav"></div>
+      <div class="round-head">
+        <h2 style="margin:0" id="roundTitle">Round 1</h2>
+        <span class="cards" id="roundCards">1 card each</span>
+      </div>
+      <div id="entries"></div>
+
+      <details class="ref">
+        <summary>Bonus points reference</summary>
+        <table>
+          <tr><td>Each 14 captured (yellow / purple / green)</td><td>+10</td></tr>
+          <tr><td>The black 14 (Jolly Roger) captured</td><td>+20</td></tr>
+          <tr><td>Each Pirate captured by the Skull King</td><td>+30</td></tr>
+          <tr><td>Skull King captured by a Mermaid</td><td>+50</td></tr>
+        </table>
+        <div class="note">Add these into the <b>Bonus</b> box. They only score if you make
+        your bid exactly. Enter total bonus for the player (e.g. two 14s + Jolly Roger = 40).</div>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Full score sheet</h2>
+      <div class="sheet-wrap"><table class="sheet" id="sheet"></table></div>
+    </div>
+
+    <div id="winner"></div>
+  </section>
+</div>
+
+<footer class="bar hide" id="gameBar">
+  <div class="wrap2">
+    <button class="btn-ghost" id="prevRound">◀ Prev</button>
+    <button class="btn-accent grow" id="nextRound">Next ▶</button>
+    <button class="btn-danger" id="newGame">New</button>
+  </div>
+</footer>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+  const LS_KEY = "skullking.v1";
+  const ROUNDS = 10;
+  const $ = s => document.querySelector(s);
+
+  // ---------- state ----------
+  let state = load() || null;
+  let ui = { round: 0 }; // 0-indexed current round
+
+  function blankRound(nPlayers){
+    return Array.from({length:nPlayers}, () => ({bid:null, won:null, bonus:0}));
+  }
+  function newGame(names){
+    return {
+      players: names,
+      rounds: Array.from({length:ROUNDS}, () => blankRound(names.length)),
+      created: Date.now()
+    };
+  }
+  function save(){ try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }catch(e){} }
+  function load(){ try{ return JSON.parse(localStorage.getItem(LS_KEY)); }catch(e){ return null; } }
+
+  // ---------- scoring ----------
+  // round: 1-based. Returns null if incomplete.
+  function roundScore(roundNum, cell){
+    const {bid, won, bonus} = cell;
+    if(bid===null || won===null) return null;
+    let base;
+    if(bid===0){
+      base = (won===0) ? 10*roundNum : -10*roundNum;
+    } else {
+      base = (bid===won) ? 20*bid : -10*Math.abs(bid-won);
+    }
+    const hit = (bid===won);
+    return base + (hit ? (bonus||0) : 0);
+  }
+  function totalFor(pi){
+    let t=0;
+    for(let r=0;r<ROUNDS;r++){
+      const s = roundScore(r+1, state.rounds[r][pi]);
+      if(s!==null) t+=s;
+    }
+    return t;
+  }
+  function lastCompletedRound(){
+    for(let r=ROUNDS-1;r>=0;r--){
+      if(state.rounds[r].some(c => roundScore(r+1,c)!==null)) return r;
+    }
+    return -1;
+  }
+  function gameComplete(){
+    return state.rounds.every((rd,r)=> rd.every(c => roundScore(r+1,c)!==null));
+  }
+
+  // ---------- setup screen ----------
+  function renderSetup(){
+    const list = $("#playerList");
+    if(!list.dataset.init){
+      // seed with 2 empty rows
+      addPlayerRow(""); addPlayerRow("");
+      list.dataset.init = "1";
+    }
+  }
+  function addPlayerRow(val){
+    const list = $("#playerList");
+    if(list.children.length>=8) return;
+    const row = document.createElement("div");
+    row.className="player-row";
+    row.innerHTML = `<span class="num"></span>
+      <input class="grow" type="text" maxlength="16" placeholder="Player name" value="${(val||"").replace(/"/g,'&quot;')}">
+      <button class="rm" title="Remove">×</button>`;
+    row.querySelector(".rm").onclick = ()=>{ row.remove(); renumber(); };
+    row.querySelector("input").addEventListener("keydown", e=>{
+      if(e.key==="Enter"){ e.preventDefault(); $("#addPlayer").click(); }
+    });
+    list.appendChild(row);
+    renumber();
+    return row;
+  }
+  function renumber(){
+    document.querySelectorAll("#playerList .player-row").forEach((r,i)=>{
+      r.querySelector(".num").textContent = i+1;
+    });
+  }
+  $("#addPlayer").onclick = ()=>{
+    const row = addPlayerRow("");
+    if(row) row.querySelector("input").focus();
+  };
+  $("#startBtn").onclick = ()=>{
+    const names = [...document.querySelectorAll("#playerList input")]
+      .map(i=>i.value.trim()).filter(Boolean);
+    if(names.length<2){ toast("Add at least 2 players"); return; }
+    if(new Set(names.map(n=>n.toLowerCase())).size !== names.length){ toast("Names must be unique"); return; }
+    state = newGame(names);
+    ui.round = 0;
+    save();
+    showGame();
+  };
+
+  // ---------- game screen ----------
+  function showGame(){
+    $("#setup").classList.add("hide");
+    $("#game").classList.remove("hide");
+    $("#gameBar").classList.remove("hide");
+    const lc = lastCompletedRound();
+    ui.round = Math.min(ROUNDS-1, Math.max(0, lc+1===ROUNDS ? lc : lc+1));
+    if(lc<0) ui.round=0;
+    renderGame();
+  }
+  function showSetup(){
+    $("#setup").classList.remove("hide");
+    $("#game").classList.add("hide");
+    $("#gameBar").classList.add("hide");
+  }
+
+  function renderGame(){
+    renderBoard();
+    renderRoundNav();
+    renderEntries();
+    renderSheet();
+    renderWinner();
+  }
+
+  function ranking(){
+    return state.players.map((n,i)=>({i, name:n, tot:totalFor(i)}))
+      .sort((a,b)=> b.tot-a.tot);
+  }
+
+  function renderBoard(){
+    const board = $("#board");
+    const ranked = ranking();
+    const top = ranked.length ? ranked[0].tot : 0;
+    board.innerHTML = "";
+    ranked.forEach((p,idx)=>{
+      const lead = idx===0 && ranked.length>1 && p.tot!==ranked[1].tot;
+      const el = document.createElement("div");
+      el.className = "p"+(idx===0?" lead":"");
+      const delta = p.tot-top;
+      el.innerHTML = `<span class="rank">${idx+1}</span>
+        <span class="name">${esc(p.name)}</span>
+        <span class="delta">${delta===0?"":delta}</span>
+        <span class="tot">${p.tot}</span>`;
+      board.appendChild(el);
+    });
+  }
+
+  function renderRoundNav(){
+    const nav = $("#roundNav");
+    nav.innerHTML="";
+    for(let r=0;r<ROUNDS;r++){
+      const b=document.createElement("button");
+      b.textContent = r+1;
+      const done = state.rounds[r].every(c=>roundScore(r+1,c)!==null);
+      if(done) b.classList.add("done");
+      if(r===ui.round) b.classList.add("active");
+      b.onclick=()=>{ ui.round=r; renderGame(); };
+      nav.appendChild(b);
+    }
+  }
+
+  function renderEntries(){
+    const rn = ui.round+1;
+    $("#roundTitle").textContent = "Round "+rn;
+    $("#roundCards").textContent = rn+(rn===1?" card each":" cards each");
+    const wrap = $("#entries");
+    wrap.innerHTML="";
+    state.players.forEach((name,pi)=>{
+      const cell = state.rounds[ui.round][pi];
+      const rs = roundScore(rn, cell);
+      const el = document.createElement("div");
+      el.className="entry";
+      const rsClass = rs===null?"":(rs>=0?"pos":"neg");
+      el.innerHTML = `
+        <div class="top">
+          <span class="nm">${esc(name)}</span>
+          <span class="rs ${rsClass}" data-rs="${pi}">${rs===null?"—":(rs>0?"+"+rs:rs)}</span>
+        </div>
+        <div class="fields">
+          <div class="f">
+            <label>Bid</label>
+            ${stepper("bid",pi,cell.bid,0,rn)}
+          </div>
+          <div class="f">
+            <label>Tricks won</label>
+            ${stepper("won",pi,cell.won,0,rn)}
+          </div>
+          <div class="f">
+            <label>Bonus</label>
+            <input type="number" inputmode="numeric" data-k="bonus" data-pi="${pi}"
+              value="${cell.bonus||0}" step="10">
+            <div class="bonus-hint">only if bid met</div>
+          </div>
+        </div>`;
+      wrap.appendChild(el);
+    });
+    // wire inputs
+    wrap.querySelectorAll("input[data-k]").forEach(inp=>{
+      inp.addEventListener("input", onFieldInput);
+      inp.addEventListener("focus", e=>e.target.select());
+    });
+    wrap.querySelectorAll("button[data-step]").forEach(btn=>{
+      btn.onclick = ()=>{
+        const pi=+btn.dataset.pi, k=btn.dataset.k, dir=+btn.dataset.step;
+        const max = (k==="bonus")?9999:rn;
+        const min = 0;
+        const cur = state.rounds[ui.round][pi][k];
+        let v = (cur===null?0:cur) + dir*(k==="bonus"?10:1);
+        v=Math.max(min,Math.min(max,v));
+        state.rounds[ui.round][pi][k]=v;
+        save(); refreshLive();
+      };
+    });
+    updateNextLabel();
+  }
+
+  function stepper(k,pi,val,min,max){
+    const shown = (val===null?"":val);
+    return `<div class="stepper">
+      <button data-step="-1" data-k="${k}" data-pi="${pi}">−</button>
+      <input type="number" inputmode="numeric" data-k="${k}" data-pi="${pi}"
+        value="${shown}" placeholder="0" min="${min}" max="${max}">
+      <button data-step="1" data-k="${k}" data-pi="${pi}">+</button>
+    </div>`;
+  }
+
+  function onFieldInput(e){
+    const inp=e.target, pi=+inp.dataset.pi, k=inp.dataset.k;
+    let v = inp.value.trim();
+    if(v===""){ state.rounds[ui.round][pi][k] = (k==="bonus")?0:null; }
+    else {
+      let n = parseInt(v,10);
+      if(isNaN(n)) n = (k==="bonus")?0:null;
+      if(n!==null){
+        const rn=ui.round+1;
+        if(k!=="bonus"){ n=Math.max(0,Math.min(rn,n)); }
+        else { n=Math.max(0,n); }
+      }
+      state.rounds[ui.round][pi][k]=n;
+    }
+    save(); refreshLive();
+  }
+
+  // update round-score chips + board + nav + sheet without losing input focus
+  function refreshLive(){
+    const rn=ui.round+1;
+    state.players.forEach((name,pi)=>{
+      const chip = document.querySelector(`.rs[data-rs="${pi}"]`);
+      if(!chip) return;
+      const rs = roundScore(rn, state.rounds[ui.round][pi]);
+      chip.textContent = rs===null?"—":(rs>0?"+"+rs:rs);
+      chip.className = "rs "+(rs===null?"":(rs>=0?"pos":"neg"));
+      chip.dataset.rs=pi;
+    });
+    // sync stepper input values (in case clamped)
+    document.querySelectorAll('#entries input[data-k]').forEach(inp=>{
+      const pi=+inp.dataset.pi,k=inp.dataset.k;
+      const v=state.rounds[ui.round][pi][k];
+      if(k==="bonus"){ if(document.activeElement!==inp) inp.value=(v||0); }
+      else { if(document.activeElement!==inp) inp.value=(v===null?"":v); }
+    });
+    renderBoard();
+    renderRoundNav();
+    renderSheet();
+    renderWinner();
+    updateNextLabel();
+  }
+
+  function updateNextLabel(){
+    const btn=$("#nextRound");
+    if(ui.round>=ROUNDS-1){
+      btn.textContent = gameComplete()? "Final results" : "Round 10";
+    } else {
+      btn.textContent = "Next ▶";
+    }
+    $("#prevRound").disabled = ui.round===0;
+    $("#nextRound").disabled = ui.round>=ROUNDS-1;
+  }
+
+  function renderSheet(){
+    const t=$("#sheet");
+    let html="<tr><th>Rnd</th>";
+    state.players.forEach(n=> html+=`<th>${esc(n)}</th>`);
+    html+="</tr>";
+    const running = new Array(state.players.length).fill(0);
+    for(let r=0;r<ROUNDS;r++){
+      html+=`<tr><td class="rnd">${r+1}</td>`;
+      state.players.forEach((n,pi)=>{
+        const rs=roundScore(r+1, state.rounds[r][pi]);
+        if(rs===null){ html+=`<td class="muted">·</td>`; }
+        else{
+          running[pi]+=rs;
+          const sign=rs>=0?"pos":"neg";
+          html+=`<td><span class="${sign}">${rs>0?"+"+rs:rs}</span><br><span class="run">${running[pi]}</span></td>`;
+        }
+      });
+      html+="</tr>";
+    }
+    html+=`<tr class="totrow"><td>Total</td>`;
+    state.players.forEach((n,pi)=> html+=`<td>${totalFor(pi)}</td>`);
+    html+="</tr>";
+    t.innerHTML=html;
+  }
+
+  function renderWinner(){
+    const w=$("#winner");
+    if(!gameComplete()){ w.innerHTML=""; return; }
+    const ranked=ranking();
+    const top=ranked[0];
+    const tie=ranked.filter(p=>p.tot===top.tot);
+    let msg;
+    if(tie.length>1){
+      msg=`<span class="big">🏴‍☠️ Tie!</span>${tie.map(p=>esc(p.name)).join(" & ")} — ${top.tot} pts`;
+    } else {
+      msg=`<span class="big">🏆 ${esc(top.name)} wins!</span>${top.tot} points`;
+    }
+    w.innerHTML=`<div class="banner">${msg}</div>`;
+  }
+
+  // ---------- nav buttons ----------
+  $("#prevRound").onclick=()=>{ if(ui.round>0){ui.round--;renderGame();scrollTop();} };
+  $("#nextRound").onclick=()=>{ if(ui.round<ROUNDS-1){ui.round++;renderGame();scrollTop();} };
+  $("#newGame").onclick=()=>{
+    if(confirm("Start a new game? Current scores will be cleared.")){
+      state=null;
+      try{ localStorage.removeItem(LS_KEY); }catch(e){}
+      showSetup();
+    }
+  };
+
+  function scrollTop(){ window.scrollTo({top:0,behavior:"smooth"}); }
+
+  // ---------- helpers ----------
+  function esc(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  let toastT;
+  function toast(msg){
+    const el=$("#toast"); el.textContent=msg; el.classList.add("show");
+    clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove("show"),1800);
+  }
+
+  // ---------- boot ----------
+  renderSetup();
+  if(state && state.players && state.players.length>=2){
+    showGame();
+  } else {
+    showSetup();
+  }
+})();
+</script>
+</body>
+</html>
