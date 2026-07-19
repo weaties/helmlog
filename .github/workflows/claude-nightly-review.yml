@@ -112,7 +112,7 @@ jobs:
           fetch-tags: true
 
       - name: Set up Node (for Claude Code CLI)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
