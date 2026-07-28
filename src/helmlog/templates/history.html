@@ -11,6 +11,19 @@
 .tag-mode-toggle{display:inline-flex;border:1px solid var(--border);border-radius:3px;overflow:hidden;margin-left:4px;vertical-align:middle}
 .tag-mode-toggle button{font-size:.68rem;padding:2px 8px;border:none;background:transparent;color:var(--text-secondary);cursor:pointer}
 .tag-mode-toggle button.active{background:var(--accent);color:var(--bg-primary)}
+/* Video thumbnail (#827) — flags races that have a linked YouTube video. */
+.hist-card-row{display:flex;gap:12px;align-items:flex-start}
+.hist-card-main{flex:1;min-width:0}
+.hist-video{flex:0 0 auto;display:block;width:128px;text-decoration:none;color:inherit}
+.hist-video-frame{position:relative;display:block;border-radius:4px;overflow:hidden;border:1px solid var(--border);background:var(--bg-secondary)}
+.hist-video img{display:block;width:100%;height:72px;object-fit:cover}
+.hist-video-play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:0;height:0;border-style:solid;border-width:7px 0 7px 12px;border-color:transparent transparent transparent #fff;filter:drop-shadow(0 1px 3px rgba(0,0,0,.9))}
+.hist-video-more{display:block;font-size:.65rem;text-align:center;margin-top:2px;color:var(--text-secondary)}
+/* Thumbnail failed to load (offline on the boat) — show a text badge instead
+   of a broken image, so the card still reports that video exists. */
+.hist-video-broken img,.hist-video-broken .hist-video-play{display:none}
+.hist-video-broken .hist-video-frame::after{content:"\25B6\00A0Video";display:block;font-size:.72rem;text-align:center;padding:26px 4px;color:var(--text-secondary)}
+@media (max-width:520px){.hist-video{width:96px}.hist-video img{height:54px}.hist-video-broken .hist-video-frame::after{padding:17px 4px}}
 </style>
 {% endblock %}
 

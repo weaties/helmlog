@@ -172,6 +172,34 @@ function clearTagFilter() {
   load();
 }
 
+// Thumbnail for a session's first linked YouTube video (#827). Hotlinks
+// img.youtube.com, so it must degrade cleanly: on the boat the Pi has no
+// uplink and every one of these 404s. The onerror handler swaps the dead
+// image for a text badge rather than leaving a broken-image icon — knowing
+// a race *has* video is useful even when the thumbnail can't load.
+function renderVideoThumb(s) {
+  if (!s.first_video_id) return '';
+  const vid = String(s.first_video_id);
+  const url = s.first_video_url || ('https://www.youtube.com/watch?v=' + encodeURIComponent(vid));
+  const extra = (s.video_count || 0) - 1;
+  const more = extra > 0
+    ? '<span class="hist-video-more">+' + extra + ' more</span>'
+    : '';
+  const title = extra > 0
+    ? 'Watch on YouTube (' + s.video_count + ' videos linked)'
+    : 'Watch on YouTube';
+  return '<a class="hist-video" href="' + esc(url) + '"'
+    + ' target="_blank" rel="noopener noreferrer" title="' + esc(title) + '">'
+    + '<span class="hist-video-frame">'
+    + '<img src="https://img.youtube.com/vi/' + encodeURIComponent(vid) + '/mqdefault.jpg"'
+    + ' alt="" loading="lazy"'
+    + ' onerror="this.closest(\'.hist-video\').classList.add(\'hist-video-broken\')">'
+    + '<span class="hist-video-play" aria-hidden="true"></span>'
+    + '</span>'
+    + more
+    + '</a>';
+}
+
 function render(data) {
   const el = document.getElementById('results');
   if (!data.sessions.length) {
@@ -192,11 +220,18 @@ function render(data) {
       ? '<div class="session-summary" id="hist-summary-' + s.id + '"><div class="summary-skeleton"></div></div>'
       : '';
     const tagChips = renderSessionTagChips(s.tag_summary);
-    return '<div class="card"><div class="session-name">' + nameLink + '</div>'
+    const videoThumb = renderVideoThumb(s);
+    // Text column and thumbnail sit side by side; the lazily-loaded summary
+    // row stays outside the flex row so it still spans the full card width.
+    return '<div class="card"><div class="hist-card-row"><div class="hist-card-main">'
+      + '<div class="session-name">' + nameLink + '</div>'
       + '<div class="session-meta">' + s.date + ' &nbsp;·&nbsp; ' + start + ' → ' + end + dur + '</div>'
       + localNameHint
       + parent
       + tagChips
+      + '</div>'
+      + videoThumb
+      + '</div>'
       + summaryHtml
       + '</div>';
   }).join('');
