@@ -53,6 +53,11 @@ htmlcov/
 *.swp
 *.swo
 
+# Generated web-UI screenshots (shot-scraper). Regenerable, and may contain
+# real crew names / audio transcripts when shot against a populated DB — PII,
+# so never commit. See scripts/screenshots/README.md.
+docs/screenshots/
+
 # macOS
 .DS_Store
 **/.DS_Store
