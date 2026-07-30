@@ -172,6 +172,48 @@ async def test_create_boat_settings_hot_refreshes_leeway_k(storage: Storage) -> 
 
 
 @pytest.mark.asyncio
+async def test_speed_cal_defaults_are_noop(storage: Storage) -> None:
+    """After connect with no rows, the STW cal is the identity (#810)."""
+    assert storage._speed_cal.base == 1.0
+    assert storage._speed_cal.heel_slope == 0.0
+    assert storage._speed_cal.gate_min_tws == 0.0
+    assert storage._speed_cal.table == ()
+
+
+@pytest.mark.asyncio
+async def test_create_boat_settings_hot_refreshes_speed_cal(storage: Storage) -> None:
+    """Writing speed_cal_base / speed_cal_heel_slope / gate hot-reloads the
+    cache so the next live compute + polar read uses the new config (#810)."""
+    from datetime import UTC, datetime
+
+    ts = datetime.now(UTC).isoformat()
+    await storage.create_boat_settings(
+        race_id=None,
+        entries=[
+            {"ts": ts, "parameter": "speed_cal_base", "value": "1.09"},
+            {"ts": ts, "parameter": "speed_cal_heel_slope", "value": "0.008"},
+            {"ts": ts, "parameter": "speed_cal_gate_min_tws", "value": "9.0"},
+        ],
+        source="manual",
+    )
+    assert storage._speed_cal.base == 1.09
+    assert storage._speed_cal.heel_slope == 0.008
+    assert storage._speed_cal.gate_min_tws == 9.0
+
+
+@pytest.mark.asyncio
+async def test_speed_cal_table_loaded_from_app_settings(storage: Storage) -> None:
+    """The TWS × tack table is a JSON blob in app_settings; refresh_speed_cal
+    parses it into the cached SpeedCal (#810)."""
+    await storage.set_setting(
+        "speed_cal_table",
+        '[{"tws_min":12,"tws_max":15,"pos":"upwind","port":1.065,"stbd":1.02}]',
+    )
+    await storage.refresh_speed_cal()
+    assert storage._speed_cal.table == ((12.0, 15.0, "upwind", 1.065, 1.02),)
+
+
+@pytest.mark.asyncio
 async def test_set_drift_derived_from_smoothed_inputs(storage: Storage) -> None:
     """Set / drift are computed server-side from the (already-smoothed)
     sog / cog / stw / hdg in self._live, then put through their own EMA
