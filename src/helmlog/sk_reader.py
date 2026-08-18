@@ -84,6 +84,7 @@ class SKReaderConfig:
     username: str | None = field(default_factory=lambda: os.environ.get("SK_USERNAME"))
     password: str | None = field(default_factory=lambda: os.environ.get("SK_PASSWORD"))
     password_file: str | None = field(default_factory=lambda: os.environ.get("SK_PASSWORD_FILE"))
+    on_gps_time: Callable[[datetime], None] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -490,8 +491,9 @@ class SKReader:
                     delay = 1.0
                     logger.info("SK: connected")
                     async for raw in ws:
+                        raw_str = str(raw)
                         for record in process_delta(
-                            str(raw),
+                            raw_str,
                             self._buf,
                             self_context=self._self_context,
                             clock=self._clock,

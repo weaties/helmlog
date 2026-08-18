@@ -4,35 +4,77 @@
 {% block extra_css %}
 <style>
   .rs-grid { display: grid; gap: 1rem; padding: 1rem; max-width: 960px; margin: 0 auto; }
+  /* Live view stacks its children with the same gap as the outer grid */
+  #rs-live-view { display: grid; gap: 1rem; }
   .rs-clock { font-size: clamp(4rem, 18vw, 9rem); font-weight: 700; text-align: center;
               font-variant-numeric: tabular-nums; line-height: 1; padding: 1rem 0;
-              color: var(--text-primary); }
+              color: var(--text-primary); cursor: default; }
   .rs-clock.warn { color: var(--warning, #f5c518); }
   .rs-clock.go { color: var(--success, #22c55e); }
-  .rs-phase { text-align: center; font-size: 1rem; color: var(--text-muted); }
-  .rs-phase strong { color: var(--text-primary); text-transform: uppercase; letter-spacing: .1em; }
+  .rs-clock-input { font-size: clamp(4rem, 18vw, 9rem); font-weight: 700; text-align: center;
+                    font-variant-numeric: tabular-nums; line-height: 1; padding: .25rem;
+                    width: 100%; box-sizing: border-box;
+                    border: 2px solid var(--accent, #2563eb); border-radius: .5rem;
+                    background: var(--bg-elev); color: var(--text-primary);
+                    font-family: inherit; display: none; }
+  .rs-status { text-align: center; font-size: 1rem; color: var(--text-muted); min-height: 1.4rem; }
+  .rs-status strong { color: var(--text-primary); text-transform: uppercase; letter-spacing: .1em; }
   .rs-grid-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
   .rs-grid-buttons button { font-size: 1.25rem; font-weight: 600; padding: 1.5rem .5rem;
                             min-height: 5rem; border-radius: .5rem; border: 1px solid var(--border);
                             background: var(--bg-elev); color: var(--text-primary); cursor: pointer; }
   .rs-grid-buttons button:active { transform: translateY(1px); }
-  .rs-grid-buttons button.primary { background: var(--accent, #2563eb); color: #fff; }
-  .rs-grid-buttons button.danger { background: var(--danger, #b91c1c); color: #fff; }
+  .rs-grid-buttons button.primary { background: var(--accent, #2563eb); color: #fff; border-color: transparent; }
+  .rs-grid-buttons button.danger  { background: var(--danger, #b91c1c); color: #fff; border-color: transparent; }
   .rs-grid-buttons button:disabled { opacity: .4; cursor: not-allowed; }
-  .rs-row { display: flex; gap: .5rem; flex-wrap: wrap; justify-content: center; }
-  .rs-row button { flex: 1 1 8rem; padding: .5rem; }
-  .rs-flags { display: flex; gap: 1rem; align-items: center; justify-content: center;
-              padding: .75rem; border: 1px solid var(--border); border-radius: .5rem; }
-  .rs-flag-cell { display: flex; flex-direction: column; align-items: center; gap: .25rem; }
-  .rs-flag-cell .label { font-size: .75rem; color: var(--text-muted); text-transform: uppercase; }
-  .rs-flag-cell .value { font-size: 1.5rem; font-weight: 600; min-height: 1.8rem; }
+  /* Set Start Value spans full width below the 2-col grid */
+  .rs-setval-wrap { display: grid; }
+  .rs-setval-wrap button { font-size: 1.1rem; font-weight: 600; padding: 1rem;
+                           border-radius: .5rem; border: 1px solid var(--accent, #2563eb);
+                           background: var(--bg-elev); color: var(--accent, #2563eb);
+                           cursor: pointer; }
+  .rs-setval-wrap button:active { transform: translateY(1px); }
+  .rs-setval-wrap button.editing { background: var(--accent, #2563eb); color: #fff; }
+  .rs-setval-wrap button:disabled { opacity: .4; cursor: not-allowed; }
   .rs-line { padding: .75rem; border: 1px solid var(--border); border-radius: .5rem; }
-  .rs-line dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; margin: 0; }
-  .rs-line dt { color: var(--text-muted); }
-  .rs-line dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .rs-line-layout { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem 1.5rem;
+                    align-items: center; }
+  /* Left: secondary metrics — label/value pairs */
+  .rs-line-detail { display: grid; grid-template-columns: max-content 1fr;
+                    gap: .35rem .75rem; margin: 0; }
+  .rs-line-detail dt { font-size: 1rem; color: var(--text-muted); align-self: center; }
+  .rs-line-detail dd { margin: 0; font-size: 1.15rem; font-weight: 600;
+                       font-variant-numeric: tabular-nums; }
+  /* Right: primary tactical metrics — big numbers */
+  .rs-line-primary { display: flex; flex-direction: column; gap: .75rem; }
+  .rs-line-stat { text-align: center; }
+  .rs-line-stat-value { font-size: clamp(1.8rem, 8vw, 3rem); font-weight: 700;
+                        font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .rs-line-stat-label { font-size: .8rem; color: var(--text-muted);
+                        text-transform: uppercase; letter-spacing: .06em; margin-top: .15rem; }
   .rs-error { color: var(--danger, #b91c1c); text-align: center; min-height: 1.5rem; }
   .rs-readonly { text-align: center; padding: .5rem; background: var(--warning, #fef3c7);
                   color: #78350f; border-radius: .25rem; font-size: .85rem; }
+  /* Shared panel style used by B&G and Rolling Timer */
+  .rs-instr { padding: .75rem; border: 1px solid var(--border); border-radius: .5rem; }
+  .rs-instr-header { display: flex; align-items: center; justify-content: space-between; }
+  .rs-instr-header h3 { margin: 0; font-size: .9rem; text-transform: uppercase;
+                        letter-spacing: .08em; color: var(--text-muted); }
+  .rs-instr-switch { position: relative; display: inline-block; width: 48px; height: 26px;
+                     flex-shrink: 0; }
+  .rs-instr-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .rs-instr-slider { position: absolute; cursor: pointer; inset: 0;
+                     background: var(--border, #d1d5db); border-radius: 26px; transition: .2s; }
+  .rs-instr-slider::before { position: absolute; content: ""; height: 20px; width: 20px;
+                              left: 3px; bottom: 3px; background: #fff; border-radius: 50%;
+                              transition: .2s; }
+  .rs-instr-switch input:checked + .rs-instr-slider { background: var(--accent, #2563eb); }
+  .rs-instr-switch input:checked + .rs-instr-slider::before { transform: translateX(22px); }
+  .rs-instr-switch input:disabled + .rs-instr-slider { opacity: .4; cursor: not-allowed; }
+  .rs-instr-status { font-size: .9rem; color: var(--text-muted); min-height: 1.3rem;
+                     margin-top: .5rem; }
+  .rs-instr-status .running { color: var(--success, #22c55e); font-weight: 600; }
+  .rs-instr-status .stopped { color: var(--warning, #f5c518); font-weight: 600; }
 </style>
 {% endblock %}
 
@@ -42,13 +84,9 @@
   <div class="rs-readonly">Viewer mode — read only. Sign in as crew or admin to control.</div>
   {% endif %}
 
-  <div class="rs-phase">Phase: <strong id="rs-phase">—</strong>
-    <span id="rs-sync-status"></span></div>
+  <div class="rs-status"><strong id="rs-status">—</strong></div>
 
-  <!-- Scheduled-pre-arm view: only visible when a schedule exists and the
-       FSM is still idle. Big d:hh:mm:ss countdown, no buttons — the
-       system auto-fires at T-15min so the helm can't accidentally arm
-       early or out-of-band. -->
+  <!-- Scheduled-pre-arm view -->
   <div id="rs-scheduled-view" style="display:none;text-align:center">
     <div style="font-size:.9rem;color:var(--text-secondary)">
       Scheduled start: <strong id="rs-sched-utc">—</strong>
@@ -60,53 +98,72 @@
     </div>
   </div>
 
-  <!-- Live FSM view: shown whenever the FSM is non-idle, or when no
-       schedule is set (so manual arm is still possible). -->
+  <!-- Live timer view — children share 1rem gap via #rs-live-view grid -->
   <div id="rs-live-view">
     <div class="rs-clock" id="rs-clock">--:--</div>
-
-    <div class="rs-flags">
-      <div class="rs-flag-cell">
-        <div class="label">Class flag</div>
-        <div class="value" id="rs-class-flag">—</div>
-      </div>
-      <div class="rs-flag-cell">
-        <div class="label">Prep flag</div>
-        <div class="value" id="rs-prep-flag">—</div>
-      </div>
-      <div class="rs-flag-cell">
-        <div class="label">Special</div>
-        <div class="value" id="rs-special-flag">—</div>
-      </div>
-    </div>
+    <input class="rs-clock-input" id="rs-clock-input" type="text"
+           placeholder="min" maxlength="2" inputmode="numeric">
 
     <div class="rs-grid-buttons">
-      <button id="rs-sync" class="primary" {% if not is_writer %}disabled{% endif %}>Sync to gun</button>
-      <button id="rs-arm" {% if not is_writer %}disabled{% endif %}>Arm 5-4-1-0</button>
-      <button id="rs-ping-boat" {% if not is_writer %}disabled{% endif %}>Boat-end ping</button>
-      <button id="rs-ping-pin" {% if not is_writer %}disabled{% endif %}>Pin-end ping</button>
-      <button id="rs-plus-min" {% if not is_writer %}disabled{% endif %}>+1 min</button>
-      <button id="rs-minus-min" {% if not is_writer %}disabled{% endif %}>−1 min</button>
+      <button id="rs-btn-start"  class="primary" {% if not is_writer %}disabled{% endif %}>Start</button>
+      <button id="rs-btn-stop"   class="danger"  {% if not is_writer %}disabled{% endif %}>Stop Race</button>
+      <button id="rs-btn-reset"                  {% if not is_writer %}disabled{% endif %}>Reset</button>
+      <button id="rs-btn-sync"                   {% if not is_writer %}disabled{% endif %}>Sync</button>
+      <button id="rs-ping-boat"                  {% if not is_writer %}disabled{% endif %}>Boat-end ping</button>
+      <button id="rs-ping-pin"                   {% if not is_writer %}disabled{% endif %}>Pin-end ping</button>
     </div>
 
-    <div class="rs-row">
-      <button id="rs-postpone" {% if not is_writer %}disabled{% endif %}>Postpone (AP)</button>
-      <button id="rs-recall" {% if not is_writer %}disabled{% endif %}>General recall</button>
-      <button id="rs-abandon" class="danger" {% if not is_writer %}disabled{% endif %}>Abandon (N)</button>
-      <button id="rs-reset" {% if not is_writer %}disabled{% endif %}>Reset</button>
+    <!-- Set Start Value — full-width, only active when stopped -->
+    <div class="rs-setval-wrap">
+      <button id="rs-btn-setval" {% if not is_writer %}disabled{% endif %}>Set Start Value</button>
+    </div>
+
+    <!-- Rolling Timer switch -->
+    <div class="rs-instr">
+      <div class="rs-instr-header">
+        <h3>Rolling Timer</h3>
+        <label class="rs-instr-switch">
+          <input type="checkbox" id="rs-rolling-toggle"
+                 {% if not is_writer %}disabled{% endif %}>
+          <span class="rs-instr-slider"></span>
+        </label>
+      </div>
     </div>
 
     <div class="rs-line">
       <div id="rs-line-carryover" style="display:none;color:var(--warning,#f5c518);
            font-size:.85rem;padding:.25rem 0;font-style:italic"></div>
-      <dl>
-        <dt>Line bearing</dt><dd id="rs-line-bearing">—</dd>
-        <dt>Line length</dt><dd id="rs-line-length">—</dd>
-        <dt>Bias</dt><dd id="rs-line-bias">—</dd>
-        <dt>Distance to line</dt><dd id="rs-line-dist">—</dd>
-        <dt>Time to line</dt><dd id="rs-line-time">—</dd>
-      </dl>
+      <div class="rs-line-layout">
+        <dl class="rs-line-detail">
+          <dt>Bearing</dt><dd id="rs-line-bearing">—</dd>
+          <dt>Length</dt><dd id="rs-line-length">—</dd>
+          <dt>Bias</dt><dd id="rs-line-bias">—</dd>
+        </dl>
+        <div class="rs-line-primary">
+          <div class="rs-line-stat">
+            <div class="rs-line-stat-value" id="rs-line-dist">—</div>
+            <div class="rs-line-stat-label">Distance to line</div>
+          </div>
+          <div class="rs-line-stat">
+            <div class="rs-line-stat-value" id="rs-line-time">—</div>
+            <div class="rs-line-stat-label">Time to line</div>
+          </div>
+        </div>
+      </div>
     </div>
+  </div>
+
+  <!-- Instrument Timer panel — B&G toggle and status only -->
+  <div class="rs-instr" id="rs-instr-panel">
+    <div class="rs-instr-header">
+      <h3>Instrument Timer (B&amp;G)</h3>
+      <label class="rs-instr-switch">
+        <input type="checkbox" id="rs-instr-toggle"
+               {% if not is_writer %}disabled{% endif %}>
+        <span class="rs-instr-slider"></span>
+      </label>
+    </div>
+    <div class="rs-instr-status" id="rs-instr-status">No data received</div>
   </div>
 
   <div class="rs-error" id="rs-error"></div>

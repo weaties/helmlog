@@ -2,7 +2,7 @@
 {% block title %}HelmLog{% endblock %}
 
 {% block extra_css %}
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="/static/leaflet.css"/>
 <style>
 {% raw %}@media(min-width:768px){#controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}#btn-end{grid-column:1/-1}}{% endraw %}
 </style>
@@ -164,6 +164,7 @@
   <button class="btn btn-schedule hidden" id="btn-schedule-toggle" onclick="toggleSchedulePanel()">&#9200; SET START TIME</button>
   <button class="btn btn-synthesize hidden" id="btn-synthesize" onclick="toggleSynthPanel()">&#9881; SYNTHESIZE RACE</button>
   <button class="btn btn-danger hidden" id="btn-end" onclick="confirmFinishRace()">&#9632; FINISH RACE</button>
+  <button class="btn hidden" id="btn-trim" style="background:var(--bg-secondary)" onclick="trimNonRaceData()">&#9986; TRIM NON-RACE DATA</button>
 </div>
 
 <div id="schedule-panel" class="card hidden">
@@ -286,6 +287,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/leaflet.js"></script>
 <script src="/static/home.js?v={{ git_sha }}"></script>
 {% endblock %}

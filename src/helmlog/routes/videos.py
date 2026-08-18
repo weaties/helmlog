@@ -19,13 +19,19 @@ def _video_deep_link(row: dict[str, Any], at_utc: datetime | None = None) -> dic
 
     If *at_utc* is supplied the link jumps to that moment in the video.
     Otherwise the link just opens the video from the beginning.
+    Local videos (youtube_url starting with /) have no deep-link.
     """
+    out = dict(row)
+    # Local video files served by nginx have no YouTube deep-link.
+    if row.get("youtube_url", "").startswith("/"):
+        out["deep_link"] = None
+        return out
+
     from helmlog.video import VideoSession  # local import to avoid circular deps
 
     sync_utc = datetime.fromisoformat(row["sync_utc"])
     duration_s = row["duration_s"]
 
-    out = dict(row)
     if at_utc is not None and duration_s is not None:
         vs = VideoSession(
             url=row["youtube_url"],

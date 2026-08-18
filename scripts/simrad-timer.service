@@ -1,0 +1,37 @@
+[Unit]
+Description=Simrad Race Timer NMEA 2000 → HelmLog bridge
+After=helmlog.service can-interface.service
+Wants=helmlog.service can-interface.service
+
+[Service]
+Type=simple
+User=helmlog
+Group=mark
+
+# Inherit project dir from environment; override in /etc/systemd/system/simrad-timer.service.d/
+WorkingDirectory=/home/mark/helmlog
+
+# Read timer token and CAN channel from the same .env as helmlog
+Environment=CAN_INTERFACE=can0
+Environment=HELMLOG_URL=http://localhost:3002
+Environment=HELMLOG_TIMER_TOKEN=
+Environment=UV_CACHE_DIR=/var/cache/helmlog
+Environment=HOME=/var/cache/helmlog
+EnvironmentFile=-/home/mark/helmlog/.env
+
+ExecStart=/home/mark/.local/bin/uv run --no-sync --project /home/mark/helmlog \
+    python scripts/simrad_timer_sk.py \
+    --channel $CAN_INTERFACE \
+    --helmlog $HELMLOG_URL \
+    --token $HELMLOG_TIMER_TOKEN \
+    --log-level INFO
+
+Restart=on-failure
+RestartSec=10s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=simrad-timer
+
+[Install]
+WantedBy=multi-user.target

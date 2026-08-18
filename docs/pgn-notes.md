@@ -36,15 +36,30 @@ pgn = (data_page << 16) | (pdu_format << 8) | pdu_specific
 pgn = (data_page << 16) | (pdu_format << 8)
 ```
 
-## B&G Proprietary PGNs
+## Simrad/B&G Proprietary PGNs
 
-To be documented as discovered. Proprietary PGNs use the Manufacturer Code
-embedded in the data payload (first two bytes after the PGN header).
+Manufacturer code **0x9F41** (bytes `41 9F` at payload[0:2], little-endian).
+Both PGNs use **Fast Packet** multi-frame encoding — reassemble with
+`FastPacketBuffer` from `helmlog.nmea2000` before decoding.
 
-B&G Manufacturer Code: **0x0069** (105 decimal) — verify against live traffic.
+| PGN    | CAN ID pattern | Description            | Key Fields                        |
+|--------|---------------|------------------------|-----------------------------------|
+| 130845 | 0x_DFF1D__    | Set Timer              | payload[6:10]==07 42 00 01 (SET discriminator); payload[10]=minutes |
+| 130850 | 0x_9FF22__    | Start/Stop/Reset/NM    | payload[6]: 3D=start, 3E=stop, 3F=nearest-minute, 40=reset |
+
+Running-state broadcasts also arrive on PGN 130845 with discriminator
+`02 00 00 01` at payload[6:10] — these are ignored by the decoder.
+
+Decoded via `helmlog.nmea2000._decode_130845` / `_decode_130850` into
+`SimradTimerRecord` dataclasses.
+
+## Fast Packet Reassembly
+
+`FastPacketBuffer` in `helmlog.nmea2000` handles multi-frame reassembly.
+Frame 0 carries `(seq<<5|0, total_bytes, data[0:6])`.
+Subsequent frames carry `(seq<<5|frame_num, data[7*n:7*(n+1)])`.
+Key is `(pgn, source_addr, seq)` so concurrent ECUs don't collide.
 
 ## TODO
 
-- [ ] Capture live CAN traffic and document B&G proprietary PGN structures
 - [ ] Verify heading reference field (magnetic vs true) in PGN 127250
-- [ ] Document FastPacket reassembly if used (PGN 129029 GNSS Position Data)

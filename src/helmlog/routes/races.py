@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import tempfile
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
+from pydantic import BaseModel
 
 from helmlog.auth import require_auth
 from helmlog.routes._helpers import EventRequest, audit, get_storage, limiter, load_cameras
@@ -591,6 +592,57 @@ async def api_end_race(
         )
         logger.info("Audio recording saved: {}", completed.file_path)
         ss.audio_session_id = None
+
+
+@router.get("/api/races/{race_id}/trim-preview")
+async def api_trim_preview(
+    request: Request,
+    race_id: int,
+    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+) -> JSONResponse:
+    """Suggest a cutoff for trimming non-race data (#11). Never mutates
+    anything — the caller must confirm via POST .../trim to apply it."""
+    storage = get_storage(request)
+    if await storage.get_race(race_id) is None:
+        raise HTTPException(status_code=404, detail="Race not found")
+    now = storage.disciplined_now()
+    preview = await storage.preview_race_trim(race_id, now)
+    return JSONResponse(
+        {
+            "detected": preview.detected,
+            "cutoff_utc": preview.cutoff_utc.isoformat() if preview.cutoff_utc else None,
+            "duration_removed_s": preview.duration_removed_s,
+            "rows_by_table": preview.rows_by_table,
+        }
+    )
+
+
+class _TrimRequest(BaseModel):
+    cutoff_utc: datetime
+    source: Literal["heuristic", "manual"]
+
+
+@router.post("/api/races/{race_id}/trim")
+async def api_trim_race(
+    request: Request,
+    race_id: int,
+    body: _TrimRequest,
+    _user: dict[str, Any] = Depends(require_auth("crew")),  # noqa: B008
+) -> JSONResponse:
+    """Apply a user-confirmed trim (#11): move the race's end back to
+    ``cutoff_utc`` and detach (not delete) telemetry after it."""
+    storage = get_storage(request)
+    if await storage.get_race(race_id) is None:
+        raise HTTPException(status_code=404, detail="Race not found")
+    cutoff = body.cutoff_utc if body.cutoff_utc.tzinfo else body.cutoff_utc.replace(tzinfo=UTC)
+    rows_detached = await storage.trim_race(race_id, cutoff)
+    await audit(
+        request,
+        "race.trim",
+        detail=f"{race_id} cutoff={cutoff.isoformat()} source={body.source} rows_detached={rows_detached}",
+        user=_user,
+    )
+    return JSONResponse({"rows_detached": rows_detached})
 
 
 @router.post("/api/races/{race_id}/debrief/start", status_code=201)
