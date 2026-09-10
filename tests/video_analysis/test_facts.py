@@ -186,3 +186,14 @@ def test_compute_for_race_end_to_end(
     row = facts.flat_row(254, f)
     assert row["place_W1"] == 4 and row["delta_gun->W1"] == -6 and row["final_place"] == 5
     assert row["tags"] == "start-2nd-row"
+
+
+def test_compute_for_race_skips_flagged_video(
+    meta_db: sqlite3.Connection, ledger: sqlite3.Connection
+) -> None:
+    import pytest
+
+    race = common.load_race(meta_db, 254)
+    common.set_video_flag(ledger, "jygj-NbqFJE", "unlevelled horizon")
+    with pytest.raises(LookupError, match="flagged"):
+        facts.compute_for_race(ledger, meta_db, race)

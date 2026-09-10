@@ -231,6 +231,10 @@ def compute_for_race(
     race: common.Race,
     reader: str = "claude-api",
 ) -> dict[str, Any]:
+    video = common.effective_video(ledger, race)
+    flag = common.video_flag(ledger, video.video_id) if video else None
+    if flag:
+        raise LookupError(f"race {race.id}: video flagged — {flag}")
     obs = latest_observations(ledger, race.id, reader)
     if not obs:
         raise LookupError(f"race {race.id}: no observations by {reader}")

@@ -143,6 +143,9 @@ CREATE TABLE IF NOT EXISTS observations (
     superseded_by INTEGER REFERENCES observations(id)
 );
 CREATE INDEX IF NOT EXISTS idx_obs_race ON observations(race_id, instant);
+CREATE TABLE IF NOT EXISTS video_flags (
+    video_id TEXT PRIMARY KEY, reason TEXT NOT NULL, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS facts (
     race_id INTEGER NOT NULL, key TEXT NOT NULL, value_json TEXT NOT NULL,
     computed_from TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -455,6 +458,24 @@ def effective_video(ledger: sqlite3.Connection, race: Race) -> VideoRef | None:
         sync_offset_s=float(row["sync_offset_s"]),
         duration_s=race.video.duration_s,
     )
+
+
+def video_flag(ledger: sqlite3.Connection, video_id: str) -> str | None:
+    """Reason a video is excluded from reads and facts (e.g. unlevelled horizon), else None."""
+    row = ledger.execute(
+        "SELECT reason FROM video_flags WHERE video_id = ?", (video_id,)
+    ).fetchone()
+    return str(row["reason"]) if row else None
+
+
+def set_video_flag(ledger: sqlite3.Connection, video_id: str, reason: str | None) -> None:
+    if reason is None:
+        ledger.execute("DELETE FROM video_flags WHERE video_id = ?", (video_id,))
+    else:
+        ledger.execute(
+            "INSERT OR REPLACE INTO video_flags VALUES (?,?,?)", (video_id, reason, utcnow_iso())
+        )
+    ledger.commit()
 
 
 def effective_gun(ledger: sqlite3.Connection, race: Race) -> datetime | None:

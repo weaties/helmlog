@@ -111,3 +111,11 @@ def test_ledger_schema_and_effective_sync(
 def test_dumps_is_deterministic() -> None:
     a = common.dumps({"b": 1, "a": datetime(2026, 1, 1, tzinfo=UTC)})
     assert a == '{"a":"2026-01-01T00:00:00+00:00","b":1}'
+
+
+def test_video_flags(ledger: sqlite3.Connection) -> None:
+    assert common.video_flag(ledger, "abc") is None
+    common.set_video_flag(ledger, "abc", "unlevelled horizon")
+    assert common.video_flag(ledger, "abc") == "unlevelled horizon"
+    common.set_video_flag(ledger, "abc", None)
+    assert common.video_flag(ledger, "abc") is None

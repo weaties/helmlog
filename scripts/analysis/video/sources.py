@@ -128,8 +128,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--race", type=int, action="append", default=[], help="race id (repeatable)")
     ap.add_argument("--season", action="store_true", help="every CYC Wednesday race with video")
     ap.add_argument("--no-download", action="store_true", help="only resolve, never download")
+    ap.add_argument("--flag", metavar="VIDEO_ID", help="exclude a video from reads and facts")
+    ap.add_argument("--reason", default="", help="why the video is flagged")
+    ap.add_argument("--unflag", metavar="VIDEO_ID")
     args = ap.parse_args(argv)
     ledger = common.open_ledger()
+    if args.flag:
+        common.set_video_flag(ledger, args.flag, args.reason or "flagged")
+        print(f"flagged {args.flag}: {args.reason or 'flagged'}")
+        return 0
+    if args.unflag:
+        common.set_video_flag(ledger, args.unflag, None)
+        print(f"unflagged {args.unflag}")
+        return 0
     meta = common.open_ro(common.meta_db_path())
     races = [common.load_race(meta, r) for r in args.race]
     if args.season:

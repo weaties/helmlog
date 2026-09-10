@@ -331,6 +331,9 @@ def packets_for_race(
     video = common.effective_video(ledger, race)
     if video is None:
         raise ObserveError(f"race {race_id}: no video")
+    flag = common.video_flag(ledger, video.video_id)
+    if flag:
+        raise ObserveError(f"race {race_id}: video {video.video_id} flagged — {flag}")
     rows = ledger.execute(
         "SELECT name, kind, utc, video_t FROM instants WHERE race_id = ? ORDER BY video_t",
         (race_id,),
