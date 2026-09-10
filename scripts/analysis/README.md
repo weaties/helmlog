@@ -138,6 +138,7 @@ uv run python -m scripts.analysis.video observe  --race 254        # Claude API 
 uv run python -m scripts.analysis.video facts    --season --csv season.csv
 uv run python -m scripts.analysis.video report   --season          # tables + charts
 uv run python -m scripts.analysis.video reel     --scenario late_boat_end --season
+uv run python -m scripts.analysis.video suncheck --race 254        # camera yaw offset from the sun
 ```
 
 Extra env vars on top of `HELMLOG_DB`:

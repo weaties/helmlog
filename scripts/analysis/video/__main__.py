@@ -14,6 +14,7 @@ COMMANDS = {
     "facts": "facts",
     "reel": "reel",
     "report": "report",
+    "suncheck": "suncheck",
 }
 
 
