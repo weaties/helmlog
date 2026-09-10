@@ -92,7 +92,7 @@ def test_aggregates_markdown_sections() -> None:
         "Read quality",
     ):
         assert heading in md
-    assert "| **median** | | 8 | 6 | 4 | 5 | – | – | 5 |" in md
+    assert "| **median** | | 8 | 6 | 4 | 5 | – | – | 5 | | |" in md
     assert "Went left 3, right 1, middle 0" in md
     assert "spread inside a rounding window: median 1" in md
 

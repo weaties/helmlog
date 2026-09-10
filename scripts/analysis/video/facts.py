@@ -225,19 +225,31 @@ def quality(obs: dict[str, dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+DEFAULT_READERS = ("claude-api", "claude-api-480p")
+
+
 def compute_for_race(
     ledger: sqlite3.Connection,
     tel_db: sqlite3.Connection,
     race: common.Race,
-    reader: str = "claude-api",
+    reader: str | tuple[str, ...] = DEFAULT_READERS,
 ) -> dict[str, Any]:
+    """Facts from the first reader (in preference order) that has observations for the race."""
     video = common.effective_video(ledger, race)
     flag = common.video_flag(ledger, video.video_id) if video else None
     if flag:
         raise LookupError(f"race {race.id}: video flagged — {flag}")
-    obs = latest_observations(ledger, race.id, reader)
+    readers = (reader,) if isinstance(reader, str) else reader
+    obs: dict[str, dict[str, Any]] = {}
+    reader_used = readers[0]
+    for candidate in readers:
+        obs = latest_observations(ledger, race.id, candidate)
+        if obs:
+            reader_used = candidate
+            break
     if not obs:
-        raise LookupError(f"race {race.id}: no observations by {reader}")
+        raise LookupError(f"race {race.id}: no observations by {', '.join(readers)}")
+    reader = reader_used
     gun = common.effective_gun(ledger, race)
     marks = [
         r["name"]
@@ -264,6 +276,7 @@ def compute_for_race(
         "boats_near": boats_near(obs),
         "quality": quality(obs),
         "meta": {
+            "reader": reader,
             "name": race.name,
             "local_date": race.local_date,
             "final_place": race.result_place,
@@ -298,6 +311,7 @@ def flat_row(race_id: int, facts: dict[str, Any]) -> dict[str, Any]:
         "side": side.get("side"),
         "fleet_split": side.get("fleet_split"),
         "mean_conf": facts["quality"]["mean_conf"],
+        "reader": meta.get("reader"),
         "tags": " ".join(meta["tags"]),
     }
     for step in LADDER_STEPS:
@@ -328,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--race", type=int, action="append", default=[], help="race id (repeatable)")
     ap.add_argument("--season", action="store_true", help="every CYC Wednesday race with video")
-    ap.add_argument("--reader", default="claude-api")
+    ap.add_argument("--reader", action="append", default=[], help="reader(s) in preference order")
     ap.add_argument("--csv", help="write one row per race here")
     args = ap.parse_args(argv)
     ledger = common.open_ledger()
@@ -340,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     rows = []
     for race in races:
         try:
-            facts = compute_for_race(ledger, tel_db, race, args.reader)
+            facts = compute_for_race(ledger, tel_db, race, tuple(args.reader) or DEFAULT_READERS)
         except LookupError as exc:
             print(f"race {race.id}: skipped — {exc}")
             continue

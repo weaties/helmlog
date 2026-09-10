@@ -197,3 +197,24 @@ def test_compute_for_race_skips_flagged_video(
     common.set_video_flag(ledger, "jygj-NbqFJE", "unlevelled horizon")
     with pytest.raises(LookupError, match="flagged"):
         facts.compute_for_race(ledger, meta_db, race)
+
+
+def test_compute_for_race_falls_back_to_second_reader(
+    meta_db: sqlite3.Connection, ledger: sqlite3.Connection
+) -> None:
+    race = common.load_race(meta_db, 254)
+    instants.compute_for_race(ledger, race, tier=1)
+    row = ledger.execute(
+        "SELECT name, kind, utc, video_t FROM instants WHERE race_id = 254 AND name = 'gun'"
+    ).fetchone()
+    p = observe.Packet(
+        254, "gun", "start", common.parse_utc(row["utc"]), "jygj-NbqFJE", float(row["video_t"]),
+        None, None, None,  # type: ignore[arg-type]
+    )  # fmt: skip
+    observe.store_observation(ledger, p, obs(race_ahead=6), "claude-api-480p", "m")
+    f = facts.compute_for_race(ledger, meta_db, race)
+    assert f["meta"]["reader"] == "claude-api-480p" and f["ladder"]["gun"] == 7
+    assert facts.flat_row(254, f)["reader"] == "claude-api-480p"
+    # A full-resolution read takes precedence once it exists.
+    observe.store_observation(ledger, p, obs(race_ahead=3), "claude-api", "m")
+    assert facts.compute_for_race(ledger, meta_db, race)["meta"]["reader"] == "claude-api"

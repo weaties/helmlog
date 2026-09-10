@@ -123,23 +123,24 @@ def aggregates_markdown(rows: list[dict[str, Any]], split: str) -> str:
     before, after = split_rows(rows, split)
     lines = [f"# Season aggregates ({len(rows)} races)\n"]
     lines.append("## Position ladder (place at each step)\n")
-    lines.append("| race | date | " + " | ".join(STEPS) + " | conf |")
-    lines.append("|---|---|" + "---|" * len(STEPS) + "---|")
+    lines.append("| race | date | " + " | ".join(STEPS) + " | conf | source |")
+    lines.append("|---|---|" + "---|" * len(STEPS) + "---|---|")
     for r in rows:
+        src = "480p" if str(r.get("reader") or "").endswith("480p") else "full"
         lines.append(
             f"| {r['race_id']} | {r['date']} | "
             + " | ".join(_fmt(r.get(f"place_{s}")) for s in STEPS)
-            + f" | {_fmt(r.get('mean_conf'))} |"
+            + f" | {_fmt(r.get('mean_conf'))} | {src} |"
         )
     med = median_ladder(rows)
-    lines.append("| **median** | | " + " | ".join(_fmt(med[s]) for s in STEPS) + " | |")
+    lines.append("| **median** | | " + " | ".join(_fmt(med[s]) for s in STEPS) + " | | |")
     for label, sub in (("before " + split, before), ("from " + split, after)):
         if sub:
             m = median_ladder(sub)
             lines.append(
                 f"| median {label} ({len(sub)}) | | "
                 + " | ".join(_fmt(m[s]) for s in STEPS)
-                + " | |"
+                + " | | |"
             )
     lines.append("\n## Place change per leg (negative = places gained)\n")
     lines.append("| leg | n | median | mean | gained | lost | held |")
