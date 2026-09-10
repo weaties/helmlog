@@ -59,6 +59,25 @@ def test_ladder_uses_race_ahead_and_final_result() -> None:
     assert d == {"gun->gun+120": -2, "gun+120->W1": -4, "W1->L1": None, "L1->fin": None}
 
 
+def test_ladder_pools_the_rounding_window_by_median() -> None:
+    # Race 254 shape: single frames at W1 said 1, 5, 3, 4 and 4 boats ahead.
+    o = {
+        "W1-45": obs(race_ahead=5),
+        "W1-20": obs(race_ahead=3),
+        "W1": obs(race_ahead=1),
+        "W1+20": obs(race_ahead=4),
+        "W1+45": obs(race_ahead=4),
+        "gun": obs(race_ahead=8),
+        "gun+15": obs(race_ahead=10),
+    }
+    assert facts.window_ahead(o, "W1") == (4, 4, 5)
+    assert facts.window_ahead(o, "gun") == (9, 2, 2)  # even count → rounded mean of the middle two
+    assert facts.window_ahead(o, "L1") == (None, None, 0)
+    lad = facts.ladder(o, None)
+    assert lad == {"gun": 10, "W1": 5, "fin": None}
+    assert facts.ladder_spread(o) == {"gun": 2, "W1": 4}
+
+
 def test_start_facts_end_row_and_lateness() -> None:
     line_gun = {"visible": True, "position": "unknown", "status": "behind"}
     line_15 = {"visible": True, "position": "boat_third", "status": "behind"}
@@ -155,6 +174,7 @@ def test_compute_for_race_end_to_end(
     stored = {r["key"] for r in ledger.execute("SELECT key FROM facts WHERE race_id = 254")}
     assert {
         "ladder",
+        "ladder_spread",
         "deltas",
         "start",
         "side",

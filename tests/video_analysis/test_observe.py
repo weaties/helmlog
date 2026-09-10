@@ -68,6 +68,9 @@ def test_build_request_shape(tmp_path: Path) -> None:
     body = observe.build_request(make_packet(tmp_path, "W2", "rounding"))
     assert "windward mark, at the mark" in body["messages"][0]["content"][-1]["text"]
     assert "thinking" not in body  # Opus 5 runs adaptive thinking by default
+    assert body["output_config"] == {"effort": "medium"}
+    cheap = observe.build_request(make_packet(tmp_path, "gun-300", "prestart"))
+    assert cheap["output_config"] == {"effort": "low"}
 
 
 def test_parse_payload_strips_fences_and_validates() -> None:

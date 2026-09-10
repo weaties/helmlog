@@ -4,7 +4,7 @@ Recomputed from scratch every run, so a re-read or a prompt change flows
 through. Facts are stored per (race, key) in the ledger and exported as one
 CSV row per race for the report.
 
-Keys: ladder, deltas, start, side, setdouse, boats_near, quality.
+Keys: ladder, ladder_spread, deltas, start, side, setdouse, boats_near, quality, meta.
 
     uv run python -m scripts.analysis.video facts --season [--csv out.csv]
 """
@@ -39,20 +39,63 @@ def _race_ahead(obs: dict[str, dict[str, Any]], name: str) -> int | None:
     return int(race["ahead"])
 
 
+WINDOW_OFFSETS = {
+    "gun": ("gun", "gun+15", "gun+30"),
+    "gun+120": ("gun+120",),
+    "fin": ("fin-60", "fin"),
+}
+
+
+def window_names(step: str) -> tuple[str, ...]:
+    """Instants pooled for a ladder step: a rounding uses its -45..+45 window."""
+    if step in WINDOW_OFFSETS:
+        return WINDOW_OFFSETS[step]
+    return (f"{step}-45", f"{step}-20", step, f"{step}+20", f"{step}+45")
+
+
+def window_ahead(obs: dict[str, dict[str, Any]], step: str) -> tuple[int | None, int | None, int]:
+    """Median race.ahead over the step's window, with its range and sample count.
+
+    Single frames mis-count by a few boats in a cluster; the median over the
+    window is the number the ladder uses and the range is reported alongside.
+    """
+    vals = [v for v in (_race_ahead(obs, n) for n in window_names(step)) if v is not None]
+    if not vals:
+        return None, None, 0
+    vals.sort()
+    mid = (
+        vals[len(vals) // 2]
+        if len(vals) % 2
+        else round((vals[len(vals) // 2 - 1] + vals[len(vals) // 2]) / 2)
+    )
+    return int(mid), vals[-1] - vals[0], len(vals)
+
+
 def ladder(obs: dict[str, dict[str, Any]], final_place: int | None) -> dict[str, int | None]:
-    """Place (boats ahead + 1) at each ladder step that has a usable observation."""
+    """Place (median boats ahead over the step's window + 1) at each ladder step."""
     out: dict[str, int | None] = {}
     for step in LADDER_STEPS:
+        ahead, _, n = window_ahead(obs, step)
         if step == "fin":
-            fin = _race_ahead(obs, "fin")
             out["fin"] = (
-                final_place if final_place is not None else (fin + 1 if fin is not None else None)
+                final_place
+                if final_place is not None
+                else (ahead + 1 if ahead is not None else None)
             )
             continue
-        if step not in obs:
+        if n == 0 and not any(name in obs for name in window_names(step)):
             continue
-        ahead = _race_ahead(obs, step)
         out[step] = ahead + 1 if ahead is not None else None
+    return out
+
+
+def ladder_spread(obs: dict[str, dict[str, Any]]) -> dict[str, int | None]:
+    """Range of the per-frame counts behind each ladder step (0 = frames agree)."""
+    out: dict[str, int | None] = {}
+    for step in LADDER_STEPS:
+        _, spread, n = window_ahead(obs, step)
+        if n:
+            out[step] = spread
     return out
 
 
@@ -209,6 +252,7 @@ def compute_for_race(
     lad = ladder(obs, race.result_place)
     facts: dict[str, Any] = {
         "ladder": lad,
+        "ladder_spread": ladder_spread(obs),
         "deltas": deltas(lad),
         "start": start_facts(obs),
         "side": side_facts(tel, gun, w1, obs) if gun else {},

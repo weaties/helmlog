@@ -117,3 +117,37 @@ HELMLOG_OUT_DIR=out/ uv run python scripts/analysis/start_quality.py
 - All TWA/AWA conventions: TWA folded to `[0, 180]` (absolute), with
   separate "tack" labels for port/starboard. Wind reference IDs:
   `0 = boat-referenced TWA`, `4 = north-referenced TWD`, `2 = apparent`.
+
+## `video/` — video-derived fleet analysis (#839)
+
+A package rather than a single script: `scripts/analysis/video/` reads the
+360° race videos at named instants (gun, roundings, finish), caches frames
+and structured observations in a sidecar SQLite ledger, and derives
+fleet-relative facts for the season coaching report. Design:
+[`docs/video-analysis.md`](../../docs/video-analysis.md). Needs `ffmpeg`
+and `yt-dlp` on the Mac; nothing runs on the Pi. Tests live in
+`tests/video_analysis/` (run without ffmpeg or network).
+
+```bash
+uv run python -m scripts.analysis.video --help
+uv run python -m scripts.analysis.video fetch    --race 254        # local 8K export or 4K YouTube download
+uv run python -m scripts.analysis.video horns    --race 254        # horn detector → gun + refined sync
+uv run python -m scripts.analysis.video instants --race 254        # named instants from the sampling plan
+uv run python -m scripts.analysis.video frames   --race 254        # frames + annotated horizon strips
+uv run python -m scripts.analysis.video observe  --race 254        # Claude API reads → observations
+uv run python -m scripts.analysis.video facts    --season --csv season.csv
+uv run python -m scripts.analysis.video report   --season          # tables + charts
+uv run python -m scripts.analysis.video reel     --scenario late_boat_end --season
+```
+
+Extra env vars on top of `HELMLOG_DB`:
+
+| Env var | Default | What |
+|---|---|---|
+| `VIDEO_ANALYSIS_DIR` | `data/video-analysis` | Sidecar root: `ledger.sqlite`, `sources/`, `frames/`, `strips/`, `clips/`, `reels/`, `report/` |
+| `HELMLOG_META_DB` | `HELMLOG_DB` | Races / videos / Vakaros / maneuvers / results. Lets a fresh table dump from the Pi pair with an older telemetry snapshot |
+| `INSTA360_EXPORTS` | `~/Insta360 Exports` | Where the stitched 8K files live; used when the video title matches |
+| `ANTHROPIC_API_KEY` | — | For `observe --reader claude-api` |
+
+The ledger is the thing to back up; everything else is reproducible from the
+videos. `data/video-analysis/` is gitignored.

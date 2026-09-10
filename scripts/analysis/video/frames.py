@@ -191,8 +191,14 @@ def run_race(
     n = 0
     for r in rows:
         utc = common.parse_utc(r["utc"])
+        video_t = float(r["video_t"])
+        if not 0.0 <= video_t <= src.duration_s - 0.5:
+            print(
+                f"  skip {r['name']}: t={video_t:.1f}s is outside the video (0..{src.duration_s:.0f}s)"
+            )
+            continue
         st = tel.at(utc)
-        frame = ensure_frame(ledger, video.video_id, src.path, float(r["video_t"]))
+        frame = ensure_frame(ledger, video.video_id, src.path, video_t)
         stem = f"{race_id}_{r['name']}"
         if (strips_dir(video.video_id) / f"{stem}_strips.jpg").exists():
             continue

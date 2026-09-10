@@ -113,6 +113,10 @@ Counts must equal what the boats list implies. rel_brg is an integer relative be
 confidence is your confidence in the geometric counts (0.9 = clear view, 0.5 = cluttered).
 """
 
+# Start and rounding frames carry the race-position judgement; the rest are cheaper reads.
+EFFORT_BY_KIND = {"start": "medium", "rounding": "medium", "prestart": "low", "finish": "low",
+                  "leg": "low", "setdouse": "low"}  # fmt: skip
+
 KIND_HINTS = {
     "prestart": "Pre-start: the fleet is manoeuvring near the line. Report the line ends if "
     "visible and where the mass of the fleet is relative to the two ends (fleet.mass_bearing_rel).",
@@ -214,7 +218,7 @@ def build_request(p: Packet) -> dict[str, Any]:
         "system": [
             {"type": "text", "text": SYSTEM_PROMPT_V1, "cache_control": {"type": "ephemeral"}}
         ],
-        "output_config": {"effort": "medium"},
+        "output_config": {"effort": EFFORT_BY_KIND.get(p.kind, "medium")},
         "messages": [{"role": "user", "content": content}],
     }
 
@@ -345,7 +349,8 @@ def packets_for_race(
             sd / f"{stem}_thumb.jpg",
         )  # type: ignore[arg-type]
         if not strips.composite.exists():
-            raise ObserveError(f"race {race_id}: strips missing for {r['name']} (run frames first)")
+            print(f"  race {race_id} {r['name']}: no strips (outside the video or frames not run)")
+            continue
         utc = common.parse_utc(r["utc"])
         out.append(
             Packet(
