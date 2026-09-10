@@ -315,8 +315,10 @@ One record per instant. Fields the reader fills in; nulls allowed.
     {"rel_brg": -50, "range": "mid", "tack": "stbd", "id": "Paladin",
      "id_kind": "hull_name", "conf": 0.8}
   ],
-  "counts": {"ahead": 2, "astern": 9, "to_weather": 0, "to_leeward": 11,
-             "between_us_and_line": 0},
+  "counts": {"forward": 2, "aft": 9, "to_weather": 0, "to_leeward": 11,
+             "between_us_and_line": 0, "close": 2},
+  "race": {"ahead": 8, "behind": 3, "basis": "line", "confidence": 0.5},
+  "fleet": {"mass_bearing_rel": -60, "split": "unknown"},
   "notes": "Tacked onto stbd under the committee boat; fleet in a line to leeward",
   "confidence": 0.8
 }
@@ -347,26 +349,72 @@ for that reason.
 
 ## 6. Tooling
 
-New scripts under `scripts/analysis/video/`, following the existing
-offline-tool conventions in `scripts/analysis/README.md`. Dependencies:
-`ffmpeg`, `yt-dlp`, `numpy`, `Pillow`. All already present on the dev
-Mac; none needed on the Pi.
+A package under `scripts/analysis/video/`, following the offline-tool
+conventions in `scripts/analysis/README.md` (env-var configuration, read-only
+DB access, nothing on the Pi). Dependencies: `ffmpeg`, `yt-dlp`, `numpy`,
+`Pillow`, `httpx`, `matplotlib`. Run as
+`uv run python -m scripts.analysis.video <command>`; tests in
+`tests/video_analysis/` run without ffmpeg or network.
 
-| Script | Does |
+| Command / module | Does |
 |---|---|
-| `fetch.py` | Resolve a race's video, sync, and source (local file or YouTube). Section-download only the windows the sampling plan needs. Record in the ledger. |
-| `horns.py` | Band-limited horn detector → `audio_events`. Pattern-match 5-4-1-0 and report a gun candidate with confidence. |
-| `instants.py` | Compute the named instants for a race from gun, maneuvers, and finish. Flag races whose rounding count does not match the course. |
-| `frames.py` | Extract L2 frames at instants; idempotent against the ledger. |
-| `strips.py` | Annotated horizon strips (as in the pilot) and `v360`-reprojected perspective views pointing at a bearing, for reels and close reads. |
-| `observe.py` | Assemble the reading packet for an instant: strips, own-boat crop, telemetry stamp, prior observation if any. Store the read. |
-| `facts.py` | Recompute L5 from L4: ladders, deltas, side record, set/douse times. Emit CSV and the tables the report uses. |
-| `reel.py` | Build a scenario reel (§7.3) from a query over L4. |
+| `fetch` (`sources.py`) | Resolve a race's video to a file: the local 8K export when its filename matches the video title, else a full ≤4K VP9 download from YouTube. Records dimensions and duration in the ledger. |
+| `horns` (`horns.py`) | Band-limited horn detector → `audio_events`. Picks the gun by 5-4-1-0 pattern support, or by the loudest blast within ±20 s of the Vakaros gun, and writes the race's effective sync (`sync` table). |
+| `instants` (`instants.py`) | Named instants from the sampling plan (§5.3) using the effective gun, the maneuver detector's roundings (pre-start turns filtered, a split leeward rounding inferred from the last gybe before the next beat), and the session end as the finish. Flags odd rounding counts. |
+| `frames` (`frames.py`) | L2 frames at instants (idempotent) plus the L3 reading packet: four 90° horizon strips with absolute-bearing ticks and the wind marked, and a whole-frame thumbnail. Also `v360` perspective views. |
+| `observe` (`observe.py`) | Sends the packet to the Claude API with the versioned prompt, stores schema-v1 observations append-only with reader, model, prompt hash, confidence and cost. `--reader file` records a human read. |
+| `facts` (`facts.py`) | L5 per race: position ladder (median over each rounding window), place deltas per leg, start end/row/lateness, first-beat side vs fleet split, coarse set/douse timing, boats identified nearby, read quality. CSV export. |
+| `report` (`report.py`) | Season tables (`aggregates.md`) and charts: ladder per race with the season median, place change per leg, start position vs finish, before/after a split date. |
+| `reel` (`reel.py`) | Scenario reels (§7.3): query over facts + observations → caption card + `v360` clip with a data strip per race, concatenated, with a markdown page of deep links. |
 
 `ffmpeg -vf v360=e:flat:yaw=<rel_brg>:pitch=0:h_fov=90:v_fov=60` turns the
 equirectangular frame into a normal-looking camera pointed at any
 bearing. That is what reels use, so a viewer sees "the committee boat
 end as we approached it" rather than a warped panorama.
+
+### 6.0 As built (2026-09-10) — deviations from the plan above
+
+- **Full downloads, not sections.** At YouTube's 4K a whole race is 1.5–5 GB
+  and section downloads re-fetch keyframes for every new instant. Sources
+  live under the sidecar; ~90 GB for the season. YouTube 4K is 3840×2160
+  (padded), the local exports are 7680×3840; the strip band is a fraction of
+  the height so both work.
+- **Metadata DB is separable.** `HELMLOG_META_DB` points at a small dump of
+  the races / videos / Vakaros / maneuvers / results tables from the Pi, so
+  the day's Vakaros ingest is visible while telemetry comes from the last
+  backup snapshot.
+- **Stored syncs are 5–6 s slow.** On the three September races the horn
+  landed 4.9–5.6 s before the video time the session-start sync predicted
+  for the Vakaros gun. The ledger's `sync` row is authoritative from then
+  on; every instant, frame and observation is keyed by it.
+- **The horn detector hears voices.** Crew talk next to the camera trips
+  the band-energy detector, so the gun needs pattern support or the Vakaros
+  anchor; the full 5-4-1-0 pattern was heard on one of three races. Without
+  a Vakaros gun the tool only accepts a patterned candidate.
+- **Two kinds of count.** Schema v1 as built separates geometric counts
+  (`counts.forward/aft/to_weather/to_leeward`, bearing only) from
+  race-position counts (`race.ahead/behind`, "who is winning", with a
+  basis and its own confidence). The first prompt conflated them and read a
+  fleet still running toward the leeward mark as "ahead".
+- **Ladder steps pool a window.** Single frames mis-count by ±3 in a
+  cluster; the ladder uses the median `race.ahead` over `mark-45 … mark+45`
+  (and `gun, gun+15, gun+30`) and records the spread.
+- **Own boat is sail 475.** "105" in the hull name is the class.
+- **Cost.** About $0.10 per instant at `claude-opus-5`, medium effort on
+  start and rounding frames, low elsewhere: roughly $3 per race at Tier 1.
+- **Not every upload has a 4K rendition.** Sixteen of the Wednesday videos
+  exist on YouTube only up to 720p at 48 fps; the fetch takes the best
+  stream that exists and the ledger records the size. Counts survive 720p;
+  sail numbers mostly do not.
+- **Two April videos are excluded** (`fetch --flag`): the April 9 stitches
+  have no horizon lock, so the horizon band is sky or deck in half the strips.
+  Every later video is boat-locked and level.
+- **`suncheck`** measures the camera yaw offset per video from the sun's
+  bearing (−8° to +1° on the September videos) and shows the logged heading
+  lags a turning boat by 20–30°: absolute-bearing ticks are only trustworthy
+  on a steady leg.
+- **Facts fall back to lower-resolution reads** (`reader = claude-api-480p`)
+  when no full-resolution read exists, and the report marks the source.
 
 ### 6.1 Reading frames
 

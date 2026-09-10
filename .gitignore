@@ -58,3 +58,6 @@ htmlcov/
 **/.DS_Store
 .env.claude-dev
 docker/libMediaSDK-dev*.deb
+
+# Video-analysis sidecar (#839): ledger, frames, clips — reproducible from the videos
+data/video-analysis/
