@@ -34,6 +34,9 @@ if TYPE_CHECKING:
 MIN_ELEVATION_DEG = 2.0
 MAX_BLOB_FRACTION = 0.04  # a sun disc is narrow; glare across clouds is not
 MIN_SATURATED = 30  # pixels
+MIN_FIXES = 5  # fewer frames than this cannot separate the mount from a turning boat
+MAX_SPREAD_DEG = 15.0  # a larger spread means glare or the sun behind our sails, not the mount
+MAX_ERROR_DEG = 60.0  # a single fix further off than this is not the sun
 THUMB_W = 768
 
 CALIBRATION_SCHEMA = """
@@ -130,17 +133,31 @@ def fixes_for_race(
     return out
 
 
-def store(ledger: sqlite3.Connection, video_id: str, fixes: list[SunFix]) -> tuple[float, float]:
-    ledger.executescript(CALIBRATION_SCHEMA)
-    errs = [f.yaw_error for f in fixes]
+def summarise(fixes: list[SunFix]) -> tuple[float, float, int, bool]:
+    """(median yaw error, spread, n used, reliable) after dropping implausible fixes."""
+    errs = [f.yaw_error for f in fixes if abs(f.yaw_error) <= MAX_ERROR_DEG]
+    if not errs:
+        return 0.0, 0.0, 0, False
     med = statistics.median(errs)
     spread = statistics.pstdev(errs) if len(errs) > 1 else 0.0
-    ledger.execute(
-        "INSERT OR REPLACE INTO yaw_calibration VALUES (?,?,?,?,?)",
-        (video_id, med, spread, len(errs), common.utcnow_iso()),
-    )
+    return med, spread, len(errs), len(errs) >= MIN_FIXES and spread <= MAX_SPREAD_DEG
+
+
+def store(
+    ledger: sqlite3.Connection, video_id: str, fixes: list[SunFix]
+) -> tuple[float, float, int, bool]:
+    """Store the calibration when it is reliable; otherwise drop any stale row."""
+    ledger.executescript(CALIBRATION_SCHEMA)
+    med, spread, n, ok = summarise(fixes)
+    if ok:
+        ledger.execute(
+            "INSERT OR REPLACE INTO yaw_calibration VALUES (?,?,?,?,?)",
+            (video_id, med, spread, n, common.utcnow_iso()),
+        )
+    else:
+        ledger.execute("DELETE FROM yaw_calibration WHERE video_id = ?", (video_id,))
     ledger.commit()
-    return med, spread
+    return med, spread, n, ok
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -164,8 +181,11 @@ def main(argv: list[str] | None = None) -> int:
             continue
         video = common.effective_video(ledger, race)
         assert video is not None
-        med, spread = store(ledger, video.video_id, fixes)
-        print(f"race {race.id}: yaw offset {med:+.1f}° (σ {spread:.1f}°) from {len(fixes)} frames")
+        med, spread, n, ok = store(ledger, video.video_id, fixes)
+        verdict = "stored" if ok else "unreliable (glare or sun behind the sails), not stored"
+        print(
+            f"race {race.id}: yaw offset {med:+.1f}° (σ {spread:.1f}°) from {n} frames — {verdict}"
+        )
         if args.verbose:
             for f in fixes:
                 print(

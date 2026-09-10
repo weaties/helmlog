@@ -8,7 +8,10 @@ from PIL import Image
 from scripts.analysis.video import common, reel
 
 if TYPE_CHECKING:
+    import sqlite3
     from pathlib import Path
+
+    import pytest
 
 
 def facts(**over: dict[str, Any]) -> dict[str, Any]:
@@ -78,3 +81,27 @@ def test_caption_card_and_strip_render(tmp_path: Path) -> None:
     strip = reel.data_strip("race 254", tmp_path / "strip.png")
     with Image.open(strip) as im:
         assert im.size == (reel.CLIP_W, 48) and im.mode == "RGBA"
+
+
+def test_build_reel_skips_races_without_a_source(
+    ledger: sqlite3.Connection,
+    meta_db: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    monkeypatch.setenv("VIDEO_ANALYSIS_DIR", str(tmp_path / "va"))
+    monkeypatch.setenv("INSTA360_EXPORTS", str(tmp_path / "none"))
+    f = facts()
+    for k, v in f.items():
+        ledger.execute(
+            "INSERT INTO facts VALUES (254, ?, ?, 'claude-api', 'now')", (k, json.dumps(v))
+        )
+    ledger.execute(
+        "INSERT INTO instants VALUES (254, 'gun', 'start', '2026-09-10T01:25:01+00:00',"
+        " 'jygj-NbqFJE', 474.0)"
+    )
+    ledger.commit()
+    out = reel.build_reel(ledger, meta_db, meta_db, reel.SCENARIOS["late_boat_end"], [254])
+    assert out is None  # the race matches but its video is not on disk: skipped, no crash

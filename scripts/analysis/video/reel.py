@@ -277,7 +277,11 @@ def build_reel(
         video = common.effective_video(ledger, race)
         if video is None:
             continue
-        src = resolve_source(ledger, video, download=False)
+        try:
+            src = resolve_source(ledger, video, download=False)
+        except FileNotFoundError as exc:
+            print(f"  race {rid}: skipped — {exc}")
+            continue
         anchor = ledger.execute(
             "SELECT utc, video_t FROM instants WHERE race_id = ? AND name = ?",
             (rid, scenario.anchor),
@@ -311,6 +315,9 @@ def build_reel(
         )
         yt = f"https://youtu.be/{video.video_id}?t={int(max(0.0, t0))}"
         links.append(f"- **{race.name}** ({race.local_date}): {caption} — [video]({deep or yt})")
+    if not parts:
+        print(f"  {scenario.name}: no clips could be cut")
+        return None
     out = reel_dir / f"{scenario.name}.mp4"
     concat(parts, out)
     (reel_dir / f"{scenario.name}.md").write_text(

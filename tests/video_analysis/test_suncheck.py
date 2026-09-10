@@ -47,3 +47,21 @@ def test_find_sun_x_compact_blob_only(tmp_path: Path) -> None:
 def test_yaw_error_geometry() -> None:
     # Sun at azimuth 266, heading 292 → sun should appear at rel -26. Seen at -30 → yaw error +4.
     assert common.angle_diff(266.0 - 292.0, -30.0) == pytest.approx(4.0)
+
+
+def test_summarise_gates_on_count_and_spread() -> None:
+    from datetime import UTC, datetime
+
+    def fix(err: float) -> suncheck.SunFix:
+        return suncheck.SunFix(0.0, datetime(2026, 9, 10, tzinfo=UTC), 0.0, 0.0, 10.0, 0.0, err)
+
+    good = [fix(e) for e in (-8.0, -7.5, -9.0, -6.0, -8.5)]
+    med, spread, n, ok = suncheck.summarise(good)
+    assert ok and n == 5 and abs(med + 8.0) < 0.1 and spread < 2
+    # Too few frames, or a wide spread, is not a calibration.
+    assert not suncheck.summarise(good[:3])[3]
+    assert not suncheck.summarise([fix(e) for e in (-30, 0, 30, 40, -40)])[3]
+    # Fixes that cannot be the sun are dropped before the statistics.
+    med, spread, n, ok = suncheck.summarise(good + [fix(150.0)])
+    assert n == 5 and ok
+    assert suncheck.summarise([])[3] is False
