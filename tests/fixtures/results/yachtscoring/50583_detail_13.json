@@ -1,0 +1,163 @@
+{
+ "eventData": {
+  "displayCorinthian": false,
+  "displaySubClasses": false,
+  "displayCrewNameReports": false,
+  "displayFleet": true,
+  "displayYC": false
+ },
+ "data": [
+  {
+   "circleName": "A",
+   "divisions": [
+    {
+     "divisionName": "One Design",
+     "classes": [
+      {
+       "class": 4,
+       "className": "J70",
+       "boats": [
+        {
+         "resultId": 2129567,
+         "eventBoatId": 519889,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "1112",
+         "design": "J/70",
+         "name": "Smartless",
+         "length": "23",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "correctedTime": 2100,
+         "elapsedTime": 2100,
+         "finishStatus": "AOK",
+         "finishTime": "2026-07-24T13:19:00.000Z",
+         "resultUpdatedAt": "2026-07-24T20:48:38.927Z",
+         "localGMTOffset": "-8.0",
+         "raceUpdatedAt": "2026-07-24T20:37:09.464Z",
+         "impliedWind": null,
+         "placeClass": 1,
+         "placeOverall": null,
+         "speedActual": null,
+         "speedCorrected": null,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "owner": {
+          "firstName": "Julian",
+          "lastName": "Croxall",
+          "city": "Kirkland",
+          "state": "WA",
+          "country": "United States of America"
+         }
+        },
+        {
+         "resultId": 2129568,
+         "eventBoatId": 520510,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "1362",
+         "design": "J/70",
+         "name": "Jabberwocky",
+         "length": "22.75",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "correctedTime": 2101,
+         "elapsedTime": 2101,
+         "finishStatus": "AOK",
+         "finishTime": "2026-07-24T13:19:01.000Z",
+         "resultUpdatedAt": "2026-07-24T20:48:38.927Z",
+         "localGMTOffset": "-8.0",
+         "raceUpdatedAt": "2026-07-24T20:37:09.464Z",
+         "impliedWind": null,
+         "placeClass": 2,
+         "placeOverall": null,
+         "speedActual": null,
+         "speedCorrected": null,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "owner": {
+          "firstName": "Paul",
+          "lastName": "Garner",
+          "city": "Seattle",
+          "state": "WA",
+          "country": "United States of America"
+         }
+        },
+        {
+         "resultId": 2129569,
+         "eventBoatId": 526565,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "193",
+         "design": "J/70",
+         "name": "Aha!",
+         "length": "22.75",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "correctedTime": 2102,
+         "elapsedTime": 2102,
+         "finishStatus": "AOK",
+         "finishTime": "2026-07-24T13:19:02.000Z",
+         "resultUpdatedAt": "2026-07-24T20:48:38.927Z",
+         "localGMTOffset": "-8.0",
+         "raceUpdatedAt": "2026-07-24T20:37:09.464Z",
+         "impliedWind": null,
+         "placeClass": 3,
+         "placeOverall": null,
+         "speedActual": null,
+         "speedCorrected": null,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "owner": {
+          "firstName": "Stephanie",
+          "lastName": "Arnold",
+          "city": "Ferndale",
+          "state": "WA",
+          "country": "United States of America"
+         }
+        },
+        {
+         "resultId": 2129571,
+         "eventBoatId": 523838,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "26",
+         "design": "J/70",
+         "name": "La Chancla",
+         "length": "22.75",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "correctedTime": 2103,
+         "elapsedTime": 2103,
+         "finishStatus": "AOK",
+         "finishTime": "2026-07-24T13:19:03.000Z",
+         "resultUpdatedAt": "2026-07-24T20:48:38.927Z",
+         "localGMTOffset": "-8.0",
+         "raceUpdatedAt": "2026-07-24T20:37:09.464Z",
+         "impliedWind": null,
+         "placeClass": 4,
+         "placeOverall": null,
+         "speedActual": null,
+         "speedCorrected": null,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "owner": {
+          "firstName": "John",
+          "lastName": "Stocklass",
+          "city": "Ferndale",
+          "state": "WA",
+          "country": "United States of America"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

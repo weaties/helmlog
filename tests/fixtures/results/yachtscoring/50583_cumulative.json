@@ -1,0 +1,2190 @@
+{
+ "eventData": {
+  "phrfToTA": 650,
+  "phrfToTB": 550,
+  "displayCorinthian": false,
+  "displaySubClasses": false,
+  "displayCrewNameReports": false,
+  "displayCountryFlags": false,
+  "minDrop": 4,
+  "maxDrop": 1,
+  "notes": []
+ },
+ "data": [
+  {
+   "circleName": "A",
+   "divisions": [
+    {
+     "divisionName": "One Design",
+     "classes": [
+      {
+       "class": 3,
+       "className": "J105",
+       "boatsInClass": 11,
+       "boats": [
+        {
+         "cumulativeId": 2020419,
+         "eventBoatId": 519311,
+         "bowNumber": null,
+         "sailPrefix": "CAN",
+         "sailNumber": "89",
+         "design": "J/105",
+         "name": "Moose Unknown",
+         "length": "34.5",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bb4d40b-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.279Z",
+           "raceUpdatedAt": "2026-07-24T21:21:30.423Z"
+          },
+          {
+           "id": "5bb4d40a-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.279Z",
+           "raceUpdatedAt": "2026-07-24T20:39:50.177Z"
+          },
+          {
+           "id": "5bb4d409-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.279Z",
+           "raceUpdatedAt": "2026-07-24T20:38:42.568Z"
+          },
+          {
+           "id": "5bb4d408-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.279Z",
+           "raceUpdatedAt": "2026-07-23T22:30:35.846Z"
+          },
+          {
+           "id": "5bb4d407-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.279Z",
+           "raceUpdatedAt": "2026-07-23T20:42:25.631Z"
+          },
+          {
+           "id": "5bb4d406-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.279Z",
+           "raceUpdatedAt": "2026-07-23T20:41:19.108Z"
+          },
+          {
+           "id": "5bb4d405-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.279Z",
+           "raceUpdatedAt": "2026-07-22T22:25:22.461Z"
+          },
+          {
+           "id": "5bb4d404-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.279Z",
+           "raceUpdatedAt": "2026-07-21T22:37:28.448Z"
+          },
+          {
+           "id": "5bb4d403-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.279Z",
+           "raceUpdatedAt": "2026-07-21T22:35:49.913Z"
+          },
+          {
+           "id": "5bb4d402-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.279Z",
+           "raceUpdatedAt": "2026-07-21T22:32:51.525Z"
+          },
+          {
+           "id": "5bb4d401-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.279Z",
+           "raceUpdatedAt": "2026-07-20T21:30:59.482Z"
+          },
+          {
+           "id": "5bb4d400-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.281Z",
+           "raceUpdatedAt": "2026-07-20T21:27:02.877Z"
+          }
+         ],
+         "raceTotal": 15,
+         "throwOut1": 2,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.281Z",
+         "owner": {
+          "firstName": "John",
+          "lastName": "Aitchison",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "Seattle"
+         }
+        },
+        {
+         "cumulativeId": 2020422,
+         "eventBoatId": 522121,
+         "bowNumber": null,
+         "sailPrefix": null,
+         "sailNumber": "482",
+         "design": "J/105",
+         "name": "Panic",
+         "length": "34",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bb940db-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.309Z",
+           "raceUpdatedAt": "2026-07-24T21:21:30.423Z"
+          },
+          {
+           "id": "5bb940da-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 5,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.309Z",
+           "raceUpdatedAt": "2026-07-24T20:39:50.177Z"
+          },
+          {
+           "id": "5bb940d9-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 8,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.309Z",
+           "raceUpdatedAt": "2026-07-24T20:38:42.568Z"
+          },
+          {
+           "id": "5bb940d8-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.309Z",
+           "raceUpdatedAt": "2026-07-23T22:30:35.846Z"
+          },
+          {
+           "id": "5bb940d7-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "AOK",
+           "raceValue": 5,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.309Z",
+           "raceUpdatedAt": "2026-07-23T20:42:25.631Z"
+          },
+          {
+           "id": "5bb940d6-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.309Z",
+           "raceUpdatedAt": "2026-07-23T20:41:19.108Z"
+          },
+          {
+           "id": "5bb940d5-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.309Z",
+           "raceUpdatedAt": "2026-07-22T22:25:22.461Z"
+          },
+          {
+           "id": "5bb940d4-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.309Z",
+           "raceUpdatedAt": "2026-07-21T22:37:28.448Z"
+          },
+          {
+           "id": "5bb940d3-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.309Z",
+           "raceUpdatedAt": "2026-07-21T22:35:49.913Z"
+          },
+          {
+           "id": "5bb940d2-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 5,
+           "updatedAt": "2026-07-24T22:31:05.309Z",
+           "raceUpdatedAt": "2026-07-21T22:32:51.525Z"
+          },
+          {
+           "id": "5bb940d1-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 5,
+           "updatedAt": "2026-07-24T22:31:05.309Z",
+           "raceUpdatedAt": "2026-07-20T21:30:59.482Z"
+          },
+          {
+           "id": "5bb940d0-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.311Z",
+           "raceUpdatedAt": "2026-07-20T21:27:02.877Z"
+          }
+         ],
+         "raceTotal": 33,
+         "throwOut1": 8,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.310Z",
+         "owner": {
+          "firstName": "MIKE",
+          "lastName": "CAIN",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "Seattle"
+         }
+        },
+        {
+         "cumulativeId": 2020420,
+         "eventBoatId": 517801,
+         "bowNumber": "422",
+         "sailPrefix": null,
+         "sailNumber": "422",
+         "design": "J/105",
+         "name": "Creative",
+         "length": "35",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bb2d830-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.266Z",
+           "raceUpdatedAt": "2026-07-24T21:21:30.423Z"
+          },
+          {
+           "id": "5bb2b12a-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 6,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.266Z",
+           "raceUpdatedAt": "2026-07-24T20:39:50.177Z"
+          },
+          {
+           "id": "5bb2b129-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.266Z",
+           "raceUpdatedAt": "2026-07-24T20:38:42.568Z"
+          },
+          {
+           "id": "5bb2b128-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.266Z",
+           "raceUpdatedAt": "2026-07-23T22:30:35.846Z"
+          },
+          {
+           "id": "5bb2b127-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.266Z",
+           "raceUpdatedAt": "2026-07-23T20:42:25.631Z"
+          },
+          {
+           "id": "5bb2b126-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.266Z",
+           "raceUpdatedAt": "2026-07-23T20:41:19.108Z"
+          },
+          {
+           "id": "5bb2b125-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.266Z",
+           "raceUpdatedAt": "2026-07-22T22:25:22.461Z"
+          },
+          {
+           "id": "5bb2b124-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 5,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.266Z",
+           "raceUpdatedAt": "2026-07-21T22:37:28.448Z"
+          },
+          {
+           "id": "5bb2b123-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "AOK",
+           "raceValue": 8,
+           "sortValue": 5,
+           "updatedAt": "2026-07-24T22:31:05.266Z",
+           "raceUpdatedAt": "2026-07-21T22:35:49.913Z"
+          },
+          {
+           "id": "5bb2b122-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 6,
+           "sortValue": 6,
+           "updatedAt": "2026-07-24T22:31:05.266Z",
+           "raceUpdatedAt": "2026-07-21T22:32:51.525Z"
+          },
+          {
+           "id": "5bb2b121-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 6,
+           "updatedAt": "2026-07-24T22:31:05.266Z",
+           "raceUpdatedAt": "2026-07-20T21:30:59.482Z"
+          },
+          {
+           "id": "5bb2b120-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.271Z",
+           "raceUpdatedAt": "2026-07-20T21:27:02.877Z"
+          }
+         ],
+         "raceTotal": 38,
+         "throwOut1": 8,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.269Z",
+         "owner": {
+          "firstName": "mark",
+          "lastName": "prentice",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "woodinville"
+         }
+        },
+        {
+         "cumulativeId": 2020424,
+         "eventBoatId": 524083,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "299",
+         "design": "J/105",
+         "name": "Jaded",
+         "length": "34.5",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bbb63bb-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "AOK",
+           "raceValue": 6,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.323Z",
+           "raceUpdatedAt": "2026-07-24T21:21:30.423Z"
+          },
+          {
+           "id": "5bbb63ba-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.323Z",
+           "raceUpdatedAt": "2026-07-24T20:39:50.177Z"
+          },
+          {
+           "id": "5bbb63b9-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.323Z",
+           "raceUpdatedAt": "2026-07-24T20:38:42.568Z"
+          },
+          {
+           "id": "5bbb63b8-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "AOK",
+           "raceValue": 5,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.323Z",
+           "raceUpdatedAt": "2026-07-23T22:30:35.846Z"
+          },
+          {
+           "id": "5bbb63b7-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "DSQ",
+           "raceValue": 12,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.323Z",
+           "raceUpdatedAt": "2026-07-23T20:42:25.631Z"
+          },
+          {
+           "id": "5bbb63b6-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.323Z",
+           "raceUpdatedAt": "2026-07-23T20:41:19.108Z"
+          },
+          {
+           "id": "5bbb63b5-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "AOK",
+           "raceValue": 9,
+           "sortValue": 5,
+           "updatedAt": "2026-07-24T22:31:05.323Z",
+           "raceUpdatedAt": "2026-07-22T22:25:22.461Z"
+          },
+          {
+           "id": "5bbb63b4-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 5,
+           "updatedAt": "2026-07-24T22:31:05.323Z",
+           "raceUpdatedAt": "2026-07-21T22:37:28.448Z"
+          },
+          {
+           "id": "5bbb63b3-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 6,
+           "updatedAt": "2026-07-24T22:31:05.323Z",
+           "raceUpdatedAt": "2026-07-21T22:35:49.913Z"
+          },
+          {
+           "id": "5bbb63b2-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 5,
+           "sortValue": 6,
+           "updatedAt": "2026-07-24T22:31:05.323Z",
+           "raceUpdatedAt": "2026-07-21T22:32:51.525Z"
+          },
+          {
+           "id": "5bbb63b1-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 6,
+           "sortValue": 9,
+           "updatedAt": "2026-07-24T22:31:05.323Z",
+           "raceUpdatedAt": "2026-07-20T21:30:59.482Z"
+          },
+          {
+           "id": "5bbb63b0-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.325Z",
+           "raceUpdatedAt": "2026-07-20T21:27:02.877Z"
+          }
+         ],
+         "raceTotal": 46,
+         "throwOut1": 12,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.324Z",
+         "owner": {
+          "firstName": "Chris",
+          "lastName": "Phoenix",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "Kirkland"
+         }
+        },
+        {
+         "cumulativeId": 2020423,
+         "eventBoatId": 520111,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "403",
+         "design": "J/105",
+         "name": "Liftoff",
+         "length": "34.5",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bb6339b-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "AOK",
+           "raceValue": 5,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.289Z",
+           "raceUpdatedAt": "2026-07-24T21:21:30.423Z"
+          },
+          {
+           "id": "5bb6339a-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.289Z",
+           "raceUpdatedAt": "2026-07-24T20:39:50.177Z"
+          },
+          {
+           "id": "5bb63399-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.289Z",
+           "raceUpdatedAt": "2026-07-24T20:38:42.568Z"
+          },
+          {
+           "id": "5bb63398-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.289Z",
+           "raceUpdatedAt": "2026-07-23T22:30:35.846Z"
+          },
+          {
+           "id": "5bb63397-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "DSQ",
+           "raceValue": 12,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.289Z",
+           "raceUpdatedAt": "2026-07-23T20:42:25.631Z"
+          },
+          {
+           "id": "5bb63396-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "AOK",
+           "raceValue": 5,
+           "sortValue": 5,
+           "updatedAt": "2026-07-24T22:31:05.289Z",
+           "raceUpdatedAt": "2026-07-23T20:41:19.108Z"
+          },
+          {
+           "id": "5bb63395-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 5,
+           "updatedAt": "2026-07-24T22:31:05.289Z",
+           "raceUpdatedAt": "2026-07-22T22:25:22.461Z"
+          },
+          {
+           "id": "5bb63394-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 6,
+           "sortValue": 5,
+           "updatedAt": "2026-07-24T22:31:05.289Z",
+           "raceUpdatedAt": "2026-07-21T22:37:28.448Z"
+          },
+          {
+           "id": "5bb63393-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 6,
+           "updatedAt": "2026-07-24T22:31:05.289Z",
+           "raceUpdatedAt": "2026-07-21T22:35:49.913Z"
+          },
+          {
+           "id": "5bb63392-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 9,
+           "sortValue": 6,
+           "updatedAt": "2026-07-24T22:31:05.289Z",
+           "raceUpdatedAt": "2026-07-21T22:32:51.525Z"
+          },
+          {
+           "id": "5bb63391-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 5,
+           "sortValue": 9,
+           "updatedAt": "2026-07-24T22:31:05.289Z",
+           "raceUpdatedAt": "2026-07-20T21:30:59.482Z"
+          },
+          {
+           "id": "5bb63390-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 6,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.292Z",
+           "raceUpdatedAt": "2026-07-20T21:27:02.877Z"
+          }
+         ],
+         "raceTotal": 54,
+         "throwOut1": 12,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.291Z",
+         "owner": {
+          "firstName": "Jeffrey",
+          "lastName": "Pace",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "SEATTLE"
+         }
+        },
+        {
+         "cumulativeId": 2020421,
+         "eventBoatId": 521548,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "475",
+         "design": "J/105",
+         "name": "Corvo 105",
+         "length": "10.5",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bb87d8b-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.304Z",
+           "raceUpdatedAt": "2026-07-24T21:21:30.423Z"
+          },
+          {
+           "id": "5bb87d8a-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.304Z",
+           "raceUpdatedAt": "2026-07-24T20:39:50.177Z"
+          },
+          {
+           "id": "5bb87d89-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 6,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.304Z",
+           "raceUpdatedAt": "2026-07-24T20:38:42.568Z"
+          },
+          {
+           "id": "5bb87d88-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "RET",
+           "raceValue": 12,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.304Z",
+           "raceUpdatedAt": "2026-07-23T22:30:35.846Z"
+          },
+          {
+           "id": "5bb87d87-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "RET",
+           "raceValue": 12,
+           "sortValue": 5,
+           "updatedAt": "2026-07-24T22:31:05.304Z",
+           "raceUpdatedAt": "2026-07-23T20:42:25.631Z"
+          },
+          {
+           "id": "5bb87d86-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "DNS",
+           "raceValue": 12,
+           "sortValue": 6,
+           "updatedAt": "2026-07-24T22:31:05.304Z",
+           "raceUpdatedAt": "2026-07-23T20:41:19.108Z"
+          },
+          {
+           "id": "5bb87d85-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "AOK",
+           "raceValue": 6,
+           "sortValue": 6,
+           "updatedAt": "2026-07-24T22:31:05.304Z",
+           "raceUpdatedAt": "2026-07-22T22:25:22.461Z"
+          },
+          {
+           "id": "5bb87d84-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 7,
+           "sortValue": 7,
+           "updatedAt": "2026-07-24T22:31:05.304Z",
+           "raceUpdatedAt": "2026-07-21T22:37:28.448Z"
+          },
+          {
+           "id": "5bb87d83-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "AOK",
+           "raceValue": 7,
+           "sortValue": 7,
+           "updatedAt": "2026-07-24T22:31:05.304Z",
+           "raceUpdatedAt": "2026-07-21T22:35:49.913Z"
+          },
+          {
+           "id": "5bb87d82-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 12,
+           "updatedAt": "2026-07-24T22:31:05.304Z",
+           "raceUpdatedAt": "2026-07-21T22:32:51.525Z"
+          },
+          {
+           "id": "5bb87d81-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 12,
+           "updatedAt": "2026-07-24T22:31:05.304Z",
+           "raceUpdatedAt": "2026-07-20T21:30:59.482Z"
+          },
+          {
+           "id": "5bb87d80-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 5,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.306Z",
+           "raceUpdatedAt": "2026-07-20T21:27:02.877Z"
+          }
+         ],
+         "raceTotal": 67,
+         "throwOut1": 12,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.305Z",
+         "owner": {
+          "firstName": "Dan",
+          "lastName": "Weatbrook",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "Seattle"
+         }
+        },
+        {
+         "cumulativeId": 2020427,
+         "eventBoatId": 520300,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "174",
+         "design": "J/105",
+         "name": "Mazu",
+         "length": "10.5",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bb6f6eb-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "AOK",
+           "raceValue": 7,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.294Z",
+           "raceUpdatedAt": "2026-07-24T21:21:30.423Z"
+          },
+          {
+           "id": "5bb6f6ea-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 8,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.294Z",
+           "raceUpdatedAt": "2026-07-24T20:39:50.177Z"
+          },
+          {
+           "id": "5bb6f6e9-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 9,
+           "sortValue": 6,
+           "updatedAt": "2026-07-24T22:31:05.294Z",
+           "raceUpdatedAt": "2026-07-24T20:38:42.568Z"
+          },
+          {
+           "id": "5bb6f6e8-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "AOK",
+           "raceValue": 6,
+           "sortValue": 6,
+           "updatedAt": "2026-07-24T22:31:05.294Z",
+           "raceUpdatedAt": "2026-07-23T22:30:35.846Z"
+          },
+          {
+           "id": "5bb6f6e7-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 7,
+           "updatedAt": "2026-07-24T22:31:05.294Z",
+           "raceUpdatedAt": "2026-07-23T20:42:25.631Z"
+          },
+          {
+           "id": "5bb6f6e6-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "AOK",
+           "raceValue": 6,
+           "sortValue": 8,
+           "updatedAt": "2026-07-24T22:31:05.294Z",
+           "raceUpdatedAt": "2026-07-23T20:41:19.108Z"
+          },
+          {
+           "id": "5bb6f6e5-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "OCS",
+           "raceValue": 12,
+           "sortValue": 8,
+           "updatedAt": "2026-07-24T22:31:05.294Z",
+           "raceUpdatedAt": "2026-07-22T22:25:22.461Z"
+          },
+          {
+           "id": "5bb6f6e4-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 8,
+           "sortValue": 8,
+           "updatedAt": "2026-07-24T22:31:05.294Z",
+           "raceUpdatedAt": "2026-07-21T22:37:28.448Z"
+          },
+          {
+           "id": "5bb6f6e3-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "SCP",
+           "raceValue": 8.6,
+           "sortValue": 8.6,
+           "updatedAt": "2026-07-24T22:31:05.294Z",
+           "raceUpdatedAt": "2026-07-21T22:35:49.913Z"
+          },
+          {
+           "id": "5bb6f6e2-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 9,
+           "updatedAt": "2026-07-24T22:31:05.294Z",
+           "raceUpdatedAt": "2026-07-21T22:32:51.525Z"
+          },
+          {
+           "id": "5bb6f6e1-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 9,
+           "sortValue": 9,
+           "updatedAt": "2026-07-24T22:31:05.294Z",
+           "raceUpdatedAt": "2026-07-20T21:30:59.482Z"
+          },
+          {
+           "id": "5bb6f6e0-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 8,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.296Z",
+           "raceUpdatedAt": "2026-07-20T21:27:02.877Z"
+          }
+         ],
+         "raceTotal": 75.6,
+         "throwOut1": 12,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.295Z",
+         "owner": {
+          "firstName": "Nicholas",
+          "lastName": "Wilkerson",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "Seattle"
+         }
+        },
+        {
+         "cumulativeId": 2020428,
+         "eventBoatId": 522785,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "115",
+         "design": "J/105",
+         "name": "Puff",
+         "length": "34.5",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bb9dd1b-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "AOK",
+           "raceValue": 8,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.313Z",
+           "raceUpdatedAt": "2026-07-24T21:21:30.423Z"
+          },
+          {
+           "id": "5bb9dd1a-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 7,
+           "sortValue": 5,
+           "updatedAt": "2026-07-24T22:31:05.313Z",
+           "raceUpdatedAt": "2026-07-24T20:39:50.177Z"
+          },
+          {
+           "id": "5bb9dd19-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 5,
+           "sortValue": 6,
+           "updatedAt": "2026-07-24T22:31:05.313Z",
+           "raceUpdatedAt": "2026-07-24T20:38:42.568Z"
+          },
+          {
+           "id": "5bb9dd18-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "AOK",
+           "raceValue": 7,
+           "sortValue": 7,
+           "updatedAt": "2026-07-24T22:31:05.313Z",
+           "raceUpdatedAt": "2026-07-23T22:30:35.846Z"
+          },
+          {
+           "id": "5bb9dd17-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 7,
+           "updatedAt": "2026-07-24T22:31:05.313Z",
+           "raceUpdatedAt": "2026-07-23T20:42:25.631Z"
+          },
+          {
+           "id": "5bb9dd16-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "AOK",
+           "raceValue": 7,
+           "sortValue": 7,
+           "updatedAt": "2026-07-24T22:31:05.313Z",
+           "raceUpdatedAt": "2026-07-23T20:41:19.108Z"
+          },
+          {
+           "id": "5bb9dd15-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "AOK",
+           "raceValue": 8,
+           "sortValue": 8,
+           "updatedAt": "2026-07-24T22:31:05.313Z",
+           "raceUpdatedAt": "2026-07-22T22:25:22.461Z"
+          },
+          {
+           "id": "5bb9dd14-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 10,
+           "sortValue": 8,
+           "updatedAt": "2026-07-24T22:31:05.313Z",
+           "raceUpdatedAt": "2026-07-21T22:37:28.448Z"
+          },
+          {
+           "id": "5bb9dd13-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "AOK",
+           "raceValue": 6,
+           "sortValue": 9,
+           "updatedAt": "2026-07-24T22:31:05.313Z",
+           "raceUpdatedAt": "2026-07-21T22:35:49.913Z"
+          },
+          {
+           "id": "5bb9dd12-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 10,
+           "sortValue": 10,
+           "updatedAt": "2026-07-24T22:31:05.313Z",
+           "raceUpdatedAt": "2026-07-21T22:32:51.525Z"
+          },
+          {
+           "id": "5bb9dd11-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 10,
+           "sortValue": 10,
+           "updatedAt": "2026-07-24T22:31:05.313Z",
+           "raceUpdatedAt": "2026-07-20T21:30:59.482Z"
+          },
+          {
+           "id": "5bb9dd10-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 9,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.315Z",
+           "raceUpdatedAt": "2026-07-20T21:27:02.877Z"
+          }
+         ],
+         "raceTotal": 81,
+         "throwOut1": 10,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.314Z",
+         "owner": {
+          "firstName": "Steve",
+          "lastName": "Summers",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "Mount Vernon"
+         }
+        },
+        {
+         "cumulativeId": 2020426,
+         "eventBoatId": 526926,
+         "bowNumber": null,
+         "sailPrefix": "Usa",
+         "sailNumber": "32",
+         "design": "J/105",
+         "name": "Counterpoint",
+         "length": "35",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bbcc34b-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "RET",
+           "raceValue": 12,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.332Z",
+           "raceUpdatedAt": "2026-07-24T21:21:30.423Z"
+          },
+          {
+           "id": "5bbcc34a-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 10,
+           "sortValue": 6,
+           "updatedAt": "2026-07-24T22:31:05.332Z",
+           "raceUpdatedAt": "2026-07-24T20:39:50.177Z"
+          },
+          {
+           "id": "5bbcc349-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 7,
+           "sortValue": 7,
+           "updatedAt": "2026-07-24T22:31:05.332Z",
+           "raceUpdatedAt": "2026-07-24T20:38:42.568Z"
+          },
+          {
+           "id": "5bbcc348-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "AOK",
+           "raceValue": 8,
+           "sortValue": 7,
+           "updatedAt": "2026-07-24T22:31:05.332Z",
+           "raceUpdatedAt": "2026-07-23T22:30:35.846Z"
+          },
+          {
+           "id": "5bbcc347-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "AOK",
+           "raceValue": 6,
+           "sortValue": 7,
+           "updatedAt": "2026-07-24T22:31:05.332Z",
+           "raceUpdatedAt": "2026-07-23T20:42:25.631Z"
+          },
+          {
+           "id": "5bbcc346-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "AOK",
+           "raceValue": 9,
+           "sortValue": 8,
+           "updatedAt": "2026-07-24T22:31:05.332Z",
+           "raceUpdatedAt": "2026-07-23T20:41:19.108Z"
+          },
+          {
+           "id": "5bbcc345-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "AOK",
+           "raceValue": 7,
+           "sortValue": 8,
+           "updatedAt": "2026-07-24T22:31:05.332Z",
+           "raceUpdatedAt": "2026-07-22T22:25:22.461Z"
+          },
+          {
+           "id": "5bbcc344-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 8,
+           "updatedAt": "2026-07-24T22:31:05.332Z",
+           "raceUpdatedAt": "2026-07-21T22:37:28.448Z"
+          },
+          {
+           "id": "5bbcc343-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "AOK",
+           "raceValue": 9,
+           "sortValue": 9,
+           "updatedAt": "2026-07-24T22:31:05.332Z",
+           "raceUpdatedAt": "2026-07-21T22:35:49.913Z"
+          },
+          {
+           "id": "5bbcc342-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 8,
+           "sortValue": 9,
+           "updatedAt": "2026-07-24T22:31:05.332Z",
+           "raceUpdatedAt": "2026-07-21T22:32:51.525Z"
+          },
+          {
+           "id": "5bbcc341-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 8,
+           "sortValue": 10,
+           "updatedAt": "2026-07-24T22:31:05.332Z",
+           "raceUpdatedAt": "2026-07-20T21:30:59.482Z"
+          },
+          {
+           "id": "5bbcc340-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 7,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.336Z",
+           "raceUpdatedAt": "2026-07-20T21:27:02.877Z"
+          }
+         ],
+         "raceTotal": 83,
+         "throwOut1": 12,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.336Z",
+         "owner": {
+          "firstName": "Scott",
+          "lastName": "Humphreys",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "Kenmore"
+         }
+        },
+        {
+         "cumulativeId": 2020425,
+         "eventBoatId": 527037,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "519",
+         "design": "J/105",
+         "name": "Asterix",
+         "length": "34.5",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bbdd4bb-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "AOK",
+           "raceValue": 9,
+           "sortValue": 5,
+           "updatedAt": "2026-07-24T22:31:05.339Z",
+           "raceUpdatedAt": "2026-07-24T21:21:30.423Z"
+          },
+          {
+           "id": "5bbdd4ba-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 9,
+           "sortValue": 7,
+           "updatedAt": "2026-07-24T22:31:05.339Z",
+           "raceUpdatedAt": "2026-07-24T20:39:50.177Z"
+          },
+          {
+           "id": "5bbdd4b9-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 10,
+           "sortValue": 7,
+           "updatedAt": "2026-07-24T22:31:05.339Z",
+           "raceUpdatedAt": "2026-07-24T20:38:42.568Z"
+          },
+          {
+           "id": "5bbdd4b8-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "RET",
+           "raceValue": 12,
+           "sortValue": 7,
+           "updatedAt": "2026-07-24T22:31:05.339Z",
+           "raceUpdatedAt": "2026-07-23T22:30:35.846Z"
+          },
+          {
+           "id": "5bbdd4b7-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "AOK",
+           "raceValue": 7,
+           "sortValue": 8,
+           "updatedAt": "2026-07-24T22:31:05.339Z",
+           "raceUpdatedAt": "2026-07-23T20:42:25.631Z"
+          },
+          {
+           "id": "5bbdd4b6-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "AOK",
+           "raceValue": 8,
+           "sortValue": 9,
+           "updatedAt": "2026-07-24T22:31:05.339Z",
+           "raceUpdatedAt": "2026-07-23T20:41:19.108Z"
+          },
+          {
+           "id": "5bbdd4b5-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "AOK",
+           "raceValue": 5,
+           "sortValue": 9,
+           "updatedAt": "2026-07-24T22:31:05.339Z",
+           "raceUpdatedAt": "2026-07-22T22:25:22.461Z"
+          },
+          {
+           "id": "5bbdd4b4-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 9,
+           "sortValue": 9,
+           "updatedAt": "2026-07-24T22:31:05.339Z",
+           "raceUpdatedAt": "2026-07-21T22:37:28.448Z"
+          },
+          {
+           "id": "5bbdd4b3-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "AOK",
+           "raceValue": 10,
+           "sortValue": 10,
+           "updatedAt": "2026-07-24T22:31:05.339Z",
+           "raceUpdatedAt": "2026-07-21T22:35:49.913Z"
+          },
+          {
+           "id": "5bbdd4b2-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 7,
+           "sortValue": 10,
+           "updatedAt": "2026-07-24T22:31:05.339Z",
+           "raceUpdatedAt": "2026-07-21T22:32:51.525Z"
+          },
+          {
+           "id": "5bbdd4b1-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 7,
+           "sortValue": 10,
+           "updatedAt": "2026-07-24T22:31:05.339Z",
+           "raceUpdatedAt": "2026-07-20T21:30:59.482Z"
+          },
+          {
+           "id": "5bbdd4b0-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 10,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.342Z",
+           "raceUpdatedAt": "2026-07-20T21:27:02.877Z"
+          }
+         ],
+         "raceTotal": 91,
+         "throwOut1": 12,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.341Z",
+         "owner": {
+          "firstName": "Jean Pierre",
+          "lastName": "Boespflug",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "Seattle"
+         }
+        },
+        {
+         "cumulativeId": 2020441,
+         "eventBoatId": 519149,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "212",
+         "design": "J/105",
+         "name": "insubordination",
+         "length": "34.5",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bb3e9ab-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "DNS",
+           "raceValue": 12,
+           "sortValue": 12,
+           "updatedAt": "2026-07-24T22:31:05.274Z",
+           "raceUpdatedAt": "2026-07-24T21:21:30.423Z"
+          },
+          {
+           "id": "5bb3e9aa-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "DNS",
+           "raceValue": 12,
+           "sortValue": 12,
+           "updatedAt": "2026-07-24T22:31:05.274Z",
+           "raceUpdatedAt": "2026-07-24T20:39:50.177Z"
+          },
+          {
+           "id": "5bb3e9a9-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "DNS",
+           "raceValue": 12,
+           "sortValue": 12,
+           "updatedAt": "2026-07-24T22:31:05.274Z",
+           "raceUpdatedAt": "2026-07-24T20:38:42.568Z"
+          },
+          {
+           "id": "5bb3e9a8-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "DNS",
+           "raceValue": 12,
+           "sortValue": 12,
+           "updatedAt": "2026-07-24T22:31:05.274Z",
+           "raceUpdatedAt": "2026-07-23T22:30:35.846Z"
+          },
+          {
+           "id": "5bb3e9a7-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "DNS",
+           "raceValue": 12,
+           "sortValue": 12,
+           "updatedAt": "2026-07-24T22:31:05.274Z",
+           "raceUpdatedAt": "2026-07-23T20:42:25.631Z"
+          },
+          {
+           "id": "5bb3e9a6-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "DNS",
+           "raceValue": 12,
+           "sortValue": 12,
+           "updatedAt": "2026-07-24T22:31:05.274Z",
+           "raceUpdatedAt": "2026-07-23T20:41:19.108Z"
+          },
+          {
+           "id": "5bb3e9a5-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "DNS",
+           "raceValue": 12,
+           "sortValue": 12,
+           "updatedAt": "2026-07-24T22:31:05.274Z",
+           "raceUpdatedAt": "2026-07-22T22:25:22.461Z"
+          },
+          {
+           "id": "5bb3e9a4-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "DNS",
+           "raceValue": 12,
+           "sortValue": 12,
+           "updatedAt": "2026-07-24T22:31:05.274Z",
+           "raceUpdatedAt": "2026-07-21T22:37:28.448Z"
+          },
+          {
+           "id": "5bb3e9a3-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "DNS",
+           "raceValue": 12,
+           "sortValue": 12,
+           "updatedAt": "2026-07-24T22:31:05.274Z",
+           "raceUpdatedAt": "2026-07-21T22:35:49.913Z"
+          },
+          {
+           "id": "5bb3e9a2-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "DNS",
+           "raceValue": 12,
+           "sortValue": 12,
+           "updatedAt": "2026-07-24T22:31:05.274Z",
+           "raceUpdatedAt": "2026-07-21T22:32:51.525Z"
+          },
+          {
+           "id": "5bb3e9a1-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "DNS",
+           "raceValue": 12,
+           "sortValue": 12,
+           "updatedAt": "2026-07-24T22:31:05.274Z",
+           "raceUpdatedAt": "2026-07-20T21:30:59.482Z"
+          },
+          {
+           "id": "5bb3e9a0-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "DNS",
+           "raceValue": 12,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.277Z",
+           "raceUpdatedAt": "2026-07-20T21:27:02.877Z"
+          }
+         ],
+         "raceTotal": 132,
+         "throwOut1": 12,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.275Z",
+         "owner": {
+          "firstName": "Lenny",
+          "lastName": "Rezabek",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "Seattle"
+         }
+        }
+       ]
+      },
+      {
+       "class": 4,
+       "className": "J70",
+       "boatsInClass": 4,
+       "boats": [
+        {
+         "cumulativeId": 2020416,
+         "eventBoatId": 519889,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "1112",
+         "design": "J/70",
+         "name": "Smartless",
+         "length": "23",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bb5975c-87af-11f1-b837-29177b025045",
+           "raceNumber": 13,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.285Z",
+           "raceUpdatedAt": "2026-07-24T20:37:09.464Z"
+          },
+          {
+           "id": "5bb5975b-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.285Z",
+           "raceUpdatedAt": "2026-07-24T20:37:00.666Z"
+          },
+          {
+           "id": "5bb5975a-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.285Z",
+           "raceUpdatedAt": "2026-07-24T20:36:46.419Z"
+          },
+          {
+           "id": "5bb59759-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.285Z",
+           "raceUpdatedAt": "2026-07-23T22:30:53.122Z"
+          },
+          {
+           "id": "5bb59758-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.285Z",
+           "raceUpdatedAt": "2026-07-23T20:43:13.057Z"
+          },
+          {
+           "id": "5bb59757-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.285Z",
+           "raceUpdatedAt": "2026-07-23T20:42:37.780Z"
+          },
+          {
+           "id": "5bb59756-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.285Z",
+           "raceUpdatedAt": "2026-07-23T20:41:35.177Z"
+          },
+          {
+           "id": "5bb59755-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.285Z",
+           "raceUpdatedAt": "2026-07-22T22:25:36.408Z"
+          },
+          {
+           "id": "5bb59754-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.285Z",
+           "raceUpdatedAt": "2026-07-21T22:37:51.993Z"
+          },
+          {
+           "id": "5bb59753-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.285Z",
+           "raceUpdatedAt": "2026-07-21T22:36:12.454Z"
+          },
+          {
+           "id": "5bb59752-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.285Z",
+           "raceUpdatedAt": "2026-07-21T22:33:20.236Z"
+          },
+          {
+           "id": "5bb59751-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.285Z",
+           "raceUpdatedAt": "2026-07-20T21:31:02.235Z"
+          },
+          {
+           "id": "5bb59750-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.287Z",
+           "raceUpdatedAt": "2026-07-20T21:28:40.033Z"
+          }
+         ],
+         "raceTotal": 17,
+         "throwOut1": 3,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.287Z",
+         "owner": {
+          "firstName": "Julian",
+          "lastName": "Croxall",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "Kirkland"
+         }
+        },
+        {
+         "cumulativeId": 2020417,
+         "eventBoatId": 526565,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "193",
+         "design": "J/70",
+         "name": "Aha!",
+         "length": "22.75",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bbbfffc-87af-11f1-b837-29177b025045",
+           "raceNumber": 13,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.327Z",
+           "raceUpdatedAt": "2026-07-24T20:37:09.464Z"
+          },
+          {
+           "id": "5bbbfffb-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.327Z",
+           "raceUpdatedAt": "2026-07-24T20:37:00.666Z"
+          },
+          {
+           "id": "5bbbfffa-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.327Z",
+           "raceUpdatedAt": "2026-07-24T20:36:46.419Z"
+          },
+          {
+           "id": "5bbbfff9-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.327Z",
+           "raceUpdatedAt": "2026-07-23T22:30:53.122Z"
+          },
+          {
+           "id": "5bbbfff8-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.327Z",
+           "raceUpdatedAt": "2026-07-23T20:43:13.057Z"
+          },
+          {
+           "id": "5bbbfff7-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.327Z",
+           "raceUpdatedAt": "2026-07-23T20:42:37.780Z"
+          },
+          {
+           "id": "5bbbfff6-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.327Z",
+           "raceUpdatedAt": "2026-07-23T20:41:35.177Z"
+          },
+          {
+           "id": "5bbbfff5-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.327Z",
+           "raceUpdatedAt": "2026-07-22T22:25:36.408Z"
+          },
+          {
+           "id": "5bbbfff4-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.327Z",
+           "raceUpdatedAt": "2026-07-21T22:37:51.993Z"
+          },
+          {
+           "id": "5bbbfff3-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.327Z",
+           "raceUpdatedAt": "2026-07-21T22:36:12.454Z"
+          },
+          {
+           "id": "5bbbfff2-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.327Z",
+           "raceUpdatedAt": "2026-07-21T22:33:20.236Z"
+          },
+          {
+           "id": "5bbbfff1-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.327Z",
+           "raceUpdatedAt": "2026-07-20T21:31:02.235Z"
+          },
+          {
+           "id": "5bbbfff0-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.330Z",
+           "raceUpdatedAt": "2026-07-20T21:28:40.033Z"
+          }
+         ],
+         "raceTotal": 27,
+         "throwOut1": 4,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.329Z",
+         "owner": {
+          "firstName": "Stephanie",
+          "lastName": "Arnold",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "Ferndale"
+         }
+        },
+        {
+         "cumulativeId": 2020415,
+         "eventBoatId": 520510,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "1362",
+         "design": "J/70",
+         "name": "Jabberwocky",
+         "length": "22.75",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bb7ba3c-87af-11f1-b837-29177b025045",
+           "raceNumber": 13,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.299Z",
+           "raceUpdatedAt": "2026-07-24T20:37:09.464Z"
+          },
+          {
+           "id": "5bb7ba3b-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.299Z",
+           "raceUpdatedAt": "2026-07-24T20:37:00.666Z"
+          },
+          {
+           "id": "5bb7ba3a-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 1,
+           "updatedAt": "2026-07-24T22:31:05.299Z",
+           "raceUpdatedAt": "2026-07-24T20:36:46.419Z"
+          },
+          {
+           "id": "5bb7ba39-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.299Z",
+           "raceUpdatedAt": "2026-07-23T22:30:53.122Z"
+          },
+          {
+           "id": "5bb7ba38-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.299Z",
+           "raceUpdatedAt": "2026-07-23T20:43:13.057Z"
+          },
+          {
+           "id": "5bb7ba37-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.299Z",
+           "raceUpdatedAt": "2026-07-23T20:42:37.780Z"
+          },
+          {
+           "id": "5bb7ba36-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.299Z",
+           "raceUpdatedAt": "2026-07-23T20:41:35.177Z"
+          },
+          {
+           "id": "5bb7ba35-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.299Z",
+           "raceUpdatedAt": "2026-07-22T22:25:36.408Z"
+          },
+          {
+           "id": "5bb7ba34-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.299Z",
+           "raceUpdatedAt": "2026-07-21T22:37:51.993Z"
+          },
+          {
+           "id": "5bb7ba33-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.299Z",
+           "raceUpdatedAt": "2026-07-21T22:36:12.454Z"
+          },
+          {
+           "id": "5bb7ba32-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.299Z",
+           "raceUpdatedAt": "2026-07-21T22:33:20.236Z"
+          },
+          {
+           "id": "5bb7ba31-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 1,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.299Z",
+           "raceUpdatedAt": "2026-07-20T21:31:02.235Z"
+          },
+          {
+           "id": "5bb7ba30-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.301Z",
+           "raceUpdatedAt": "2026-07-20T21:28:40.033Z"
+          }
+         ],
+         "raceTotal": 28,
+         "throwOut1": 4,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.300Z",
+         "owner": {
+          "firstName": "Paul",
+          "lastName": "Garner",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "Seattle"
+         }
+        },
+        {
+         "cumulativeId": 2020418,
+         "eventBoatId": 523838,
+         "bowNumber": null,
+         "sailPrefix": "USA",
+         "sailNumber": "26",
+         "design": "J/70",
+         "name": "La Chancla",
+         "length": "22.75",
+         "isRatingApproved": true,
+         "isCorinthianTeam": false,
+         "rating": null,
+         "secondaryRating": null,
+         "ratingUpdatedAt": null,
+         "records": [
+          {
+           "id": "5bbaa069-87af-11f1-b837-29177b025045",
+           "raceNumber": 13,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 2,
+           "updatedAt": "2026-07-24T22:31:05.317Z",
+           "raceUpdatedAt": "2026-07-24T20:37:09.464Z"
+          },
+          {
+           "id": "5bbaa068-87af-11f1-b837-29177b025045",
+           "raceNumber": 12,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.317Z",
+           "raceUpdatedAt": "2026-07-24T20:37:00.666Z"
+          },
+          {
+           "id": "5bbaa067-87af-11f1-b837-29177b025045",
+           "raceNumber": 11,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.317Z",
+           "raceUpdatedAt": "2026-07-24T20:36:46.419Z"
+          },
+          {
+           "id": "5bbaa066-87af-11f1-b837-29177b025045",
+           "raceNumber": 10,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 3,
+           "updatedAt": "2026-07-24T22:31:05.317Z",
+           "raceUpdatedAt": "2026-07-23T22:30:53.122Z"
+          },
+          {
+           "id": "5bbaa065-87af-11f1-b837-29177b025045",
+           "raceNumber": 9,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.317Z",
+           "raceUpdatedAt": "2026-07-23T20:43:13.057Z"
+          },
+          {
+           "id": "5bbaa064-87af-11f1-b837-29177b025045",
+           "raceNumber": 8,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.317Z",
+           "raceUpdatedAt": "2026-07-23T20:42:37.780Z"
+          },
+          {
+           "id": "5bbaa063-87af-11f1-b837-29177b025045",
+           "raceNumber": 7,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.317Z",
+           "raceUpdatedAt": "2026-07-23T20:41:35.177Z"
+          },
+          {
+           "id": "5bbaa062-87af-11f1-b837-29177b025045",
+           "raceNumber": 6,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.317Z",
+           "raceUpdatedAt": "2026-07-22T22:25:36.408Z"
+          },
+          {
+           "id": "5bbaa061-87af-11f1-b837-29177b025045",
+           "raceNumber": 5,
+           "finishStatus": "AOK",
+           "raceValue": 2,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.317Z",
+           "raceUpdatedAt": "2026-07-21T22:37:51.993Z"
+          },
+          {
+           "id": "5bbaa060-87af-11f1-b837-29177b025045",
+           "raceNumber": 4,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.317Z",
+           "raceUpdatedAt": "2026-07-21T22:36:12.454Z"
+          },
+          {
+           "id": "5bba7952-87af-11f1-b837-29177b025045",
+           "raceNumber": 3,
+           "finishStatus": "AOK",
+           "raceValue": 3,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.317Z",
+           "raceUpdatedAt": "2026-07-21T22:33:20.236Z"
+          },
+          {
+           "id": "5bba7951-87af-11f1-b837-29177b025045",
+           "raceNumber": 2,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 4,
+           "updatedAt": "2026-07-24T22:31:05.317Z",
+           "raceUpdatedAt": "2026-07-20T21:31:02.235Z"
+          },
+          {
+           "id": "5bba7950-87af-11f1-b837-29177b025045",
+           "raceNumber": 1,
+           "finishStatus": "AOK",
+           "raceValue": 4,
+           "sortValue": 0,
+           "updatedAt": "2026-07-24T22:31:05.320Z",
+           "raceUpdatedAt": "2026-07-20T21:28:40.033Z"
+          }
+         ],
+         "raceTotal": 43,
+         "throwOut1": 4,
+         "throwOut2": null,
+         "throwOut3": null,
+         "throwOut4": null,
+         "throwOut5": null,
+         "throwOut6": null,
+         "throwOut7": null,
+         "cumulativeUpdatedAt": "2026-07-24T22:31:05.319Z",
+         "owner": {
+          "firstName": "John",
+          "lastName": "Stocklass",
+          "country": "United States of America",
+          "state": "WA",
+          "city": "Ferndale"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
