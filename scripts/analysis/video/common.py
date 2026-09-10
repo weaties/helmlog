@@ -195,6 +195,7 @@ class Race:
     vakaros_gun: datetime | None
     roundings: tuple[datetime, ...] = ()
     tacks: tuple[datetime, ...] = ()
+    gybes: tuple[datetime, ...] = ()
     result_place: int | None = None
     fleet_size: int | None = None
     tags: tuple[str, ...] = ()
@@ -277,6 +278,7 @@ def load_race(conn: sqlite3.Connection, race_id: int) -> Race:
         vakaros_gun=_vakaros_gun(conn, row),
         roundings=tuple(parse_utc(m["ts"]) for m in mans if m["type"] == "rounding"),
         tacks=tuple(parse_utc(m["ts"]) for m in mans if m["type"] == "tack"),
+        gybes=tuple(parse_utc(m["ts"]) for m in mans if m["type"] == "gybe"),
         result_place=place,
         fleet_size=fleet,
         tags=tuple(t["name"] for t in tags),

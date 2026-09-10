@@ -30,6 +30,23 @@ def test_mark_roundings_drop_prestart_and_early_turns() -> None:
     assert marks == [W1, L1]
 
 
+def test_infer_leeward_mark_from_gybe_then_tack() -> None:
+    # Race 255 shape: W1 detected, the leeward turn came out as gybe + tack.
+    w1 = GUN + timedelta(minutes=7)
+    gybes = (
+        w1 + timedelta(minutes=1),
+        w1 + timedelta(minutes=11),
+        w1 + timedelta(minutes=11, seconds=20),
+    )
+    tacks = (GUN + timedelta(minutes=2), w1 + timedelta(minutes=13))
+    assert instants.infer_leeward_mark([w1], gybes, tacks) == gybes[-1]
+    # Even counts, no later tack, no gybes on the run, or too soon → nothing inferred.
+    assert instants.infer_leeward_mark([w1, w1 + timedelta(minutes=12)], gybes, tacks) is None
+    assert instants.infer_leeward_mark([w1], gybes, (GUN + timedelta(minutes=2),)) is None
+    assert instants.infer_leeward_mark([w1], (), tacks) is None
+    assert instants.infer_leeward_mark([w1], (w1 + timedelta(minutes=1),), tacks) is None
+
+
 def test_mark_names_alternate_from_windward() -> None:
     assert instants.mark_names(4) == ["W1", "L1", "W2", "L2"]
     assert instants.mark_names(3) == ["W1", "L1", "W2"]
@@ -102,7 +119,7 @@ def test_compute_for_race_uses_ledger_sync_and_flags_odd_roundings(
         (GUN.isoformat(), GUN.isoformat()),
     )
     report = instants.compute_for_race(ledger, race, tier=1)
-    assert report.marks == [W1]
+    assert report.marks == [W1]  # the lone gybe at 01:36 is too soon after W1 to be a mark
     assert any("odd" in w for w in report.warnings)
     gun_row = ledger.execute(
         "SELECT video_t FROM instants WHERE race_id = 254 AND name = 'gun'"

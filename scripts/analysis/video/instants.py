@@ -69,6 +69,30 @@ def mark_roundings(gun: datetime, raw: list[datetime] | tuple[datetime, ...]) ->
     return marks
 
 
+def infer_leeward_mark(
+    marks: list[datetime], gybes: tuple[datetime, ...], tacks: tuple[datetime, ...]
+) -> datetime | None:
+    """A leeward rounding the detector split into a gybe + tack instead of a rounding.
+
+    After a trailing windward mark, the run's last gybe before the first tack
+    of the next beat is where the boat turned up around the leeward mark.
+    """
+    if not marks or len(marks) % 2 == 0:
+        return None
+    last_w = marks[-1]
+    later_tacks = [t for t in tacks if t > last_w]
+    if not later_tacks:
+        return None
+    first_tack = later_tacks[0]
+    run_gybes = [g for g in gybes if last_w < g < first_tack]
+    if not run_gybes:
+        return None
+    candidate = run_gybes[-1]
+    if (candidate - last_w).total_seconds() < MIN_MARK_SPACING_S:
+        return None
+    return candidate
+
+
 def mark_names(n: int) -> list[str]:
     return [f"{'W' if i % 2 == 0 else 'L'}{i // 2 + 1}" for i in range(n)]
 
@@ -112,10 +136,14 @@ def compute_for_race(ledger: sqlite3.Connection, race: common.Race, tier: int = 
     if video is None:
         raise NoGunError(f"race {race.id}: no linked video")
     marks = mark_roundings(gun, race.roundings)
+    warnings: list[str] = []
+    inferred = infer_leeward_mark(marks, race.gybes, race.tacks)
+    if inferred is not None:
+        marks.append(inferred)
+        warnings.append(f"L{len(marks) // 2} inferred from the last gybe before the next beat")
     finish = race.end_utc or (
         marks[-1] + timedelta(minutes=10) if marks else gun + timedelta(minutes=40)
     )
-    warnings: list[str] = []
     if len(marks) == 0:
         warnings.append("no mark roundings after the gun")
     elif len(marks) % 2 == 1:
