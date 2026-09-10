@@ -14,6 +14,7 @@ from helmlog.results.styc import (
     _discover_race_numbers,
     _extract_race_date,
     _extract_status,
+    _header_map,
     _parse_race_page,
     _parse_series,
     _time_to_seconds,
@@ -251,3 +252,58 @@ async def test_styc_reimport_idempotent(storage: Storage) -> None:
     await import_results(storage, result)
     after = await _counts()
     assert before == after, f"Row counts changed: {before} vs {after}"
+
+
+# ---------------------------------------------------------------------------
+# Multi-day distance races (Race to the Straits) — #831
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def rtts_race1_html() -> str:
+    return (_FIXTURES / "rtts_race1.htm").read_text()
+
+
+def test_extract_race_date_multi_day_ampersand() -> None:
+    html = "<p class=racedate>May 2 &amp; 3, 2026</p>"
+    assert _extract_race_date(html) == "2026-05-02"
+
+
+def test_extract_race_date_multi_day_dash() -> None:
+    assert _extract_race_date("<p class=racedate>May 2-3, 2026</p>") == "2026-05-02"
+    assert _extract_race_date("<p class=racedate>May 2 - 3, 2026</p>") == "2026-05-02"
+
+
+def test_header_map_day_prefixed_columns() -> None:
+    col = _header_map(
+        [
+            "boat name",
+            "sailno",
+            "saturday start",
+            "saturday finish",
+            "saturday corrected time",
+            "place",
+        ]
+    )
+    assert col["start"] == 2
+    assert col["finish"] == 3
+    assert col["corrected"] == 4
+    assert col["place"] == 5
+
+
+def test_header_map_bare_column_wins_over_day_prefixed() -> None:
+    col = _header_map(["sailno", "saturday finish", "finish"])
+    assert col["finish"] == 2
+
+
+def test_parse_rtts_race_page(rtts_race1_html: str) -> None:
+    races = _parse_race_page(rtts_race1_html, "RaceToTheStraits_2026", 1)
+    assert len(races) == 13
+    for r in races:
+        assert r.date == "2026-05-02", f"Missing/incorrect date on {r.source_id}"
+    corvo = [f for r in races for f in r.finishes if f.sail_number == "475"]
+    assert len(corvo) == 1
+    assert corvo[0].place == 5
+    assert corvo[0].finish_time == "15:56:05"
+    assert corvo[0].status_code is None
+    assert corvo[0].corrected_seconds == 5 * 3600 + 50 * 60 + 54
