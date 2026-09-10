@@ -205,6 +205,66 @@ def aggregates_markdown(rows: list[dict[str, Any]], split: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def spot_checks(ledger: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Model vs human reads of the same instant (reader 'file' = a person's read)."""
+    rows = ledger.execute(
+        "SELECT m.race_id, m.instant,"
+        " json_extract(m.payload_json, '$.race.ahead') AS model_ahead,"
+        " json_extract(h.payload_json, '$.race.ahead') AS human_ahead,"
+        " json_extract(m.payload_json, '$.counts.forward') AS model_fwd,"
+        " json_extract(h.payload_json, '$.counts.forward') AS human_fwd"
+        " FROM observations m JOIN observations h"
+        "   ON h.race_id = m.race_id AND h.instant = m.instant AND h.reader = 'file'"
+        "   AND h.superseded_by IS NULL"
+        " WHERE m.reader = 'claude-api' AND m.superseded_by IS NULL"
+        " ORDER BY m.race_id, m.video_t"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def spot_check_markdown(checks: list[dict[str, Any]]) -> str:
+    if not checks:
+        return "## Spot checks\n\nNo human reads recorded yet.\n"
+    lines = [
+        "## Spot checks (model vs human)\n",
+        "| race | instant | ahead: model | human | Δ | forward: model | human | Δ |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    d_ahead: list[int] = []
+    d_fwd: list[int] = []
+    for c in checks:
+        da = (
+            None
+            if c["model_ahead"] is None or c["human_ahead"] is None
+            else int(c["model_ahead"]) - int(c["human_ahead"])
+        )
+        df = (
+            None
+            if c["model_fwd"] is None or c["human_fwd"] is None
+            else int(c["model_fwd"]) - int(c["human_fwd"])
+        )
+        if da is not None:
+            d_ahead.append(da)
+        if df is not None:
+            d_fwd.append(df)
+        lines.append(
+            f"| {c['race_id']} | {c['instant']} | {_fmt(c['model_ahead'])} | {_fmt(c['human_ahead'])} | "
+            f"{'–' if da is None else f'{da:+d}'} | {_fmt(c['model_fwd'])} | {_fmt(c['human_fwd'])} | "
+            f"{'–' if df is None else f'{df:+d}'} |"
+        )
+    within1 = sum(1 for d in d_ahead if abs(d) <= 1)
+    lines.append(
+        f"\n{len(checks)} instants checked. Race-position (ahead): within ±1 boat on {within1} of "
+        f"{len(d_ahead)}, median Δ {statistics.median(d_ahead):+.0f}, mean Δ {statistics.mean(d_ahead):+.1f}. "
+        + (
+            f"Geometric (forward): median Δ {statistics.median(d_fwd):+.0f}, mean Δ {statistics.mean(d_fwd):+.1f}."
+            if d_fwd
+            else ""
+        )
+    )
+    return "\n".join(lines) + "\n"
+
+
 def charts(rows: list[dict[str, Any]], out: Path, split: str) -> list[Path]:
     import matplotlib
 
@@ -325,7 +385,9 @@ def main(argv: list[str] | None = None) -> int:
     facts_mod.write_csv(
         [{k: v for k, v in r.items() if k != "_facts"} for r in rows], str(out / "season.csv")
     )
-    (out / "aggregates.md").write_text(aggregates_markdown(rows, args.split))
+    (out / "aggregates.md").write_text(
+        aggregates_markdown(rows, args.split) + "\n" + spot_check_markdown(spot_checks(ledger))
+    )
     for p in charts(rows, out, args.split):
         print(f"wrote {p}")
     print(f"wrote {out / 'aggregates.md'} ({len(rows)} races)")

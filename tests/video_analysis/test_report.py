@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from scripts.analysis.video import report
+from scripts.analysis.video import observe, report
 
 if TYPE_CHECKING:
+    import sqlite3
     from pathlib import Path
 
 
@@ -100,3 +101,26 @@ def test_charts_write_pngs(tmp_path: Path) -> None:
     written = report.charts(ROWS, tmp_path, "2026-07-13")
     assert [p.name for p in written] == ["ladder.png", "leg_deltas.png", "start_vs_finish.png"]
     assert all(p.stat().st_size > 1000 for p in written)
+
+
+def test_spot_checks_pair_model_and_human(ledger: sqlite3.Connection, tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    def pkt(name: str) -> observe.Packet:
+        return observe.Packet(
+            254, name, "start", datetime(2026, 9, 10, 1, 25, 1, tzinfo=UTC), "v", 468.0,
+            None, None, None,  # type: ignore[arg-type]
+        )  # fmt: skip
+
+    def pay(ahead: int, fwd: int) -> dict[str, Any]:
+        return {"counts": {"forward": fwd}, "race": {"ahead": ahead}, "confidence": 0.5}
+
+    observe.store_observation(ledger, pkt("gun"), pay(2, 5), "claude-api", "m")
+    observe.store_observation(ledger, pkt("gun"), pay(4, 5), "file", "h")
+    observe.store_observation(ledger, pkt("W1"), pay(1, 5), "claude-api", "m")  # no human read
+    checks = report.spot_checks(ledger)
+    assert len(checks) == 1 and checks[0]["instant"] == "gun"
+    md = report.spot_check_markdown(checks)
+    assert "| 254 | gun | 2 | 4 | -2 | 5 | 5 | +0 |" in md
+    assert "within ±1 boat on 0 of 1" in md
+    assert "No human reads" in report.spot_check_markdown([])
