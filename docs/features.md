@@ -293,6 +293,10 @@ When the boat is in a co-op (see [`guide-federation.md`](guide-federation.md)):
 - **Auto-association by channel** — `helmlog sync-videos
   --channel-id …` matches recent uploads on a channel against
   recent sessions by timestamp.
+- **Fleet analysis from video (planned, #839)** — read the 360° footage
+  at the gun and each rounding for boats ahead, boats to weather, line
+  position, and place per leg; design in
+  [video-analysis.md](video-analysis.md).
 
 ### Themes and timezone
 
