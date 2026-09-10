@@ -15,7 +15,7 @@ import html
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -26,6 +26,7 @@ from helmlog.results.base import (
     Regatta,
     RegattaResults,
     SeriesStanding,
+    resolve_venue_tz,
 )
 
 if TYPE_CHECKING:
@@ -117,12 +118,13 @@ class ClubspotProvider:
                     f"Use the Clubspot objectId (e.g. 7q1o9ikhPH), not 'J/105'."
                 )
 
+        venue_tz = resolve_venue_tz(regatta.venue_tz)
         all_races: dict[str, RaceData] = {}
         standings_by_key: dict[tuple[str, str], SeriesStanding] = {}
 
         for class_id in class_ids:
             payload = await self._fetch_class(regatta.source_id, class_id)
-            races, standings = _parse_class_payload(payload, regatta.source_id)
+            races, standings = _parse_class_payload(payload, regatta.source_id, venue_tz=venue_tz)
             for r in races:
                 key = f"{r.source_id}:{r.class_name}"
                 all_races[key] = r
@@ -202,8 +204,14 @@ class ClubspotProvider:
 def _parse_class_payload(
     payload: dict[str, Any],
     regatta_id: str,
+    *,
+    venue_tz: tzinfo = UTC,
 ) -> tuple[list[RaceData], list[SeriesStanding]]:
-    """Parse one Clubspot per-class JSON response into normalized types."""
+    """Parse one Clubspot per-class JSON response into normalized types.
+
+    ``venue_tz`` is the regatta's local timezone; race dates are emitted
+    in it (#832).
+    """
     registrations = payload.get("scoresByRegistration", [])
     if not registrations:
         return [], []
@@ -283,8 +291,8 @@ def _parse_class_payload(
                 # the series, so start_time often carries the *first*
                 # race's date.  finish_time is per-boat and reflects the
                 # actual race day.
-                finish_date = _extract_date(finish_time_str)
-                race_date = finish_date or _extract_date(start_time_str)
+                finish_date = _extract_date(finish_time_str, venue_tz)
+                race_date = finish_date or _extract_date(start_time_str, venue_tz)
                 race_meta[race_num] = {
                     "start_time": start_time_str,
                     "date": race_date,
@@ -295,7 +303,7 @@ def _parse_class_payload(
             elif finish_time_str and not race_meta[race_num].get("_has_finish_date"):
                 # First boat was DNC (no finish_time) — upgrade the date
                 # now that we have a boat with a real finish.
-                better = _extract_date(finish_time_str)
+                better = _extract_date(finish_time_str, venue_tz)
                 if better:
                     race_meta[race_num]["date"] = better
                     race_meta[race_num]["_has_finish_date"] = True
@@ -365,13 +373,19 @@ def _class_name_from_payload(payload: dict[str, Any]) -> str | None:
     return None
 
 
-def _extract_date(iso_str: str | None) -> str:
-    """Extract YYYY-MM-DD from an ISO timestamp, or return empty string."""
+def _extract_date(iso_str: str | None, tz: tzinfo = UTC) -> str:
+    """Extract the YYYY-MM-DD of an ISO timestamp in *tz*, or ``""``.
+
+    Clubspot timestamps are UTC, so a Wednesday 18:15 PDT start is
+    published as Thursday 01:15Z. The importer keys races on the
+    venue-local date (that's what the auto-linker compares session start
+    times against), so callers pass the regatta's venue tz (#832).
+    """
     if not iso_str:
         return ""
     try:
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-        return dt.astimezone(UTC).strftime("%Y-%m-%d")
+        return dt.astimezone(tz).strftime("%Y-%m-%d")
     except (ValueError, TypeError):
         return ""
 

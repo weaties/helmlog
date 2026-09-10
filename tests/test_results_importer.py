@@ -9,12 +9,11 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
-from helmlog.results.base import Regatta
+from helmlog.results.base import BoatFinish, RaceData, Regatta, RegattaResults
 from helmlog.results.clubspot import ClubspotProvider
 from helmlog.results.importer import import_results
 
 if TYPE_CHECKING:
-    from helmlog.results.base import RegattaResults
     from helmlog.storage import Storage
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "results" / "clubspot"
@@ -933,3 +932,120 @@ async def test_filter_own_sail_may_carry_prefix(storage: Storage) -> None:
 
     counts = await import_results(storage, results, own_sail="USA 475")
     assert counts["races_upserted"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Clubspot UTC→venue-local date shift and DNC guard — #832
+# ---------------------------------------------------------------------------
+
+
+async def _insert_live_session(storage: Storage, name: str, start_utc: str) -> int:
+    from datetime import datetime
+
+    db = storage._conn()
+    dt = datetime.fromisoformat(start_utc)
+    await db.execute(
+        "INSERT INTO races (name, event, race_num, date, start_utc, session_type)"
+        " VALUES (?, ?, ?, ?, ?, 'race')",
+        (name, "Local", 1, dt.strftime("%Y-%m-%d"), dt.isoformat()),
+    )
+    cur = await db.execute("SELECT last_insert_rowid()")
+    (sid,) = await cur.fetchone()  # type: ignore[misc]
+    await db.commit()
+    return int(sid)
+
+
+def _one_race(
+    source_id: str,
+    date: str,
+    finishes: tuple[BoatFinish, ...],
+    race_number: int = 1,
+) -> RegattaResults:
+    return RegattaResults(
+        regatta=Regatta(
+            source="test",
+            source_id="shift_832",
+            name="Shift",
+            venue_tz="America/Los_Angeles",
+        ),
+        races=(
+            RaceData(
+                source_id=source_id,
+                race_number=race_number,
+                name=f"Race {race_number}",
+                date=date,
+                class_name="J/105",
+                finishes=finishes,
+            ),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_refetch_keeps_link_when_date_shift_matches_session(storage: Storage) -> None:
+    """Rows imported before #832 carry the UTC date (2026-07-09) and were
+    linked by hand to the Wed 7/8 evening session. Re-fetching with the
+    corrected venue-local date must keep that link, not clear it."""
+    # Two sessions that evening: a general recall first, then the real race.
+    # Zip-in-order would pick the recall, so the hand link must survive.
+    await _insert_live_session(storage, "CYC-1 general recall", "2026-07-09T01:18:25+00:00")
+    session_id = await _insert_live_session(storage, "CYC-1", "2026-07-09T01:58:23+00:00")
+    finishes = (BoatFinish(sail_number="475", place=7), BoatFinish(sail_number="482", place=1))
+
+    await import_results(storage, _one_race("r28", "2026-07-09", finishes), own_sail="475")
+    db = storage._conn()
+    cur = await db.execute("SELECT id, local_session_id FROM races WHERE source_id = 'r28'")
+    imp_id, linked = await cur.fetchone()  # type: ignore[misc]
+    assert linked is None, "UTC-dated row must not auto-link (that is the #832 bug)"
+    await db.execute("UPDATE races SET local_session_id = ? WHERE id = ?", (session_id, imp_id))
+    await db.commit()
+
+    await import_results(storage, _one_race("r28", "2026-07-08", finishes), own_sail="475")
+    cur = await db.execute("SELECT date, local_session_id FROM races WHERE id = ?", (imp_id,))
+    date, linked = await cur.fetchone()  # type: ignore[misc]
+    assert date == "2026-07-08"
+    assert linked == session_id
+
+
+@pytest.mark.asyncio
+async def test_refetch_clears_link_when_session_is_on_another_day(storage: Storage) -> None:
+    session_id = await _insert_live_session(storage, "Other", "2026-07-02T01:18:25+00:00")
+    finishes = (BoatFinish(sail_number="475", place=7),)
+
+    await import_results(storage, _one_race("r99", "2026-07-09", finishes), own_sail="475")
+    db = storage._conn()
+    cur = await db.execute("SELECT id FROM races WHERE source_id = 'r99'")
+    (imp_id,) = await cur.fetchone()  # type: ignore[misc]
+    await db.execute("UPDATE races SET local_session_id = ? WHERE id = ?", (session_id, imp_id))
+    await db.commit()
+
+    await import_results(storage, _one_race("r99", "2026-07-08", finishes), own_sail="475")
+    cur = await db.execute("SELECT local_session_id FROM races WHERE id = ?", (imp_id,))
+    (linked,) = await cur.fetchone()  # type: ignore[misc]
+    assert linked is None
+
+
+@pytest.mark.asyncio
+async def test_linker_skips_race_own_boat_did_not_sail(storage: Storage) -> None:
+    """A race the own boat is scored DNC/DNS in cannot correspond to a
+    logged session on that date (e.g. Race Week sessions vs. the CYC
+    Wednesday race Corvo skipped)."""
+    session_id = await _insert_live_session(storage, "rw-d4r1", "2026-07-23T17:05:00+00:00")
+    finishes = (
+        BoatFinish(sail_number="475", place=13, status_code="DNC"),
+        BoatFinish(sail_number="482", place=1),
+    )
+    await import_results(storage, _one_race("r34", "2026-07-23", finishes), own_sail="475")
+    db = storage._conn()
+    cur = await db.execute("SELECT local_session_id FROM races WHERE source_id = 'r34'")
+    (linked,) = await cur.fetchone()  # type: ignore[misc]
+    assert linked is None, "own-boat DNC race must not auto-link"
+
+    # Sanity: the same shape with a real finish does link.
+    sailed = (BoatFinish(sail_number="475", place=3), BoatFinish(sail_number="482", place=1))
+    await import_results(
+        storage, _one_race("r36", "2026-07-23", sailed, race_number=2), own_sail="475"
+    )
+    cur = await db.execute("SELECT local_session_id FROM races WHERE source_id = 'r36'")
+    (linked,) = await cur.fetchone()  # type: ignore[misc]
+    assert linked == session_id

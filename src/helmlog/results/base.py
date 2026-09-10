@@ -9,7 +9,11 @@ dataclasses; it never sees raw HTML or JSON.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, tzinfo
 from typing import Protocol, runtime_checkable
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from loguru import logger
 
 
 @dataclass(frozen=True)
@@ -121,3 +125,20 @@ def register_provider(provider: ResultsProvider) -> None:
 def get_provider(source: str) -> ResultsProvider | None:
     """Return the provider registered for `source`, or None if unknown."""
     return _PROVIDERS.get(source)
+
+
+def resolve_venue_tz(venue_tz: str | None) -> tzinfo:
+    """Resolve a regatta's venue timezone with sensible fallbacks.
+
+    Order: explicit ``Regatta.venue_tz`` → system local tz → UTC. The
+    system-local fallback is correct on a Pi located at the venue.
+    """
+    if venue_tz:
+        try:
+            return ZoneInfo(venue_tz)
+        except ZoneInfoNotFoundError:
+            logger.warning("Unknown venue_tz {!r}, falling back", venue_tz)
+    local = datetime.now().astimezone().tzinfo
+    if local is not None:
+        return local
+    return ZoneInfo("UTC")

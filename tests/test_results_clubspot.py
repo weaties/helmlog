@@ -354,3 +354,47 @@ async def test_discover_route(
     assert data["url"] == "https://www.theclubspot.com/regatta/wYFzQvmG4R/results"
     assert {c["id"] for c in data["classes"]} == {"7q1o9ikhPH", "EvS9obW8uC"}
     assert {c["name"] for c in data["classes"]} == {"J/105", "J/80"}
+
+
+# ---------------------------------------------------------------------------
+# Venue-local race dates — #832
+# ---------------------------------------------------------------------------
+
+
+def test_extract_date_converts_utc_to_venue_tz() -> None:
+    from zoneinfo import ZoneInfo
+
+    from helmlog.results.clubspot import _extract_date
+
+    la = ZoneInfo("America/Los_Angeles")
+    # Wed 8 Jul 2026 20:00 PDT finish is published as 9 Jul 03:00Z.
+    assert _extract_date("2026-07-09T03:00:37.883Z", la) == "2026-07-08"
+    assert _extract_date("2026-07-09T03:00:37.883Z") == "2026-07-09"  # default stays UTC
+    assert _extract_date(None, la) == ""
+    assert _extract_date("garbage", la) == ""
+
+
+def test_parse_race_date_is_venue_local(j105_payload: dict) -> None:
+    from zoneinfo import ZoneInfo
+
+    races, _ = _parse_class_payload(
+        j105_payload, _REGATTA_ID, venue_tz=ZoneInfo("America/Los_Angeles")
+    )
+    for r in races:
+        assert r.date == "2026-04-08", f"Unexpected date {r.date} for {r.name}"
+
+
+@pytest.mark.asyncio
+async def test_provider_fetch_uses_regatta_venue_tz() -> None:
+    transport = _mock_transport(_FIXTURES / "wYFzQvmG4R_J105.json")
+    async with httpx.AsyncClient(transport=transport) as client:
+        provider = ClubspotProvider(client=client)
+        regatta = Regatta(
+            source="clubspot",
+            source_id=_REGATTA_ID,
+            name="CYC Sound Wednesday",
+            default_class=_J105_CLASS_ID,
+            venue_tz="America/Los_Angeles",
+        )
+        result = await provider.fetch(regatta)
+    assert {r.date for r in result.races} == {"2026-04-08"}
