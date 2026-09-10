@@ -24,7 +24,8 @@ if TYPE_CHECKING:
 
 YTDLP_FORMAT = (
     "bestvideo[height<=2160][fps<=30][vcodec^=vp9]+bestaudio[ext=webm]"
-    "/bestvideo[height<=1440][vcodec^=vp9]+bestaudio[ext=webm]/best[height<=2160]"
+    "/bestvideo[height<=1440][vcodec^=vp9]+bestaudio[ext=webm]"
+    "/bestvideo[height<=2160][proto=https]+bestaudio/best[height<=2160]"
 )  # 60 fps 4K streams are 8-10 GB a race and download at ~3 MB/s; 30 fps is enough
 
 
