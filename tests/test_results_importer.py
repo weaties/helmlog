@@ -845,3 +845,91 @@ async def test_two_regattas_same_class_do_not_collide_on_name(storage: Storage) 
     ) as cur:
         (n,) = await cur.fetchone()  # type: ignore[misc]
     assert n == 2
+
+
+# ---------------------------------------------------------------------------
+# Own-sail matching tolerates country prefixes — #835
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_sail_strips_country_prefix() -> None:
+    from helmlog.results.importer import normalize_sail
+
+    assert normalize_sail("USA 475") == "475"
+    assert normalize_sail("usa475") == "475"
+    assert normalize_sail(" 475 ") == "475"
+    assert normalize_sail("USA-475") == "475"
+    assert normalize_sail("CAN 5001") == "5001"
+    assert normalize_sail("") == ""
+    assert normalize_sail(None) == ""
+    # All-letter sails keep their (uppercased) identity rather than collapsing to "".
+    assert normalize_sail("golux") == "GOLUX"
+
+
+@pytest.mark.asyncio
+async def test_filter_matches_country_prefixed_sail(storage: Storage) -> None:
+    """Regression for #835: STYC prints the same boat as ``475`` on some pages
+    and ``USA 475`` on others. The own-sail division filter must match both.
+    """
+    from helmlog.results.base import BoatFinish, RaceData, Regatta, RegattaResults
+
+    own = RaceData(
+        source_id="own_div_prefixed",
+        race_number=4,
+        name="Race 4",
+        date="2026-08-17",
+        class_name="7 - Flying Sails Division",
+        finishes=(
+            BoatFinish(sail_number="USA 475", place=3),
+            BoatFinish(sail_number="USA 403", place=2),
+        ),
+    )
+    foreign = RaceData(
+        source_id="foreign_div_prefixed",
+        race_number=4,
+        name="Race 4",
+        date="2026-08-17",
+        class_name="2 - Flying Sails Division",
+        finishes=(BoatFinish(sail_number="34", place=1),),
+    )
+    results = RegattaResults(
+        regatta=Regatta(source="test", source_id="filter_835", name="Test"),
+        races=(own, foreign),
+    )
+
+    counts = await import_results(storage, results, own_sail="475")
+    assert counts["races_upserted"] == 1, "USA-prefixed own sail must still match"
+
+    db = storage._conn()
+    cur = await db.execute("SELECT source_id FROM races WHERE source = 'test'")
+    assert [r["source_id"] for r in await cur.fetchall()] == ["own_div_prefixed"]
+
+
+@pytest.mark.asyncio
+async def test_filter_own_sail_may_carry_prefix(storage: Storage) -> None:
+    """The identity card may store ``USA 475`` while the page prints ``475``."""
+    from helmlog.results.base import BoatFinish, RaceData, Regatta, RegattaResults
+
+    own = RaceData(
+        source_id="own_div_bare",
+        race_number=1,
+        name="Race 1",
+        date="2026-05-02",
+        class_name="8 - Double Handed Flying Sails Division",
+        finishes=(BoatFinish(sail_number="475", place=5),),
+    )
+    foreign = RaceData(
+        source_id="foreign_div_bare",
+        race_number=1,
+        name="Race 1",
+        date="2026-05-02",
+        class_name="1 - Single Handed Flying Sails Division",
+        finishes=(BoatFinish(sail_number="8010", place=1),),
+    )
+    results = RegattaResults(
+        regatta=Regatta(source="test", source_id="filter_835b", name="Test"),
+        races=(own, foreign),
+    )
+
+    counts = await import_results(storage, results, own_sail="USA 475")
+    assert counts["races_upserted"] == 1
