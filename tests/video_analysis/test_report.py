@@ -124,3 +124,24 @@ def test_spot_checks_pair_model_and_human(ledger: sqlite3.Connection, tmp_path: 
     assert "| 254 | gun | 2 | 4 | -2 | 5 | 5 | +0 |" in md
     assert "within ±1 boat on 0 of 1" in md
     assert "No human reads" in report.spot_check_markdown([])
+
+
+def test_method_markdown_lists_sync_yaw_and_flags(ledger: sqlite3.Connection) -> None:
+    ledger.execute(
+        "INSERT INTO sync VALUES (254,'v','horn+vakaros','2026-09-10T01:25:01+00:00',468.0,"
+        "'2026-09-10T01:25:01+00:00',468.0,5.6,3,'now')"
+    )
+    ledger.execute("INSERT INTO sync VALUES (22,'w','stored',NULL,NULL,'x',0.0,0.0,0,'now')")
+    ledger.executescript(
+        "CREATE TABLE yaw_calibration (video_id TEXT PRIMARY KEY, yaw_offset_deg REAL,"
+        " spread_deg REAL, n INTEGER, created_at TEXT);"
+        "INSERT INTO yaw_calibration VALUES ('v', -7.9, 3.6, 21, 'now');"
+    )
+    ledger.execute("INSERT INTO video_flags VALUES ('w', 'unlevelled horizon', 'now')")
+    md = report.method_markdown(ledger, [])
+    assert "| 254 | horn+vakaros | +5.6 | 3/3 |" in md
+    assert "| 22 | stored | +0.0 | 0/3 |" in md
+    assert "1 races anchored on horn + Vakaros: median Δ +5.6 s" in md
+    assert "| v | -7.9 | 3.6 | 21 |" in md
+    assert "`w`: unlevelled horizon" in md
+    assert "| 22 |" not in report.method_markdown(ledger, [254])

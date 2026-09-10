@@ -265,6 +265,46 @@ def spot_check_markdown(checks: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def method_markdown(ledger: sqlite3.Connection, race_ids: list[int]) -> str:
+    """Sync refinement and camera yaw tables (docs/video-analysis.md §8 validation)."""
+    lines = ["## Sync: horn vs stored session-start sync\n"]
+    lines.append("| race | method | Δ vs stored (s) | warning horns heard |")
+    lines.append("|---|---|---|---|")
+    deltas: list[float] = []
+    for r in ledger.execute(
+        "SELECT race_id, method, delta_s, horn_hits FROM sync ORDER BY race_id"
+    ):
+        if race_ids and r["race_id"] not in race_ids:
+            continue
+        lines.append(
+            f"| {r['race_id']} | {r['method']} | {r['delta_s']:+.1f} | {r['horn_hits']}/3 |"
+        )
+        if r["method"] == "horn+vakaros":
+            deltas.append(float(r["delta_s"]))
+    if deltas:
+        lines.append(
+            f"\n{len(deltas)} races anchored on horn + Vakaros: median Δ {statistics.median(deltas):+.1f} s, "
+            f"range {min(deltas):+.1f} .. {max(deltas):+.1f} s."
+        )
+    has_cal = ledger.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'yaw_calibration'"
+    ).fetchone()
+    if has_cal:
+        lines.append("\n## Camera yaw from the sun\n")
+        lines.append("| video | yaw offset (°) | σ (°) | frames |")
+        lines.append("|---|---|---|---|")
+        for r in ledger.execute("SELECT * FROM yaw_calibration ORDER BY video_id"):
+            lines.append(
+                f"| {r['video_id']} | {r['yaw_offset_deg']:+.1f} | {r['spread_deg']:.1f} | {r['n']} |"
+            )
+    flags = ledger.execute("SELECT video_id, reason FROM video_flags ORDER BY video_id").fetchall()
+    if flags:
+        lines.append("\n## Excluded videos\n")
+        for r in flags:
+            lines.append(f"- `{r['video_id']}`: {r['reason']}")
+    return "\n".join(lines) + "\n"
+
+
 def charts(rows: list[dict[str, Any]], out: Path, split: str) -> list[Path]:
     import matplotlib
 
@@ -386,7 +426,11 @@ def main(argv: list[str] | None = None) -> int:
         [{k: v for k, v in r.items() if k != "_facts"} for r in rows], str(out / "season.csv")
     )
     (out / "aggregates.md").write_text(
-        aggregates_markdown(rows, args.split) + "\n" + spot_check_markdown(spot_checks(ledger))
+        aggregates_markdown(rows, args.split)
+        + "\n"
+        + spot_check_markdown(spot_checks(ledger))
+        + "\n"
+        + method_markdown(ledger, ids)
     )
     for p in charts(rows, out, args.split):
         print(f"wrote {p}")
