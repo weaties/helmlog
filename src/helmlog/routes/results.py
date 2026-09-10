@@ -369,7 +369,10 @@ async def api_rematch_regatta(
     up a regatta that was imported before zip-in-order matching was
     introduced (see #550).
     """
-    from helmlog.results.importer import _link_regatta_races_to_local_sessions
+    from helmlog.results.importer import (
+        _link_regatta_races_to_local_sessions,
+        _own_sail_number,
+    )
 
     storage = get_storage(request)
     db = storage._conn()
@@ -386,7 +389,7 @@ async def api_rematch_regatta(
     races_checked = int(row[0]) if row else 0
 
     linked, touched_sessions = await _link_regatta_races_to_local_sessions(
-        db, regatta_id, force=True
+        db, regatta_id, force=True, own_sail=_own_sail_number()
     )
 
     # Drop cached session_summary blobs for every live session we rewrote
