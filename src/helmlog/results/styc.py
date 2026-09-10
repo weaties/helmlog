@@ -424,16 +424,34 @@ def _header_map(headers: list[str]) -> dict[str, int]:
             mapping["total"] = i
         elif h_clean in ("oa", "phrfoa"):
             mapping["oa"] = i
+    # Multi-day distance races (Race to the Straits) prefix the timing
+    # columns with the day: "Saturday Start" / "Saturday Finish" /
+    # "Saturday Corrected Time". Fall back to those only when no bare
+    # column claimed the key, so single-day pages are unaffected (#831).
+    for i, h in enumerate(headers):
+        h_clean = re.sub(r"\s+", "", h)
+        for key in ("start", "finish", "elapsed"):
+            if key not in mapping and h_clean.endswith(key) and h_clean != key:
+                mapping[key] = i
     return mapping
 
 
 def _extract_race_date(race_html: str) -> str:
-    """Extract date from ``<p class=racedate>Apr 14, 2025</p>``."""
+    """Extract date from ``<p class=racedate>Apr 14, 2025</p>``.
+
+    Multi-day distance races publish a range — ``May 2 &amp; 3, 2026`` or
+    ``May 2-3, 2026`` — which resolves to the first day, since the
+    importer keys a race on a single date and ``race1.htm`` is the
+    first day's leg (#831).
+    """
     m = re.search(r"class=racedate>([^<]+)<", race_html)
     if not m:
         return ""
+    text = _decode(m.group(1)).strip()
+    # "May 2 & 3, 2026" / "May 2-3, 2026" / "May 2 - 3, 2026" -> "May 2, 2026"
+    text = re.sub(r"^([A-Za-z]+\s+\d{1,2})\s*(?:&|-|–)\s*\d{1,2},", r"\1,", text)
     try:
-        dt = datetime.strptime(m.group(1).strip(), "%b %d, %Y")
+        dt = datetime.strptime(text, "%b %d, %Y")
         return dt.strftime("%Y-%m-%d")
     except ValueError:
         return ""
