@@ -26,7 +26,8 @@ YTDLP_FORMAT = (
     "bestvideo[height<=2160][fps<=30][vcodec^=vp9]+bestaudio[ext=webm]"
     "/bestvideo[height<=1440][vcodec^=vp9]+bestaudio[ext=webm]"
     "/bestvideo[height<=2160][proto=https]+bestaudio/best[height<=2160]"
-)  # 60 fps 4K streams are 8-10 GB a race and download at ~3 MB/s; 30 fps is enough
+)  # 60 fps 4K streams are 8-10 GB a race; when 4K30 is missing take 1440p at any fps,
+# never a 480p 24 fps stream (the only <=30 fps VP9 some uploads offer).
 
 
 @dataclass(frozen=True)
