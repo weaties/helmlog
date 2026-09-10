@@ -74,6 +74,11 @@ this instant - at a start, boats that are already across or will cross the line 
 mark, boats that have already rounded plus boats between us and the mark; on a leg, boats further \
 along the leg (further upwind on a beat, further downwind on a run). race.behind = the rest of \
 the counted boats. A boat astern of us in bearing can still be ahead in the race and vice versa. \
+Use sail state to tell the legs apart: on a windward-leeward course a boat flying a spinnaker is \
+on a run and a boat with only main and jib is on a beat. If we are sailing upwind after a \
+leeward mark, boats still under spinnaker have not rounded yet and are BEHIND us. If we are \
+running and other boats are already upwind on the next beat, they are AHEAD of us. At a windward \
+mark, boats already under spinnaker have rounded and are ahead; boats still beating are behind. \
 Say which basis you used and lower race.confidence when it is a judgement call.
 - between_us_and_line: at a start, hulls that sit between us and the start line on the way to \
 the line (they would have to clear before we could cross). 0 when we are on the front row.
@@ -115,8 +120,9 @@ KIND_HINTS = {
     "line.status (behind, on, or over the line), between_us_and_line, and the boats ahead and to "
     "weather. At gun+120 and gun+240 also judge fleet.split: is more of the fleet to our left or "
     "right of the course axis?",
-    "rounding": "Mark rounding window. Report the mark if visible, boats between us and the mark "
-    "(ahead), boats already past it, any close boats overlapped with us, and our kite state.",
+    "rounding": "Mark rounding window ({mark_desc}). Report the mark if visible, boats between us "
+    "and the mark, boats already past it, any close boats overlapped with us, and our kite state. "
+    "Use spinnakers up/down to tell who has rounded.",
     "leg": "Mid-leg. Report boats ahead and their tacks, fleet split, and our kite state.",
     "setdouse": "Spinnaker set or douse. Report our kite state precisely.",
     "finish": "Finish window. Report the committee boat or finish line if visible and boats "
@@ -169,8 +175,19 @@ def user_text(p: Packet) -> str:
         f"Telemetry: heading {f(st.hdg, '03.0f')}, SOG {f(st.sog, '.1f')} kt, BSP {f(st.bsp, '.1f')} kt, "
         f"true wind direction {f(st.twd, '03.0f')}, TWA {f(st.twa, '+.0f')}, TWS {f(st.tws, '.1f')} kt, "
         f"logged tack {p.tack or 'unknown'}.\n"
-        f"{KIND_HINTS.get(p.kind, '')}\nReturn the JSON object."
+        f"{kind_hint(p)}\nReturn the JSON object."
     )
+
+
+def kind_hint(p: Packet) -> str:
+    hint = KIND_HINTS.get(p.kind, "")
+    if p.kind != "rounding":
+        return hint
+    mark = "windward" if p.instant.startswith("W") else "leeward"
+    off = p.instant.lstrip("WL0123456789")
+    when = "at the mark" if not off else f"{off} s from the mark"
+    desc = f"{mark} mark, {when}; we should be {'hoisting after' if mark == 'windward' else 'dousing before'} it"
+    return hint.format(mark_desc=desc)
 
 
 def build_request(p: Packet) -> dict[str, Any]:

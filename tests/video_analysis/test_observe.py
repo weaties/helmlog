@@ -62,6 +62,11 @@ def test_build_request_shape(tmp_path: Path) -> None:
     text = content[-1]["text"]
     assert "instant gun" in text and "heading 337" in text and "logged tack stbd" in text
     assert "line.position" in text  # the start-kind hint
+    body = observe.build_request(make_packet(tmp_path, "L1-20", "rounding"))
+    text = body["messages"][0]["content"][-1]["text"]
+    assert "leeward mark, -20 s from the mark" in text and "dousing before" in text
+    body = observe.build_request(make_packet(tmp_path, "W2", "rounding"))
+    assert "windward mark, at the mark" in body["messages"][0]["content"][-1]["text"]
     assert "thinking" not in body  # Opus 5 runs adaptive thinking by default
 
 
