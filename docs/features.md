@@ -274,7 +274,7 @@ When the boat is in a co-op (see [`guide-federation.md`](guide-federation.md)):
 
 ### External regatta results
 
-- **Imported regattas** — Clubspot and STYC race results pulled in
+- **Imported regattas** — Clubspot, STYC, and Yacht Scoring race results pulled in
   by the admin; viewers can see series standings, fleet classes,
   and individual race results.
 - **Match local session to external race** — link your locally
@@ -412,7 +412,7 @@ cockpit.
 
 ### Race results (`/admin/race-results`)
 
-- **Discover regattas** — query a provider (Clubspot, STYC) for
+- **Discover regattas** — query a provider (Clubspot, STYC, Yacht Scoring) for
   upcoming or past regattas.
 - **Import** — pull series, races, and results into the local DB.
 - **Rematch** — retry matching local sessions to imported races

@@ -296,9 +296,11 @@ def create_app(
     from helmlog.results.base import register_provider
     from helmlog.results.clubspot import ClubspotProvider
     from helmlog.results.styc import StycProvider
+    from helmlog.results.yachtscoring import YachtScoringProvider
 
     register_provider(ClubspotProvider())
     register_provider(StycProvider())
+    register_provider(YachtScoringProvider())
 
     # -- Wire WebSocket broadcast to storage live updates --
     import asyncio as _asyncio

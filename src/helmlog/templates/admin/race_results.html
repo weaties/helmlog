@@ -98,11 +98,11 @@ dialog .btn-row{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
 <dialog id="addDlg">
 <form method="dialog" onsubmit="return addRegatta(event)">
 <div style="font-weight:600;margin-bottom:12px">Add Regatta</div>
-<div class="form-row"><label>Source</label><select name="source" id="add-source" required onchange="onSourceChange()"><option value="clubspot">Clubspot</option><option value="styc">STYC</option></select></div>
+<div class="form-row"><label>Source</label><select name="source" id="add-source" required onchange="onSourceChange()"><option value="clubspot">Clubspot</option><option value="styc">STYC</option><option value="yachtscoring">Yacht Scoring</option></select></div>
 
-<!-- Clubspot: paste URL → discover -->
+<!-- Clubspot / Yacht Scoring: paste URL → discover (class picker) -->
 <div id="clubspot-discover">
-<div class="form-row"><label>Clubspot regatta URL</label><input id="discover-url" type="url" placeholder="https://www.theclubspot.com/regatta/wYFzQvmG4R/results"></div>
+<div class="form-row"><label id="discover-url-label">Clubspot regatta URL</label><input id="discover-url" type="url" placeholder="https://www.theclubspot.com/regatta/wYFzQvmG4R/results"></div>
 <div class="form-row"><button type="button" class="btn-sm btn-fetch" id="discover-btn" onclick="discoverRegatta()">Discover</button><span id="discover-status" style="font-size:.8rem;color:var(--text-secondary)"></span></div>
 <div id="discover-result" style="display:none;margin-top:8px">
 <div class="form-row"><label>Name</label><input name="name" id="add-name" readonly></div>
@@ -137,10 +137,19 @@ try{sailNumber=document.body.dataset.sailNumber||null}catch(e){}
 
 function showMsg(text,ok){msg.textContent=text;msg.className=ok?'msg-ok':'msg-err'}
 
+const DISCOVER_SOURCES={
+  clubspot:{label:'Clubspot regatta URL',placeholder:'https://www.theclubspot.com/regatta/wYFzQvmG4R/results'},
+  yachtscoring:{label:'Yacht Scoring event URL',placeholder:'https://www.yachtscoring.com/event_results_cumulative/50583'}
+};
 function onSourceChange(){
   const src=document.getElementById('add-source').value;
-  document.getElementById('clubspot-discover').style.display=src==='clubspot'?'':'none';
+  const disc=DISCOVER_SOURCES[src];
+  document.getElementById('clubspot-discover').style.display=disc?'':'none';
   document.getElementById('styc-manual').style.display=src==='styc'?'':'none';
+  if(disc){
+    document.getElementById('discover-url-label').textContent=disc.label;
+    document.getElementById('discover-url').placeholder=disc.placeholder;
+  }
   document.getElementById('add-err').textContent='';
 }
 
@@ -149,12 +158,13 @@ async function discoverRegatta(){
   const statusEl=document.getElementById('discover-status');
   const errEl=document.getElementById('add-err');
   errEl.textContent='';
-  if(!url){errEl.textContent='Paste a Clubspot regatta URL first';return}
+  const src=document.getElementById('add-source').value;
+  if(!url){errEl.textContent='Paste a '+DISCOVER_SOURCES[src].label+' first';return}
   const btn=document.getElementById('discover-btn');
   btn.disabled=true;statusEl.textContent='Discovering…';
   try{
     const fd=new FormData();
-    fd.append('source','clubspot');
+    fd.append('source',src);
     fd.append('url',url);
     const r=await fetch('/api/results/regattas/discover',{method:'POST',body:fd});
     const d=await r.json();
@@ -212,7 +222,7 @@ async function addRegatta(e){
   errEl.textContent='';
   const fd=new FormData();
   fd.append('source',src);
-  if(src==='clubspot'){
+  if(DISCOVER_SOURCES[src]){
     const sid=document.getElementById('add-source-id').value;
     if(!sid){errEl.textContent='Click Discover first to resolve the regatta';return false}
     const checked=Array.from(document.querySelectorAll('#class-checkboxes input:checked')).map(c=>c.value);

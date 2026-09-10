@@ -3,8 +3,8 @@
 Fetches published results from yacht club websites into helmlog so we can
 analyze fleet performance across every series and regatta we sail.
 
-This package is source-agnostic: `ClubspotProvider` and `StycProvider` (added
-in subsequent PRs) each implement the `ResultsProvider` protocol in
+This package is source-agnostic: `ClubspotProvider`, `StycProvider`, and
+`YachtScoringProvider` each implement the `ResultsProvider` protocol in
 `base.py`.  The importer in `importer.py` normalizes provider output into
 the `regattas`, `races`, `race_results`, `series_results`, and `boats`
 tables (schema v61).
