@@ -402,6 +402,19 @@ end as we approached it" rather than a warped panorama.
 - **Own boat is sail 475.** "105" in the hull name is the class.
 - **Cost.** About $0.10 per instant at `claude-opus-5`, medium effort on
   start and rounding frames, low elsewhere: roughly $3 per race at Tier 1.
+- **Not every upload has a 4K rendition.** Sixteen of the Wednesday videos
+  exist on YouTube only up to 720p at 48 fps; the fetch takes the best
+  stream that exists and the ledger records the size. Counts survive 720p;
+  sail numbers mostly do not.
+- **Two April videos are excluded** (`fetch --flag`): the April 9 stitches
+  have no horizon lock, so the horizon band is sky or deck in half the strips.
+  Every later video is boat-locked and level.
+- **`suncheck`** measures the camera yaw offset per video from the sun's
+  bearing (−8° to +1° on the September videos) and shows the logged heading
+  lags a turning boat by 20–30°: absolute-bearing ticks are only trustworthy
+  on a steady leg.
+- **Facts fall back to lower-resolution reads** (`reader = claude-api-480p`)
+  when no full-resolution read exists, and the report marks the source.
 
 ### 6.1 Reading frames
 

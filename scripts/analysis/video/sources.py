@@ -23,11 +23,13 @@ if TYPE_CHECKING:
     import sqlite3
 
 YTDLP_FORMAT = (
-    "bestvideo[height<=2160][fps<=30][vcodec^=vp9]+bestaudio[ext=webm]"
+    "bestvideo[height>=1080][fps<=30][vcodec^=vp9]+bestaudio[ext=webm]"
     "/bestvideo[height<=1440][vcodec^=vp9]+bestaudio[ext=webm]"
-    "/bestvideo[height<=2160][proto=https]+bestaudio/best[height<=2160]"
-)  # 60 fps 4K streams are 8-10 GB a race; when 4K30 is missing take 1440p at any fps,
-# never a 480p 24 fps stream (the only <=30 fps VP9 some uploads offer).
+    "/bestvideo[proto=https]+bestaudio/best"
+)
+# Preference: HD VP9 at <=30 fps (4K60 streams are 8-10 GB a race), else VP9 up to 1440p
+# at any fps, else whatever exists. Some uploads only exist on YouTube up to 720p48, and a
+# bare "[fps<=30]" preference silently selects their 854x480 stream - hence the >=1080 floor.
 
 
 @dataclass(frozen=True)
