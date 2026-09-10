@@ -9,6 +9,7 @@ the same data produces zero net changes (R15, R16, R17).
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -60,10 +61,30 @@ def _filter_races_for_own_sail(
     If *own_sail* is unknown OR every race lacks it (spectator regatta),
     return *races* unchanged so we don't accidentally drop everything.
     """
-    if not own_sail:
+    own = normalize_sail(own_sail)
+    if not own:
         return races
-    kept = tuple(r for r in races if any(f.sail_number == own_sail for f in r.finishes))
+    kept = tuple(r for r in races if any(normalize_sail(f.sail_number) == own for f in r.finishes))
     return kept if kept else races
+
+
+_SAIL_PREFIX_RE = re.compile(r"^[A-Z]+(?=\d)")
+
+
+def normalize_sail(sail: str | None) -> str:
+    """Canonicalize a sail number for own-boat matching.
+
+    Scoring sites are inconsistent about the national prefix — STYC prints
+    the same boat as ``475`` on one page and ``USA 475`` on another — so
+    compare on the bare number: uppercase, drop whitespace/hyphens, strip a
+    leading run of letters when digits follow (``USA 475`` → ``475``,
+    ``CAN-5001`` → ``5001``). All-letter sails keep their identity so they
+    don't collapse to ``""`` and match everything (#835).
+    """
+    if not sail:
+        return ""
+    compact = re.sub(r"[\s\-]+", "", sail).upper()
+    return _SAIL_PREFIX_RE.sub("", compact)
 
 
 def _assign_places(finishes: tuple[BoatFinish, ...]) -> list[tuple[int, BoatFinish]]:
