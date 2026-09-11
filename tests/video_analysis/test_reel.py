@@ -105,3 +105,34 @@ def test_build_reel_skips_races_without_a_source(
     ledger.commit()
     out = reel.build_reel(ledger, meta_db, meta_db, reel.SCENARIOS["late_boat_end"], [254])
     assert out is None  # the race matches but its video is not on disk: skipped, no crash
+
+
+def test_360_clip_card_and_metadata_commands(tmp_path: Path) -> None:
+    cmd = reel.clip_command_360(
+        tmp_path / "s.webm", 400.0, 75.0, tmp_path / "strip.png", tmp_path / "c.mp4"
+    )
+    fc = cmd[cmd.index("-filter_complex") + 1]
+    assert f"scale={reel.EQ_W}:{reel.EQ_H}" in fc and "v360" not in fc
+    assert "overlay=(W-w)/2:H/2+96" in fc  # just below the horizon, centred on the bow
+    meta = reel.spherical_command(tmp_path / "c.mp4", 110.0)
+    assert meta[0] == "exiftool" and "-XMP-GSpherical:ProjectionType=equirectangular" in meta
+    assert "-XMP-GSpherical:InitialViewHeadingDegrees=110" in meta
+    assert "-XMP-GSpherical:InitialViewHeadingDegrees=250" in reel.spherical_command(
+        tmp_path / "c.mp4", -110.0
+    )
+    strip = reel.data_strip_360("race 254", tmp_path / "s360.png")
+    with Image.open(strip) as im:
+        assert im.size == (reel.EQ_STRIP_W, reel.EQ_STRIP_H)
+    card = reel.caption_card_360("Slow set", "race — 90 s", tmp_path / "c360.png")
+    with Image.open(card) as im:
+        assert im.size == (reel.EQ_W, reel.EQ_H)
+
+
+def test_inject_spherical_without_exiftool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(reel.shutil, "which", lambda name: None)
+    assert reel.inject_spherical(tmp_path / "c.mp4") is False
+    calls: list[list[str]] = []
+    monkeypatch.setattr(reel.shutil, "which", lambda name: "/usr/local/bin/exiftool")
+    monkeypatch.setattr(reel.subprocess, "run", lambda cmd, check: calls.append(cmd))
+    assert reel.inject_spherical(tmp_path / "c.mp4", 90.0) is True
+    assert calls and calls[0][0] == "exiftool"

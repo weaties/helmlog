@@ -1,12 +1,21 @@
 """Scenario reels (L6): every instance of a situation in the season, cut together.
 
 A scenario is a query over the derived facts plus a camera direction and a
-caption. Each matching race contributes one clip: a ``v360`` perspective view
-pointed at the bearing of interest, a data strip along the bottom, and a
-caption card before it. Clips and the reel land under the sidecar; a
-markdown page lists every clip with its YouTube deep link.
+caption. Each matching race contributes one clip, a data strip, and a
+caption card before it. Two formats:
 
-    uv run python -m scripts.analysis.video reel --scenario late_boat_end [--season]
+* ``flat`` (default): a ``v360`` perspective view pointed at the bearing of
+  interest, 1280x720, plays anywhere.
+* ``360``: the equirectangular frame kept whole at 3840x1920 with spherical
+  metadata injected (exiftool, as the stitch pipeline does), so YouTube,
+  VLC or a headset lets the viewer look around; the strip sits just below
+  the horizon at the bow and each clip's initial view is the scenario's
+  camera direction.
+
+Clips and the reel land under the sidecar; a markdown page lists every clip
+with its YouTube deep link.
+
+    uv run python -m scripts.analysis.video reel --scenario late_boat_end [--season] [--format 360]
     uv run python -m scripts.analysis.video reel --list
 """
 
@@ -14,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import timedelta
@@ -31,6 +41,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 CLIP_W, CLIP_H = 1280, 720
+EQ_W, EQ_H = 3840, 1920  # 360 output: equirectangular, 2:1
+EQ_STRIP_W, EQ_STRIP_H = 560, 40  # ~52° wide at the equator: readable in one 90° view
 CARD_S = 2.0
 FactsT = dict[str, Any]
 ObsT = dict[str, dict[str, Any]]
@@ -185,6 +197,61 @@ def caption_card(title: str, caption: str, path: Path) -> Path:
     return path
 
 
+def data_strip_360(text: str, path: Path) -> Path:
+    """Small HUD strip for the equirectangular frame; sits just below the horizon at the bow."""
+    im = Image.new("RGBA", (EQ_STRIP_W, EQ_STRIP_H), (0, 0, 0, 170))
+    ImageDraw.Draw(im).text((8, 9), text, font=ImageFont.load_default(size=20), fill="yellow")
+    im.save(path)
+    return path
+
+
+def caption_card_360(title: str, caption: str, path: Path) -> Path:
+    """Black equirectangular card with the caption at the horizon, centred on the bow."""
+    im = Image.new("RGB", (EQ_W, EQ_H), "black")
+    dr = ImageDraw.Draw(im)
+    dr.text(
+        (EQ_W // 2 - 420, EQ_H // 2 - 70), title, font=ImageFont.load_default(size=52), fill="white"
+    )
+    dr.text(
+        (EQ_W // 2 - 420, EQ_H // 2 + 10),
+        caption,
+        font=ImageFont.load_default(size=30),
+        fill="yellow",
+    )
+    im.save(path)
+    return path
+
+
+def clip_command_360(source: Path, t0: float, dur: float, strip: Path, out: Path) -> list[str]:
+    """Keep the whole panorama: scale to EQ_W x EQ_H, HUD strip below the horizon at the bow."""
+    vf = f"[0:v]scale={EQ_W}:{EQ_H}[v];[v][1:v]overlay=(W-w)/2:H/2+{int(EQ_H * 0.05)}[o]"
+    return [
+        "ffmpeg", "-v", "error", "-y", "-ss", f"{t0:.2f}", "-t", f"{dur:.1f}", "-i", str(source),
+        "-i", str(strip), "-filter_complex", vf, "-map", "[o]", "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-r", "30", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-ac", "2", "-ar", "48000", str(out),
+    ]  # fmt: skip
+
+
+def spherical_command(path: Path, initial_yaw: float = 0.0) -> list[str]:
+    """exiftool call that marks an MP4 as an equirectangular 360 video (GSpherical v1 XMP)."""
+    return [
+        "exiftool", "-overwrite_original", "-q",
+        "-XMP-GSpherical:Spherical=true", "-XMP-GSpherical:Stitched=true",
+        "-XMP-GSpherical:StitchingSoftware=helmlog", "-XMP-GSpherical:ProjectionType=equirectangular",
+        f"-XMP-GSpherical:InitialViewHeadingDegrees={int(round(initial_yaw)) % 360}",
+        str(path),
+    ]  # fmt: skip
+
+
+def inject_spherical(path: Path, initial_yaw: float = 0.0) -> bool:
+    if shutil.which("exiftool") is None:
+        print("  exiftool not found: 360 metadata not injected (video plays flat)")
+        return False
+    subprocess.run(spherical_command(path, initial_yaw), check=True)
+    return True
+
+
 def clip_command(
     source: Path, t0: float, dur: float, yaw: float, pitch: float, strip: Path, out: Path
 ) -> list[str]:
@@ -261,11 +328,14 @@ def build_reel(
     tel_db: sqlite3.Connection,
     scenario: Scenario,
     race_ids: list[int],
+    fmt: str = "flat",
 ) -> Path | None:
     hits = matches(ledger, scenario, race_ids)
     print(f"{scenario.name}: {len(hits)} race(s) match")
     if not hits:
         return None
+    is_360 = fmt == "360"
+    suffix = "-360" if is_360 else ""
     reel_dir = common.va_dir() / "reels"
     clip_dir = common.va_dir() / "clips" / scenario.name
     reel_dir.mkdir(parents=True, exist_ok=True)
@@ -295,18 +365,25 @@ def build_reel(
         stamp = common.load_telemetry(tel_db, start, end).at(utc)
         yaw, pitch = yaw_for(scenario.look_at, o.get(scenario.anchor), stamp)
         caption = scenario.caption(f)
-        card = caption_card(scenario.title, caption, clip_dir / f"{rid}_card.png")
-        card_mp4 = clip_dir / f"{rid}_card.mp4"
-        subprocess.run(card_command(card, card_mp4), check=True)
-        strip = data_strip(
+        strip_text = (
             f"{race.name}  {scenario.anchor}{scenario.window_s[0]:+d}s  TWS {stamp.tws or 0:.0f}kt  "
-            f"SOG {stamp.sog or 0:.1f}kt  TWA {stamp.twa or 0:+.0f}",
-            clip_dir / f"{rid}_strip.png",
+            f"SOG {stamp.sog or 0:.1f}kt  TWA {stamp.twa or 0:+.0f}"
         )
-        clip = clip_dir / f"{rid}.mp4"
-        subprocess.run(
-            clip_command(src.path, max(0.0, t0), dur, yaw, pitch, strip, clip), check=True
-        )
+        card_mp4 = clip_dir / f"{rid}_card{suffix}.mp4"
+        clip = clip_dir / f"{rid}{suffix}.mp4"
+        if is_360:
+            card = caption_card_360(scenario.title, caption, clip_dir / f"{rid}_card{suffix}.png")
+            subprocess.run(card_command(card, card_mp4), check=True)
+            strip = data_strip_360(strip_text, clip_dir / f"{rid}_strip{suffix}.png")
+            subprocess.run(clip_command_360(src.path, max(0.0, t0), dur, strip, clip), check=True)
+            inject_spherical(clip, yaw)
+        else:
+            card = caption_card(scenario.title, caption, clip_dir / f"{rid}_card.png")
+            subprocess.run(card_command(card, card_mp4), check=True)
+            strip = data_strip(strip_text, clip_dir / f"{rid}_strip.png")
+            subprocess.run(
+                clip_command(src.path, max(0.0, t0), dur, yaw, pitch, strip, clip), check=True
+            )
         parts += [card_mp4, clip]
         deep = (
             video.url_at(utc + timedelta(seconds=scenario.window_s[0]))
@@ -318,11 +395,13 @@ def build_reel(
     if not parts:
         print(f"  {scenario.name}: no clips could be cut")
         return None
-    out = reel_dir / f"{scenario.name}.mp4"
+    out = reel_dir / f"{scenario.name}{suffix}.mp4"
     concat(parts, out)
-    (reel_dir / f"{scenario.name}.md").write_text(
-        f"# {scenario.title}\n\n{len(links)} clip(s), camera: {scenario.look_at}, window "
-        f"{scenario.anchor}{scenario.window_s[0]:+d}s..{scenario.window_s[1]:+d}s.\n\n"
+    if is_360:
+        inject_spherical(out, 0.0)
+    (reel_dir / f"{scenario.name}{suffix}.md").write_text(
+        f"# {scenario.title}\n\n{len(links)} clip(s), format: {fmt}, camera: {scenario.look_at}, "
+        f"window {scenario.anchor}{scenario.window_s[0]:+d}s..{scenario.window_s[1]:+d}s.\n\n"
         + "\n".join(links)
         + "\n"
     )
@@ -339,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--race", type=int, action="append", default=[])
     ap.add_argument("--season", action="store_true")
+    ap.add_argument("--format", choices=("flat", "360"), default="flat")
     args = ap.parse_args(argv)
     if args.list:
         for s in SCENARIOS.values():
@@ -354,7 +434,7 @@ def main(argv: list[str] | None = None) -> int:
         ids += [r.id for r in common.list_cyc_wednesday_races(meta) if r.id not in ids]
     names = list(SCENARIOS) if args.all else args.scenario
     for name in names:
-        build_reel(ledger, meta, tel_db, SCENARIOS[name], ids)
+        build_reel(ledger, meta, tel_db, SCENARIOS[name], ids, args.format)
     return 0
 
 
