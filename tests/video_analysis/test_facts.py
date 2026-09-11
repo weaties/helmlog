@@ -218,3 +218,46 @@ def test_compute_for_race_falls_back_to_second_reader(
     # A full-resolution read takes precedence once it exists.
     observe.store_observation(ledger, p, obs(race_ahead=3), "claude-api", "m")
     assert facts.compute_for_race(ledger, meta_db, race)["meta"]["reader"] == "claude-api"
+
+
+def test_human_read_overrides_window_and_can_void_it() -> None:
+    o = {
+        "W1-45": obs(race_ahead=1),
+        "W1": {**obs(race_ahead=4), "_reader": "file"},
+        "W1+45": obs(race_ahead=1),
+        "L1-45": obs(race_ahead=2),
+        "L1": {**obs(race_ahead=None), "_reader": "file"},
+        "L1+45": obs(race_ahead=2),
+    }
+    o["L1"]["race"]["basis"] = "unknown"
+    assert facts.window_ahead(o, "W1") == (4, 0, 1)  # the person's count, not the median of 1,4,1
+    assert facts.window_ahead(o, "L1") == (None, None, 0)  # not a rounding: whole window void
+    lad = facts.ladder(o, None)
+    assert lad["W1"] == 5 and lad["L1"] is None
+
+
+def test_compute_for_race_overlays_human_reads(
+    meta_db: sqlite3.Connection, ledger: sqlite3.Connection
+) -> None:
+    race = common.load_race(meta_db, 254)
+    instants.compute_for_race(ledger, race, tier=1)
+    rows = {
+        r["name"]: r
+        for r in ledger.execute(
+            "SELECT name, kind, utc, video_t FROM instants WHERE race_id = 254"
+        ).fetchall()
+    }
+
+    def pkt(name: str) -> observe.Packet:
+        r = rows[name]
+        return observe.Packet(
+            254, name, r["kind"], common.parse_utc(r["utc"]), "jygj-NbqFJE", float(r["video_t"]),
+            None, None, None,  # type: ignore[arg-type]
+        )  # fmt: skip
+
+    observe.store_observation(ledger, pkt("gun"), obs(race_ahead=9), "claude-api", "m")
+    observe.store_observation(ledger, pkt("W1"), obs(race_ahead=1), "claude-api", "m")
+    observe.store_observation(ledger, pkt("W1"), obs(race_ahead=4), "file", "h")
+    f = facts.compute_for_race(ledger, meta_db, race)
+    assert f["ladder"]["W1"] == 5 and f["ladder"]["gun"] == 10
+    assert f["meta"]["human_instants"] == ["W1"]

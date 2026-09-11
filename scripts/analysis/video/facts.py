@@ -53,12 +53,24 @@ def window_names(step: str) -> tuple[str, ...]:
     return (f"{step}-45", f"{step}-20", step, f"{step}+20", f"{step}+45")
 
 
+HUMAN_READER = "file"
+
+
 def window_ahead(obs: dict[str, dict[str, Any]], step: str) -> tuple[int | None, int | None, int]:
     """Median race.ahead over the step's window, with its range and sample count.
 
     Single frames mis-count by a few boats in a cluster; the median over the
     window is the number the ladder uses and the range is reported alongside.
+    A human read of the step's own instant overrides the window: its count is
+    used alone, and a human verdict that the instant is not a mark rounding
+    (``race.basis == "unknown"``) voids the whole window.
     """
+    centre = obs.get(step)
+    if centre and centre.get("_reader") == HUMAN_READER:
+        race = centre.get("race") or {}
+        if race.get("basis") == "unknown" or race.get("ahead") is None:
+            return None, None, 0
+        return int(race["ahead"]), 0, 1
     vals = [v for v in (_race_ahead(obs, n) for n in window_names(step)) if v is not None]
     if not vals:
         return None, None, 0
@@ -250,6 +262,9 @@ def compute_for_race(
     if not obs:
         raise LookupError(f"race {race.id}: no observations by {', '.join(readers)}")
     reader = reader_used
+    # Human reads of individual instants take precedence over the model's.
+    for name, payload in latest_observations(ledger, race.id, HUMAN_READER).items():
+        obs[name] = {**payload, "_reader": HUMAN_READER}
     gun = common.effective_gun(ledger, race)
     marks = [
         r["name"]
@@ -277,6 +292,7 @@ def compute_for_race(
         "quality": quality(obs),
         "meta": {
             "reader": reader,
+            "human_instants": sorted(n for n, o in obs.items() if o.get("_reader") == HUMAN_READER),
             "name": race.name,
             "local_date": race.local_date,
             "final_place": race.result_place,
