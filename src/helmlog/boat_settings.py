@@ -90,6 +90,36 @@ PARAMETERS: tuple[ParameterDef, ...] = (
         "number",
         "instrument_calibration",
     ),
+    # Heel-dependent STW correction for the off-center paddlewheel (#810).
+    # corrected_STW = raw / (speed_cal_base + speed_cal_heel_slope * heel_deg).
+    # Defaults (1.0 / 0.0) are an exact no-op; fit via
+    # scripts/analysis/calibrate_speed_heel.py.
+    ParameterDef(
+        "speed_cal_base",
+        "Speed cal base (a)",
+        "",
+        "number",
+        "instrument_calibration",
+    ),
+    ParameterDef(
+        "speed_cal_heel_slope",
+        "Speed cal heel slope (b)",
+        "per-deg",
+        "number",
+        "instrument_calibration",
+    ),
+    # Breeze gate for the STW correction (#810): below this TWS the tack/heel
+    # term is suppressed (light air's paddlewheel bias is noisy and reverses
+    # sign), leaving only the base factor. 0 disables the gate. The TWS × tack
+    # table itself is a JSON blob in app_settings ("speed_cal_table"), not a
+    # flat parameter.
+    ParameterDef(
+        "speed_cal_gate_min_tws",
+        "Speed cal breeze gate (min TWS)",
+        "kt",
+        "number",
+        "instrument_calibration",
+    ),
     ParameterDef(
         "rudder_angle_offset",
         "Rudder angle offset",

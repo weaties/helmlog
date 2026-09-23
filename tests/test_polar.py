@@ -131,8 +131,13 @@ async def _make_session(
     bsp: float,
     tws: float,
     twa: float,
+    heel: float | None = None,
 ) -> None:
-    """Insert a completed race + 10 matching speed and wind records."""
+    """Insert a completed race + 10 matching speed and wind records.
+
+    When *heel* is given, a matching ``attitudes`` row is inserted per second
+    via direct SQL (the ``_write_attitude`` path is rate-limited, which would
+    drop most rows in a tight test loop)."""
     start = _BASE_TS + timedelta(hours=race_num)
     end = start + timedelta(seconds=10)
     db = storage._conn()
@@ -153,6 +158,36 @@ async def _make_session(
         ts = start + timedelta(seconds=i)
         await storage.write(SpeedRecord(PGN_SPEED_THROUGH_WATER, 5, ts, bsp))
         await storage.write(WindRecord(PGN_WIND_DATA, 5, ts, tws, twa, 0))
+        if heel is not None:
+            await db.execute(
+                "INSERT INTO attitudes (ts, source_addr, heel_deg, trim_deg)"
+                " VALUES (?, ?, ?, 0.0)",
+                (ts.isoformat(), 5, heel),
+            )
+    await db.commit()
+
+
+async def _set_speed_cal(storage: Storage, base: float, slope: float) -> None:
+    """Persist + hot-reload the #810 STW correction coefficients."""
+    ts = datetime.now(UTC).isoformat()
+    await storage.create_boat_settings(
+        race_id=None,
+        entries=[
+            {"ts": ts, "parameter": "speed_cal_base", "value": str(base)},
+            {"ts": ts, "parameter": "speed_cal_heel_slope", "value": str(slope)},
+        ],
+        source="manual",
+    )
+
+
+async def _set_speed_cal_gate(storage: Storage, gate: float) -> None:
+    """Persist + hot-reload the #810 breeze gate (min TWS)."""
+    ts = datetime.now(UTC).isoformat()
+    await storage.create_boat_settings(
+        race_id=None,
+        entries=[{"ts": ts, "parameter": "speed_cal_gate_min_tws", "value": str(gate)}],
+        source="manual",
+    )
 
 
 @pytest.mark.asyncio
@@ -587,8 +622,12 @@ async def _seed_session(
     twa: float,
     with_positions: bool = True,
     with_winds: bool = True,
+    heel: float | None = None,
 ) -> int:
-    """Create a completed race with 1 Hz instrument data and return its id."""
+    """Create a completed race with 1 Hz instrument data and return its id.
+
+    When *heel* is given, one ``attitudes`` row per second is inserted via
+    direct SQL (the ``_write_attitude`` path is rate-limited)."""
     start = datetime(2024, 7, 1, 12, 0, 0, tzinfo=UTC)
     end = start + timedelta(seconds=duration_s)
     db = storage._conn()
@@ -610,6 +649,13 @@ async def _seed_session(
             await storage.write(
                 PositionRecord(PGN_POSITION_RAPID, 5, ts, 37.80 + i * 1e-5, -122.27 + i * 1e-5)
             )
+        if heel is not None:
+            await db.execute(
+                "INSERT INTO attitudes (ts, source_addr, heel_deg, trim_deg)"
+                " VALUES (?, ?, ?, 0.0)",
+                (ts.isoformat(), 5, heel),
+            )
+    await db.commit()
     return sid
 
 
@@ -1084,3 +1130,124 @@ class TestGradeSegmentsWindow:
         # Racing window ≈ 200 s → ~20 segments; the full session (320 s) would be
         # ~32. Comfortably under 25 confirms prestart + post-finish were trimmed.
         assert len(segs) < 25
+
+
+# ---------------------------------------------------------------------------
+# Heel-dependent STW correction flowing through the polar path (#810)
+# ---------------------------------------------------------------------------
+
+
+class TestPolarStwCorrection:
+    """All three read sites (baseline build, session comparison, segment
+    grading) must consume the *corrected* STW so the baseline and the %
+    grade stay self-consistent."""
+
+    @pytest.mark.asyncio
+    async def test_baseline_defaults_unchanged(self, storage: Storage) -> None:
+        """With shipped defaults the baseline mean is the raw BSP (no-op)."""
+        for i in range(1, 4):
+            await _make_session(storage, i, bsp=6.0, tws=10.0, twa=45.0, heel=10.0)
+        await build_polar_baseline(storage)
+        row = await storage.get_polar_point(_tws_bin(10.0), _twa_bin(45.0))
+        assert row is not None
+        assert row["mean_bsp"] == pytest.approx(6.0, rel=1e-4)
+
+    @pytest.mark.asyncio
+    async def test_baseline_uses_corrected_stw(self, storage: Storage) -> None:
+        """base=1.0, slope=0.01, heel=+10 → k=1.1 → 6.0/1.1 = 5.4545."""
+        await _set_speed_cal(storage, base=1.0, slope=0.01)
+        for i in range(1, 4):
+            await _make_session(storage, i, bsp=6.0, tws=10.0, twa=45.0, heel=10.0)
+        await build_polar_baseline(storage)
+        row = await storage.get_polar_point(_tws_bin(10.0), _twa_bin(45.0))
+        assert row is not None
+        assert row["mean_bsp"] == pytest.approx(6.0 / 1.1, rel=1e-4)
+
+    @pytest.mark.asyncio
+    async def test_baseline_missing_heel_uses_base_only(self, storage: Storage) -> None:
+        """No attitudes rows → heel term drops; only base applies (k=a)."""
+        await _set_speed_cal(storage, base=1.09, slope=0.05)
+        for i in range(1, 4):
+            await _make_session(storage, i, bsp=6.0, tws=10.0, twa=45.0)  # no heel
+        await build_polar_baseline(storage)
+        row = await storage.get_polar_point(_tws_bin(10.0), _twa_bin(45.0))
+        assert row is not None
+        assert row["mean_bsp"] == pytest.approx(6.0 / 1.09, rel=1e-4)
+
+    @pytest.mark.asyncio
+    async def test_session_comparison_uses_corrected_stw(self, storage: Storage) -> None:
+        await _set_speed_cal(storage, base=1.0, slope=0.01)
+        await _make_session(storage, race_num=10, bsp=6.0, tws=10.0, twa=45.0, heel=10.0)
+        cur = await storage._conn().execute("SELECT id FROM races ORDER BY id DESC LIMIT 1")
+        sid = int((await cur.fetchone())["id"])
+        result = await session_polar_comparison(storage, sid)
+        assert result is not None
+        assert result.cells[0].session_mean_bsp == pytest.approx(6.0 / 1.1, rel=1e-4)
+
+    @pytest.mark.asyncio
+    async def test_baseline_uses_tws_pos_tack_table(self, storage: Storage) -> None:
+        """A TWS × PoS × tack table (app_settings JSON) drives the baseline:
+        port tack, upwind, 9-12 kt bin → k=1.2 → 6.0/1.2."""
+        await storage.set_setting(
+            "speed_cal_table",
+            '[{"tws_min":9,"tws_max":12,"pos":"upwind","port":1.2,"stbd":1.1}]',
+        )
+        await storage.refresh_speed_cal()
+        for i in range(1, 4):
+            await _make_session(storage, i, bsp=6.0, tws=10.0, twa=45.0, heel=10.0)  # upwind port
+        await build_polar_baseline(storage)
+        row = await storage.get_polar_point(_tws_bin(10.0), _twa_bin(45.0))
+        assert row is not None
+        assert row["mean_bsp"] == pytest.approx(6.0 / 1.2, rel=1e-4)
+
+    @pytest.mark.asyncio
+    async def test_baseline_downwind_bin_not_applied_to_upwind(self, storage: Storage) -> None:
+        """A downwind-only table entry must NOT correct an upwind sample — it
+        falls back to the (identity) heel-linear, leaving BSP unchanged."""
+        await storage.set_setting(
+            "speed_cal_table",
+            '[{"tws_min":9,"tws_max":12,"pos":"downwind","port":1.2,"stbd":1.2}]',
+        )
+        await storage.refresh_speed_cal()
+        for i in range(1, 4):
+            await _make_session(storage, i, bsp=6.0, tws=10.0, twa=45.0, heel=10.0)  # upwind
+        await build_polar_baseline(storage)
+        row = await storage.get_polar_point(_tws_bin(10.0), _twa_bin(45.0))
+        assert row is not None
+        assert row["mean_bsp"] == pytest.approx(6.0, rel=1e-4)  # uncorrected
+
+    @pytest.mark.asyncio
+    async def test_baseline_breeze_gate_suppresses_light_air(self, storage: Storage) -> None:
+        """Below the gate the table is ignored and only base applies (k=base=1.0
+        → no correction), even though a table bin covers this TWS."""
+        await storage.set_setting(
+            "speed_cal_table",
+            '[{"tws_min":0,"tws_max":30,"pos":"upwind","port":1.2,"stbd":1.2}]',
+        )
+        await _set_speed_cal_gate(storage, gate=12.0)
+        for i in range(1, 4):
+            await _make_session(storage, i, bsp=6.0, tws=8.0, twa=45.0, heel=10.0)  # 8 kt < gate
+        await build_polar_baseline(storage)
+        row = await storage.get_polar_point(_tws_bin(8.0), _twa_bin(45.0))
+        assert row is not None
+        assert row["mean_bsp"] == pytest.approx(6.0, rel=1e-4)  # uncorrected
+
+    @pytest.mark.asyncio
+    async def test_grading_uses_corrected_stw(self, storage: Storage) -> None:
+        """Corrected STW feeds the graded segment's BSP and % target."""
+        # Baseline at 6.0 (no correction on the baseline sessions — they have
+        # no heel and default coeffs at build time isn't our concern here; we
+        # set coeffs, so the baseline builds on corrected values too). To keep
+        # this test about the grade path, build the baseline BEFORE setting the
+        # coefficients so target stays 6.0, then set coeffs and grade.
+        await _build_baseline_at(storage, bsp=6.0, tws=10.0, twa=45.0)
+        await _set_speed_cal(storage, base=1.0, slope=0.01)
+        sid = await _seed_session(
+            storage, duration_s=30, bsp=6.6, tws=10.0, twa=45.0, heel=10.0
+        )
+        segs = await grade_session_segments(storage, sid, segment_seconds=10)
+        graded = [s for s in segs if s.bsp_kts is not None]
+        assert graded
+        # 6.6 / 1.1 = 6.0 → matches the 6.0 target → pct ≈ 1.0
+        assert all(s.bsp_kts == pytest.approx(6.0, rel=1e-3) for s in graded)
+        assert all(s.pct_target == pytest.approx(1.0, rel=1e-3) for s in graded)

@@ -18,8 +18,20 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 
+from helmlog.speed_cal import SpeedCal, resolve_stw
+
 if TYPE_CHECKING:
     from helmlog.storage import Storage
+
+
+def _heel_by_second(attitudes: list[dict[str, Any]]) -> dict[str, float]:
+    """Index heel by truncated-second key (first fix wins), matching the
+    per-second join used for speeds/winds/headings (#810)."""
+    out: dict[str, float] = {}
+    for a in attitudes:
+        out.setdefault(str(a["ts"])[:19], float(a["heel_deg"]))
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -355,6 +367,8 @@ async def build_polar_baseline(storage: Storage, min_sessions: int = 3) -> int:
         speeds = await storage.query_range("speeds", start, end)
         winds = await storage.query_range("winds", start, end)
         headings = await storage.query_range("headings", start, end)
+        attitudes = await storage.query_range("attitudes", start, end)
+        heel_by_s = _heel_by_second(attitudes)
 
         # Index by truncated second key (first 19 chars of ISO string)
         spd_by_s: dict[str, dict[str, Any]] = {}
@@ -383,13 +397,25 @@ async def build_polar_baseline(storage: Storage, min_sessions: int = 3) -> int:
             ref = int(wind_row.get("reference", -1))
             wind_angle = float(wind_row["wind_angle_deg"])
             tws_kts = float(wind_row["wind_speed_kts"])
-            bsp_kts = float(spd_row["speed_kts"])
 
             hdg_row = hdg_by_s.get(sk)
             heading = float(hdg_row["heading_deg"]) if hdg_row else None
 
             twa = _compute_twa(wind_angle, ref, heading)
             if twa is None:
+                continue
+
+            # Heel/TWS/point-of-sail-corrected STW (#810) — self-consistent with
+            # the grade path. TWA is known here, so the correction can pick the
+            # right upwind/downwind table bin.
+            bsp_kts = resolve_stw(
+                float(spd_row["speed_kts"]),
+                heel_by_s.get(sk),
+                tws_kts,
+                storage._speed_cal,
+                _point_of_sail(twa),
+            )
+            if bsp_kts is None:
                 continue
 
             tb = _tws_bin(tws_kts)
@@ -543,6 +569,8 @@ async def session_polar_comparison(
     speeds = await storage.query_range("speeds", start, end)
     winds = await storage.query_range("winds", start, end)
     headings = await storage.query_range("headings", start, end)
+    attitudes = await storage.query_range("attitudes", start, end)
+    heel_by_s = _heel_by_second(attitudes)
 
     spd_by_s: dict[str, dict[str, Any]] = {}
     for s in speeds:
@@ -569,7 +597,6 @@ async def session_polar_comparison(
         ref = int(wind_row.get("reference", -1))
         wind_angle = float(wind_row["wind_angle_deg"])
         tws_kts = float(wind_row["wind_speed_kts"])
-        bsp_kts = float(spd_row["speed_kts"])
 
         hdg_row = hdg_by_s.get(sk)
         heading = float(hdg_row["heading_deg"]) if hdg_row else None
@@ -578,10 +605,22 @@ async def session_polar_comparison(
         if twa_tack is None:
             continue
         twa, tack = twa_tack
+        pos = _point_of_sail(twa)
+
+        # Heel/TWS/point-of-sail-corrected STW (#810) so this comparison matches
+        # the (also-corrected) baseline.
+        bsp_kts = resolve_stw(
+            float(spd_row["speed_kts"]),
+            heel_by_s.get(sk),
+            tws_kts,
+            storage._speed_cal,
+            pos,
+        )
+        if bsp_kts is None:
+            continue
 
         tb = _tws_bin(tws_kts)
         ab = _twa_bin(twa)
-        pos = _point_of_sail(twa)
         bin_samples[(tb, ab, pos, tack)].append(bsp_kts)
 
     # Load full baseline (symmetric, no min_sessions gate — #534)
@@ -734,16 +773,24 @@ def _grade_segments_sync(
     positions: list[dict[str, Any]],
     polar_map: dict[tuple[int, int], dict[str, Any]],
     min_sessions: int = 3,
+    attitudes: list[dict[str, Any]] | None = None,
+    cal: SpeedCal | None = None,
 ) -> tuple[list[GradedSegment], dict[str, int]]:
     """Pure-Python segmentation + grading. No I/O; safe to run in a worker thread.
 
     *polar_map* is the full (tws_bin, twa_bin) → baseline row mapping, pre-fetched
     so no ``await`` is needed inside the loop (#603).
+
+    Speed samples are STW-corrected (#810) using each sample's heel and the
+    segment's mean TWS (so the gate + TWS × tack table apply) before averaging,
+    keeping the graded BSP self-consistent with the corrected baseline.
     """
+    cal = cal or SpeedCal()
 
     def _ts_of(rec: dict[str, Any]) -> datetime:
         return datetime.fromisoformat(str(rec["ts"])).replace(tzinfo=UTC)
 
+    heel_by_s = _heel_by_second(attitudes or [])
     speeds_dt = [(_ts_of(r), r) for r in speeds]
     winds_dt = [
         (_ts_of(r), r)
@@ -761,20 +808,40 @@ def _grade_segments_sync(
         seg_end = min(end, seg_start + timedelta(seconds=width))
         t_mid = seg_start + (seg_end - seg_start) / 2
 
-        spd_in = [float(r["speed_kts"]) for ts, r in speeds_dt if seg_start <= ts < seg_end]
         wind_in = [(ts, r) for ts, r in winds_dt if seg_start <= ts < seg_end]
         hdg_in = [float(r["heading_deg"]) for ts, r in hdg_dt if seg_start <= ts < seg_end]
-
-        lat, lon = _interp_position(positions, t_mid) if positions else (None, None)
-
-        bsp = _mean(spd_in)
         tws = _mean([float(r["wind_speed_kts"]) for _, r in wind_in])
+
         twa: float | None = None
         if wind_in:
             wind_angle_mean = sum(float(r["wind_angle_deg"]) for _, r in wind_in) / len(wind_in)
             ref = int(wind_in[0][1].get("reference", -1))
             heading_mean = _mean(hdg_in) if ref == _WIND_REF_NORTH else None
             twa = _compute_twa(wind_angle_mean, ref, heading_mean)
+        seg_pos = _point_of_sail(twa) if twa is not None else None
+
+        # Correct each speed sample by its heel and the segment's mean TWS +
+        # point-of-sail, so the gate and TWS × PoS × tack table apply
+        # consistently with the baseline (#810).
+        spd_in = [
+            c
+            for ts, r in speeds_dt
+            if seg_start <= ts < seg_end
+            and (
+                c := resolve_stw(
+                    float(r["speed_kts"]),
+                    heel_by_s.get(str(r["ts"])[:19]),
+                    tws,
+                    cal,
+                    seg_pos,
+                )
+            )
+            is not None
+        ]
+
+        lat, lon = _interp_position(positions, t_mid) if positions else (None, None)
+
+        bsp = _mean(spd_in)
 
         target: float | None = None
         pct: float | None = None
@@ -895,6 +962,7 @@ async def grade_session_segments(
     winds = await storage.query_range("winds", start, end)
     headings = await storage.query_range("headings", start, end)
     positions = await storage.query_range("positions", start, end)
+    attitudes = await storage.query_range("attitudes", start, end)
 
     # Pre-load the entire polar baseline once so the tight per-segment loop
     # has no I/O and can run in a worker thread. Un-migrated DBs (no
@@ -916,6 +984,8 @@ async def grade_session_segments(
         headings,
         positions,
         polar_map,
+        attitudes=attitudes,
+        cal=storage._speed_cal,
     )
 
     # Persist cache

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import math
 
+from helmlog.speed_cal import corrected_stw
+
 
 def _polar_to_ne(speed: float, compass_deg: float) -> tuple[float, float]:
     rad = math.radians(compass_deg)
@@ -28,6 +30,8 @@ def compute_set_drift(
     leeway_k: float | None = None,
     compass_offset_port: float = 0.0,
     compass_offset_stbd: float = 0.0,
+    speed_cal_base: float = 1.0,
+    speed_cal_heel_slope: float = 0.0,
 ) -> tuple[float, float] | None:
     """Return (set_deg, drift_kts) or None if any required input is missing.
 
@@ -71,8 +75,21 @@ def compute_set_drift(
     ``boat_settings.compass_offset_port`` /
     ``boat_settings.compass_offset_stbd`` and are typically derived
     from a joint-fit against a session's maneuvers.
+
+    Heel-dependent STW correction
+    -----------------------------
+    Corvo's paddlewheel is offset to port, so it over-reads under heel and
+    the error is tack-dependent (#810). ``speed_cal_base`` /
+    ``speed_cal_heel_slope`` scale STW by ``1 / (base + slope * heel_deg)``
+    before the water vector is formed, so both the leeway denominator and
+    the current subtraction use corrected boatspeed. Defaults (1.0 / 0.0)
+    are an exact no-op. See ``helmlog.speed_cal``.
     """
     if sog is None or cog is None or stw is None or hdg is None:
+        return None
+
+    stw = corrected_stw(stw, heel_deg, speed_cal_base, speed_cal_heel_slope)
+    if stw is None:
         return None
 
     if heel_deg is not None and leeway_k is not None and leeway_k != 0.0:
