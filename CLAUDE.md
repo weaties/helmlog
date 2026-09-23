@@ -29,6 +29,8 @@ project conventions in `AGENTS.md`, not here.
   - `/integration-test` — pick the federation test layer (in-process / Pi / Docker).
   - `/diagnose` — systematic Pi troubleshooting runbook.
   - `/release-notes` — draft the `RELEASES.md` entry the promote gate requires.
+  - `/dogfood` — browser-verify a UI branch through real journeys, then
+    propose small fixes (red-before test) or escalate; run before `/pr-checklist`.
   - `/debrief`, `/ocs-check`, `/pr-checklist`, `/ideate` — race + workflow helpers.
 
 - **Memory.** File-based memory persists across sessions under
