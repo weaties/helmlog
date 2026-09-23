@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -25,40 +24,22 @@ async def api_list_cameras(
     if not cams:
         return JSONResponse([])
 
-    import helmlog.cameras as cameras_mod
-
-    statuses = await asyncio.gather(
-        *(cameras_mod.get_status(cam) for cam in cams),
-        return_exceptions=True,
-    )
+    statuses = await request.app.state.cameras.statuses(cams)
     result: list[dict[str, Any]] = []
     for cam, st in zip(cams, statuses, strict=True):
         # Mask WiFi passwords in API responses (#210)
         masked_pw = "••••••••" if cam.wifi_password else None
-        if isinstance(st, BaseException):
-            result.append(
-                {
-                    "name": cam.name,
-                    "ip": cam.ip,
-                    "model": cam.model,
-                    "wifi_ssid": cam.wifi_ssid,
-                    "wifi_password": masked_pw,
-                    "recording": False,
-                    "error": str(st),
-                }
-            )
-        else:
-            result.append(
-                {
-                    "name": st.name,
-                    "ip": st.ip,
-                    "model": cam.model,
-                    "wifi_ssid": cam.wifi_ssid,
-                    "wifi_password": masked_pw,
-                    "recording": st.recording,
-                    "error": st.error,
-                }
-            )
+        result.append(
+            {
+                "name": st.name,
+                "ip": st.ip,
+                "model": cam.model,
+                "wifi_ssid": cam.wifi_ssid,
+                "wifi_password": masked_pw,
+                "recording": st.recording,
+                "error": st.error,
+            }
+        )
     return JSONResponse(result)
 
 
@@ -70,13 +51,11 @@ async def api_start_camera(
 ) -> JSONResponse:
     """Manually start recording on a single camera."""
     get_storage(request)
-    import helmlog.cameras as cameras_mod
-
     cams = await load_cameras(request)
     cam = next((c for c in cams if c.name == camera_name), None)
     if cam is None:
         raise HTTPException(404, detail=f"Camera {camera_name!r} not found")
-    status = await cameras_mod.start_camera(cam)
+    status = await request.app.state.cameras.start(cam)
     return JSONResponse(
         {
             "name": status.name,
@@ -95,13 +74,11 @@ async def api_stop_camera(
 ) -> JSONResponse:
     """Manually stop recording on a single camera."""
     get_storage(request)
-    import helmlog.cameras as cameras_mod
-
     cams = await load_cameras(request)
     cam = next((c for c in cams if c.name == camera_name), None)
     if cam is None:
         raise HTTPException(404, detail=f"Camera {camera_name!r} not found")
-    status = await cameras_mod.stop_camera(cam)
+    status = await request.app.state.cameras.stop(cam)
     return JSONResponse(
         {
             "name": status.name,
@@ -233,16 +210,8 @@ async def api_camera_status_crew(
     cams = await load_cameras(request)
     if not cams:
         return JSONResponse({"recording": False, "cameras": []})
-    import helmlog.cameras as cameras_mod
-
-    statuses = await asyncio.gather(
-        *(cameras_mod.get_status(cam) for cam in cams),
-        return_exceptions=True,
-    )
-    recording_cams: list[str] = []
-    for cam, st in zip(cams, statuses, strict=True):
-        if not isinstance(st, BaseException) and st.recording:
-            recording_cams.append(cam.name)
+    statuses = await request.app.state.cameras.statuses(cams)
+    recording_cams: list[str] = [st.name for st in statuses if st.recording]
     return JSONResponse(
         {
             "recording": bool(recording_cams),

@@ -23,19 +23,36 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import httpx
 from loguru import logger
 
+# Camera / CameraStatus live in the pure ``camera_control`` module so the web
+# tier can reference them without importing this hardware module.  Re-exported
+# here for backward compatibility (existing callers import them from
+# ``helmlog.cameras``).
+from helmlog.camera_control import (
+    Camera,
+    CameraStatus,
+    load_cameras_from_storage,
+)
+
 if TYPE_CHECKING:
     from helmlog.storage import Storage
 
-# ---------------------------------------------------------------------------
-# Dataclasses
-# ---------------------------------------------------------------------------
+__all__ = [
+    "Camera",
+    "CameraStatus",
+    "HardwareCameraController",
+    "get_status",
+    "parse_cameras_config",
+    "start_all",
+    "start_camera",
+    "stop_all",
+    "stop_camera",
+]
 
 
 def _default_timeout() -> float:
@@ -52,28 +69,6 @@ def _default_stop_timeout() -> float:
 
 _OSC_PATH = "/osc/commands/execute"
 _OSC_HEADERS = {"X-XSRF-Protected": "1"}
-
-
-@dataclass(frozen=True)
-class Camera:
-    """A configured camera with a human-readable name and network address."""
-
-    name: str
-    ip: str
-    model: str = "insta360-x4"
-    wifi_ssid: str | None = None
-    wifi_password: str | None = None
-
-
-@dataclass
-class CameraStatus:
-    """Result of a camera operation."""
-
-    name: str
-    ip: str
-    recording: bool
-    error: str | None = None
-    latency_ms: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -306,3 +301,48 @@ async def stop_all(
         )
 
     return statuses
+
+
+# ---------------------------------------------------------------------------
+# Controller — the hardware-backed adapter injected on app.state.cameras (#780)
+# ---------------------------------------------------------------------------
+
+
+class HardwareCameraController:
+    """Concrete :class:`~helmlog.camera_control.CameraController` over real OSC
+    cameras.  Constructed by ``main.py`` and injected so web routes never import
+    this hardware module.
+    """
+
+    async def load(self, storage: Storage) -> list[Camera]:
+        return await load_cameras_from_storage(storage)
+
+    async def statuses(self, cams: list[Camera]) -> list[CameraStatus]:
+        results = await asyncio.gather(
+            *(get_status(cam) for cam in cams), return_exceptions=True
+        )
+        out: list[CameraStatus] = []
+        for cam, st in zip(cams, results, strict=True):
+            if isinstance(st, BaseException):
+                out.append(
+                    CameraStatus(name=cam.name, ip=cam.ip, recording=False, error=str(st))
+                )
+            else:
+                out.append(st)
+        return out
+
+    async def start(self, cam: Camera) -> CameraStatus:
+        return await start_camera(cam)
+
+    async def stop(self, cam: Camera) -> CameraStatus:
+        return await stop_camera(cam)
+
+    async def start_all(
+        self, cams: list[Camera], session_id: int, storage: Storage
+    ) -> list[CameraStatus]:
+        return await start_all(cams, session_id, storage)
+
+    async def stop_all(
+        self, cams: list[Camera], session_id: int, storage: Storage
+    ) -> list[CameraStatus]:
+        return await stop_all(cams, session_id, storage)

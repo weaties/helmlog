@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from fastapi.responses import Response
 
     from helmlog.audio import AudioConfig, AudioRecorder, AudioRecorderGroup
+    from helmlog.camera_control import CameraController
     from helmlog.storage import Storage
 
 # Re-export _get_git_info for backward compatibility (used by tests)
@@ -44,12 +45,19 @@ def create_app(
     storage: Storage,
     recorder: AudioRecorder | AudioRecorderGroup | None = None,
     audio_config: AudioConfig | None = None,
+    camera_controller: CameraController | None = None,
 ) -> FastAPI:
     """Create and return the FastAPI application bound to the given Storage.
 
     If *recorder* and *audio_config* are provided, recording starts when a race
     starts and stops when the race ends.  Cameras are managed in the database
     and loaded dynamically for each operation.
+
+    *camera_controller* is the :class:`~helmlog.camera_control.CameraController`
+    that web routes use to drive cameras without importing the hardware module
+    (#780).  ``main.py`` passes the hardware-backed controller; tests and
+    headless runs fall back to a no-op
+    :class:`~helmlog.camera_control.NullCameraController`.
     """
     from slowapi import _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
@@ -83,6 +91,11 @@ def create_app(
     app.state.storage = storage
     app.state.recorder = recorder
     app.state.audio_config = audio_config
+    if camera_controller is None:
+        from helmlog.camera_control import NullCameraController
+
+        camera_controller = NullCameraController()
+    app.state.cameras = camera_controller
     app.state.session_state = AppSessionState()
     app.state.startup_sha = STARTUP_SHA
     app.state.ws_clients = set()  # WebSocket client connections

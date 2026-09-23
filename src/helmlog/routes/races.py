@@ -469,10 +469,8 @@ async def api_start_race(
         cams = await load_cameras(request)
         if not cams:
             return
-        import helmlog.cameras as cameras_mod
-
         try:
-            statuses = await cameras_mod.start_all(cams, rid, storage)
+            statuses = await request.app.state.cameras.start_all(cams, rid, storage)
             for s in statuses:
                 if s.error:
                     logger.warning("Camera {} failed to start: {}", s.name, s.error)
@@ -523,10 +521,8 @@ async def api_end_race(
         cams = await load_cameras(request)
         if not cams:
             return
-        import helmlog.cameras as cameras_mod
-
         try:
-            statuses = await cameras_mod.stop_all(cams, rid, storage)
+            statuses = await request.app.state.cameras.stop_all(cams, rid, storage)
             for s in statuses:
                 if s.error:
                     logger.warning("Camera {} failed to stop: {}", s.name, s.error)
