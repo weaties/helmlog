@@ -134,6 +134,21 @@ def _reconcile_end_utc(proposed: datetime, last_data: datetime | None, grace_s: 
     return proposed
 
 
+@dataclass(frozen=True)
+class TrimPreview:
+    """Preview of a manual "trim non-race data" action for one race (#11).
+
+    ``detected=False`` means the #812 finish heuristic found no plausible
+    cutoff (e.g. a distance race that never returns near the start) — the
+    caller should fall back to a manual time picker rather than this preview.
+    """
+
+    detected: bool
+    cutoff_utc: datetime | None
+    duration_removed_s: float | None
+    rows_by_table: dict[str, int]
+
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -233,7 +248,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 88
+_CURRENT_VERSION: int = 90
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -2151,6 +2166,24 @@ _MIGRATIONS: dict[int, str] = {
         INSERT OR IGNORE INTO llm_consent (id, acknowledged) VALUES (1, 0);
     """,
     86: """
+        -- Simrad race timer state (simradtimerintegration.md).
+        -- Singleton row (id=1) persisting the instrument-driven timer so
+        -- the race-start page reflects the B&G instrument in real time.
+        CREATE TABLE IF NOT EXISTS simrad_timer_state (
+            id                   INTEGER PRIMARY KEY CHECK (id = 1),
+            instrument_timer_on  INTEGER NOT NULL DEFAULT 0,
+            duration_s           INTEGER,
+            t0_utc               TEXT,
+            stopped_remaining_s  REAL,
+            is_running           INTEGER NOT NULL DEFAULT 0,
+            updated_at           TEXT NOT NULL
+        );
+    """,
+    87: """
+        ALTER TABLE simrad_timer_state
+            ADD COLUMN rolling_timer_on INTEGER NOT NULL DEFAULT 0;
+    """,
+    88: """
         -- Per-race crew capture (#761).
         -- races.crew_assumed: 1 = lineup is the boat default (unverified for
         -- this race), 0 = a user explicitly confirmed the lineup. Default 1
@@ -2163,7 +2196,7 @@ _MIGRATIONS: dict[int, str] = {
         ALTER TABLE races ADD COLUMN gear_preset TEXT;
         ALTER TABLE users ADD COLUMN gear_default_lbs REAL;
     """,
-    87: """
+    89: """
         -- GPS-clock provenance per live recording (#794). The Signal K server
         -- runs on the Pi, so delta timestamps inherit the host clock, and an
         -- unsynced boot can stamp a whole recording at the wrong UTC. The
@@ -2173,7 +2206,7 @@ _MIGRATIONS: dict[int, str] = {
         -- (Migration comments must avoid semicolons -- the splitter cuts on them.)
         ALTER TABLE races ADD COLUMN clock_flag TEXT;
     """,
-    88: """
+    90: """
         -- Instrument timer-PGN audit (docs/specs/pgn-audit.md, #789).
         -- Append-only observation log of B&G/Simrad race-timer PGNs seen on
         -- the bus, used to confirm Triton2 hardware support from the web UI.
@@ -4184,6 +4217,72 @@ class Storage:
             return None
         return first, last
 
+    async def preview_race_trim(self, race_id: int, now: datetime) -> TrimPreview:
+        """Suggest a cutoff for trimming non-race data from a race (#11), by
+        reusing the #812 finish-detection heuristic. Never mutates anything —
+        callers must confirm via ``trim_race`` before any data changes."""
+        from helmlog.polar import detect_finish
+
+        race = await self.get_race(race_id)
+        not_detected = TrimPreview(
+            detected=False, cutoff_utc=None, duration_removed_s=None, rows_by_table={}
+        )
+        if race is None:
+            return not_detected
+        window_end = race.end_utc or now
+        candidate_ts, source = await detect_finish(self, race.start_utc, window_end)
+        if source != "heuristic":
+            return not_detected
+        rows_by_table: dict[str, int] = {}
+        db = self._read_conn()
+        for table in self._TELEMETRY_TABLES:
+            cur = await db.execute(
+                f"SELECT COUNT(*) AS n FROM {table} WHERE race_id = ? AND ts > ?",  # noqa: S608
+                (race_id, candidate_ts.isoformat()),
+            )
+            row = await cur.fetchone()
+            rows_by_table[table] = int(row["n"]) if row else 0
+        return TrimPreview(
+            detected=True,
+            cutoff_utc=candidate_ts,
+            duration_removed_s=(window_end - candidate_ts).total_seconds(),
+            rows_by_table=rows_by_table,
+        )
+
+    async def trim_race(self, race_id: int, cutoff_utc: datetime) -> int:
+        """Apply a confirmed trim (#11): move the race's end back to
+        ``cutoff_utc`` (closing it if still open) and detach — ``race_id =
+        NULL``, never deleted — telemetry after the cutoff. Returns the number
+        of rows detached, or 0 if there was nothing to trim."""
+        race = await self.get_race(race_id)
+        if race is None:
+            return 0
+        db = self._conn()
+        if race.end_utc is None:
+            await self.end_race(race_id, cutoff_utc)
+        elif cutoff_utc < race.end_utc:
+            await db.execute(
+                "UPDATE races SET end_utc = ? WHERE id = ?",
+                (cutoff_utc.isoformat(), race_id),
+            )
+            await db.commit()
+            await self._invalidate_race_cache(race_id)
+        else:
+            return 0
+
+        total = 0
+        for table in self._TELEMETRY_TABLES:
+            cur = await db.execute(
+                f"UPDATE {table} SET race_id = NULL WHERE race_id = ? AND ts > ?",  # noqa: S608
+                (race_id, cutoff_utc.isoformat()),
+            )
+            total += cur.rowcount or 0
+        await db.commit()
+        logger.info(
+            "Race {} trimmed at {}: {} rows detached", race_id, cutoff_utc.isoformat(), total
+        )
+        return total
+
     async def _flag_boundary_clock_skew(self, race_id: int, end_utc: datetime) -> None:
         """Flag a race whose start/end boundaries disagree with its own telemetry.
 
@@ -4898,6 +4997,69 @@ class Storage:
         """Drop the singleton state row (back to idle)."""
         db = self._conn()
         await db.execute("DELETE FROM race_start_state WHERE id = 1")
+        await db.commit()
+
+    # ------------------------------------------------------------------
+    # Simrad timer state (migration 86)
+    # ------------------------------------------------------------------
+
+    async def get_simrad_timer_state(self) -> dict[str, Any] | None:
+        """Return the singleton simrad timer state row as a dict, or None."""
+        db = self._read_conn()
+        cur = await db.execute(
+            "SELECT instrument_timer_on, duration_s, t0_utc,"
+            "       stopped_remaining_s, is_running, updated_at, rolling_timer_on"
+            "  FROM simrad_timer_state WHERE id = 1"
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "instrument_timer_on": bool(row[0]),
+            "duration_s": row[1],
+            "t0_utc": row[2],
+            "stopped_remaining_s": row[3],
+            "is_running": bool(row[4]),
+            "updated_at": row[5],
+            "rolling_timer_on": bool(row[6]),
+        }
+
+    async def upsert_simrad_timer_state(
+        self,
+        *,
+        instrument_timer_on: bool,
+        duration_s: int | None,
+        t0_utc: datetime | None,
+        stopped_remaining_s: float | None,
+        is_running: bool,
+        rolling_timer_on: bool = False,
+        now_utc: datetime,
+    ) -> None:
+        """Upsert the singleton simrad timer state row."""
+        db = self._conn()
+        await db.execute(
+            "INSERT INTO simrad_timer_state"
+            " (id, instrument_timer_on, duration_s, t0_utc,"
+            "  stopped_remaining_s, is_running, rolling_timer_on, updated_at)"
+            " VALUES (1, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(id) DO UPDATE SET"
+            "   instrument_timer_on=excluded.instrument_timer_on,"
+            "   duration_s=excluded.duration_s,"
+            "   t0_utc=excluded.t0_utc,"
+            "   stopped_remaining_s=excluded.stopped_remaining_s,"
+            "   is_running=excluded.is_running,"
+            "   rolling_timer_on=excluded.rolling_timer_on,"
+            "   updated_at=excluded.updated_at",
+            (
+                int(instrument_timer_on),
+                duration_s,
+                t0_utc.isoformat() if t0_utc else None,
+                stopped_remaining_s,
+                int(is_running),
+                int(rolling_timer_on),
+                now_utc.isoformat(),
+            ),
+        )
         await db.commit()
 
     # ------------------------------------------------------------------

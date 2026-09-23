@@ -44,6 +44,7 @@ def create_app(
     storage: Storage,
     recorder: AudioRecorder | AudioRecorderGroup | None = None,
     audio_config: AudioConfig | None = None,
+    can_writer: object | None = None,
 ) -> FastAPI:
     """Create and return the FastAPI application bound to the given Storage.
 
@@ -83,6 +84,7 @@ def create_app(
     app.state.storage = storage
     app.state.recorder = recorder
     app.state.audio_config = audio_config
+    app.state.can_writer = can_writer
     app.state.session_state = AppSessionState()
     app.state.startup_sha = STARTUP_SHA
     app.state.ws_clients = set()  # WebSocket client connections
@@ -107,6 +109,13 @@ def create_app(
 
     # -- Static files --
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+    # -- Local video files (served at /videos/<filename>) --
+    import pathlib
+
+    _videos_dir = pathlib.Path(os.environ.get("VIDEOS_DIR", "/home/mark/videos"))
+    if _videos_dir.is_dir():
+        app.mount("/videos", StaticFiles(directory=str(_videos_dir)), name="videos")
 
     # -- Peer API (federation endpoints for remote boats) --
     from helmlog.peer_api import _limiter as peer_limiter
@@ -157,6 +166,7 @@ def create_app(
         "/auth/reset-password",
         "/auth/forgot-password",
         "/static",
+        "/api/internal/timer-event",
     }
 
     @app.middleware("http")

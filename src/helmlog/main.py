@@ -15,7 +15,7 @@ import asyncio
 import os
 import signal
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from loguru import logger
@@ -124,6 +124,7 @@ async def _web_loop(
     storage: object,
     recorder: object | None = None,
     audio_config: object | None = None,
+    can_writer: object | None = None,
 ) -> None:
     """Background task: serve the race-marking web interface on WEB_PORT (default 3002).
 
@@ -148,7 +149,7 @@ async def _web_loop(
         cfg = RaceConfig()
         server = uvicorn.Server(
             uvicorn.Config(
-                create_app(storage, _recorder, _audio_config),
+                create_app(storage, _recorder, _audio_config, can_writer),
                 host=cfg.web_host,
                 port=cfg.web_port,
                 log_level="warning",
@@ -456,7 +457,13 @@ async def _run() -> None:
             weather_task = asyncio.create_task(asyncio.sleep(1e9))  # no-op placeholder
             tide_task = asyncio.create_task(asyncio.sleep(1e9))
         aruco_task = asyncio.create_task(_aruco_poll_loop(storage))
-        web_task = asyncio.create_task(_web_loop(storage, recorder, audio_config))
+
+        from helmlog.can_writer import CANWriter
+
+        can_writer = CANWriter()
+        await can_writer.start()
+
+        web_task = asyncio.create_task(_web_loop(storage, recorder, audio_config, can_writer))
         monitor_task = asyncio.create_task(monitor_loop())
         # Eager re-enrichment of maneuver sessions whose cached payload is
         # behind the current ENRICH_CACHE_VERSION (#612 / #613). Runs once
@@ -484,13 +491,23 @@ async def _run() -> None:
         try:
             if data_source == "signalk":
                 from helmlog.sk_reader import SKReader, SKReaderConfig
+                from helmlog.timesync import GpsTimeSyncer
 
-                sk_config = SKReaderConfig()
+                gps_syncer: GpsTimeSyncer | None = None
+                try:
+                    gps_syncer = GpsTimeSyncer()
+                except OSError as exc:
+                    logger.warning("GpsTimeSyncer unavailable (chrony SHM not ready?): {}", exc)
+
+                sk_config = SKReaderConfig(
+                    on_gps_time=gps_syncer.update if gps_syncer else None,
+                )
                 logger.info(
-                    "Logger starting: source=signalk host={}:{} db={}",
+                    "Logger starting: source=signalk host={}:{} db={} gps_timesync={}",
                     sk_config.host,
                     sk_config.port,
                     storage_config.db_path,
+                    gps_syncer is not None,
                 )
                 reader = SKReader(sk_config)
                 last_clock_flag = reader.clock_flag
@@ -530,6 +547,7 @@ async def _run() -> None:
         except asyncio.CancelledError:
             logger.info("Shutdown signal received — flushing and stopping")
         finally:
+            await can_writer.stop()
             aruco_task.cancel()
             weather_task.cancel()
             tide_task.cancel()
@@ -780,6 +798,145 @@ async def _link_video(url: str, sync_utc_iso: str, sync_offset_s: float) -> None
     # Print a quick sanity-check URL at the sync point itself
     check = session.url_at(sync_utc)
     logger.info("Linked. Verify sync point: {}", check)
+
+
+# ---------------------------------------------------------------------------
+# gopro-match
+# ---------------------------------------------------------------------------
+
+
+async def _gopro_match(path: str, timezone: str, db_path: str | None) -> None:
+    """Probe a local GoPro/MP4 file and print candidate races to match."""
+    from helmlog.gopro import GoProProbeError, match_sessions_to_video, probe_video
+    from helmlog.storage import Storage, StorageConfig
+
+    p = Path(path).expanduser().resolve()
+    if not p.is_file():
+        logger.error("Not a file: {}", p)
+        sys.exit(1)
+
+    try:
+        video = await asyncio.to_thread(probe_video, p, timezone)
+    except GoProProbeError as exc:
+        logger.error("Probing video failed: {}", exc)
+        sys.exit(1)
+
+    print(f"path:         {video.path}")
+    print(f"duration_s:   {video.duration_s:.1f}s" if video.duration_s else "duration_s:   unknown")
+    print(f"creation_utc: {video.creation_utc}  [{video.gps_source}]")
+    print(f"gps_position: {video.gps_position}")
+
+    if video.start_utc is None or video.end_utc is None:
+        print("Video missing timestamps; cannot match to races.")
+        return
+
+    cfg = StorageConfig(db_path=db_path) if db_path else StorageConfig()
+    storage = Storage(cfg)
+    await storage.connect()
+    try:
+        start = video.start_utc - timedelta(hours=1)
+        end = video.end_utc + timedelta(hours=1)
+        races = await storage.list_races_in_range(start, end)
+        sessions = [
+            {"id": r.id, "name": r.name, "start_utc": r.start_utc, "end_utc": r.end_utc}
+            for r in races
+        ]
+        candidates = match_sessions_to_video(video, sessions, min_overlap_s=5)
+    finally:
+        await storage.close()
+
+    if not candidates:
+        print("No matching races found.")
+        return
+
+    print("\nCandidate matches:")
+    for c in candidates:
+        s = c["session"]
+        print(
+            f"  id={s['id']} name={s.get('name')!r}"
+            f" start={s['start_utc']} overlap_s={c['overlap_s']:.1f}"
+            f" frac={c['video_fraction']:.2f}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# link-local-video
+# ---------------------------------------------------------------------------
+
+_DEFAULT_VIDEOS_DIR = Path(os.environ.get("VIDEOS_DIR", "/home/mark/videos"))
+
+
+async def _link_local_video(
+    race_id: int,
+    path: str,
+    label: str,
+    sync_utc_iso: str | None,
+    sync_offset_s: float,
+    videos_dir: Path,
+    db_path: str | None,
+) -> None:
+    """Copy a local MP4 to the videos directory and link it to a race."""
+    import shutil
+
+    from helmlog.storage import Storage, StorageConfig
+
+    src = Path(path).expanduser().resolve()
+    if not src.is_file():
+        logger.error("Not a file: {}", src)
+        sys.exit(1)
+
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    dst = videos_dir / src.name
+    if not dst.exists():
+        shutil.copy2(src, dst)
+        logger.info("Copied {} → {}", src, dst)
+    else:
+        logger.info("Already present: {}", dst)
+
+    cfg = StorageConfig(db_path=db_path) if db_path else StorageConfig()
+    storage = Storage(cfg)
+    await storage.connect()
+    try:
+        race = await storage.get_race(race_id)
+        if race is None:
+            logger.error("Race {} not found", race_id)
+            sys.exit(1)
+
+        if sync_utc_iso:
+            try:
+                sync_utc = datetime.fromisoformat(sync_utc_iso).replace(tzinfo=UTC)
+            except ValueError as exc:
+                logger.error("Invalid sync-utc: {}", exc)
+                sys.exit(1)
+        else:
+            sync_utc = race.start_utc
+
+        url = f"/videos/{src.name}"
+        video_id = src.name
+
+        row_id = await storage.add_race_video(
+            race_id=race_id,
+            youtube_url=url,
+            video_id=video_id,
+            title=label or src.stem,
+            label=label,
+            sync_utc=sync_utc,
+            sync_offset_s=sync_offset_s,
+        )
+    finally:
+        await storage.close()
+
+    logger.info(
+        "Linked: race={} video={} url={} sync_utc={} (row {})",
+        race_id,
+        video_id,
+        url,
+        sync_utc,
+        row_id,
+    )
+    print(f"Linked race {race_id} → {url}")
+    print(f"Sync: {sync_utc} + {sync_offset_s}s offset")
+    print(f"Open in browser: http://localhost/sessions/{race_id}/")
 
 
 # ---------------------------------------------------------------------------
@@ -1755,6 +1912,52 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Seconds into the video at --sync-utc (default: 0)",
     )
 
+    gp = sub.add_parser(
+        "gopro-match",
+        help="Probe a GoPro/MP4 file and suggest matching races from history",
+    )
+    gp.add_argument("--path", required=True, metavar="FILE", help="Path to GoPro MP4")
+    gp.add_argument(
+        "--timezone",
+        default="UTC",
+        metavar="TZ",
+        help="Timezone for naive creation timestamps (default: UTC)",
+    )
+    gp.add_argument(
+        "--db",
+        default=None,
+        metavar="DB",
+        help="Path to HelmLog SQLite database (overrides DB_PATH env / default)",
+    )
+
+    llv = sub.add_parser(
+        "link-local-video",
+        help="Copy a local MP4 to the videos directory and link it to a race",
+    )
+    llv.add_argument("--race", type=int, required=True, metavar="ID", help="Race ID to link to")
+    llv.add_argument("--path", required=True, metavar="FILE", help="Path to MP4 file")
+    llv.add_argument("--label", default="", metavar="LABEL", help="Short display label")
+    llv.add_argument(
+        "--sync-utc",
+        default=None,
+        metavar="DATETIME",
+        help="UTC time when video position==0 (ISO 8601; default: race start_utc)",
+    )
+    llv.add_argument(
+        "--sync-offset",
+        type=float,
+        default=0.0,
+        metavar="SEC",
+        help="Video offset (seconds) at sync-utc (default: 0)",
+    )
+    llv.add_argument(
+        "--videos-dir",
+        default=str(_DEFAULT_VIDEOS_DIR),
+        metavar="DIR",
+        help=f"Directory to copy videos into (default: {_DEFAULT_VIDEOS_DIR})",
+    )
+    llv.add_argument("--db", default=None, metavar="DB", help="Path to HelmLog SQLite database")
+
     sub.add_parser("list-videos", help="List linked YouTube videos")
 
     sub.add_parser("list-cameras", help="Show configured cameras and their status")
@@ -1896,6 +2099,20 @@ def main() -> None:
                 sync_utc_iso = args.start if args.start else args.sync_utc
                 sync_offset = 0.0 if args.start else args.sync_offset
                 asyncio.run(_link_video(args.url, sync_utc_iso, sync_offset))
+            case "gopro-match":
+                asyncio.run(_gopro_match(args.path, args.timezone, args.db))
+            case "link-local-video":
+                asyncio.run(
+                    _link_local_video(
+                        args.race,
+                        args.path,
+                        args.label,
+                        args.sync_utc,
+                        args.sync_offset,
+                        Path(args.videos_dir),
+                        args.db,
+                    )
+                )
             case "list-videos":
                 asyncio.run(_list_videos())
             case "list-cameras":

@@ -2,7 +2,7 @@
 {% block title %}{{ session_name }} — HelmLog{% endblock %}
 
 {% block extra_css %}
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="/static/leaflet.css"/>
 <link rel="stylesheet" href="/static/vendor/highlight-github-dark.min.css?v={{ git_sha }}"/>
 <style>
 .field{background:var(--bg-input);border:1px solid var(--accent-strong);border-radius:6px;color:var(--text-primary)}
@@ -577,7 +577,7 @@ body.live-race #session-tags-row{display:none!important}
 {% endblock %}
 
 {% block scripts %}
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/leaflet.js"></script>
 <script src="/static/tag-chip.js?v={{ git_sha }}"></script>
 <script src="/static/tag-picker.js?v={{ git_sha }}"></script>
 <script src="/static/anchor-picker.js?v={{ git_sha }}"></script>

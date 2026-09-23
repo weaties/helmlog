@@ -250,17 +250,20 @@ async def race_window(
     finish: datetime = end
     finish_source: FinishSource = "end_utc"
     try:
-        finish, finish_source = await _detect_finish(storage, gun, end)
+        finish, finish_source = await detect_finish(storage, gun, end)
     except Exception as exc:  # noqa: BLE001
         logger.debug("Polar: finish heuristic failed, using end_utc: {}", exc)
     return RaceWindow(gun=gun, finish=finish, gun_source=gun_source, finish_source=finish_source)
 
 
-async def _detect_finish(
+async def detect_finish(
     storage: Storage, gun: datetime, end: datetime
 ) -> tuple[datetime, FinishSource]:
     """Fetch track + wind over [gun, end], build (ts, lat, lon, abs_twa) samples,
-    and hand them to the pure ``_detect_finish_from_track`` heuristic."""
+    and hand them to the pure ``_detect_finish_from_track`` heuristic.
+
+    Public because the manual race-trim preview (#11) reuses this directly,
+    not just ``race_window``'s post-hoc polar trimming."""
     positions = await storage.query_range("positions", gun, end)
     if not positions:
         return end, "end_utc"

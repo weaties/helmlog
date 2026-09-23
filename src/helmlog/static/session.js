@@ -1962,6 +1962,8 @@ async function loadVideoPlayer() {
   const vid = videos.find(v => v.video_id) || videos[0];
   if (!vid || !vid.video_id) return;
 
+  const isLocal = vid.youtube_url && vid.youtube_url.startsWith('/');
+
   _videoSync = {
     syncUtc: new Date(vid.sync_utc),
     syncOffsetS: vid.sync_offset_s || 0,
@@ -1970,6 +1972,7 @@ async function loadVideoPlayer() {
     videoId: vid.video_id,
     allVideos: videos,
     activeIdx: videos.indexOf(vid),
+    isLocal,
   };
 
   const container = document.getElementById('video-container');
@@ -1985,10 +1988,14 @@ async function loadVideoPlayer() {
     }).join('');
   }
 
-  // Load YouTube IFrame API
-  const tag = document.createElement('script');
-  tag.src = 'https://www.youtube.com/iframe_api';
-  document.head.appendChild(tag);
+  if (isLocal) {
+    _createLocalPlayer(vid.youtube_url);
+  } else {
+    // Load YouTube IFrame API
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    document.head.appendChild(tag);
+  }
 }
 
 // YouTube API calls this global function when ready
@@ -2025,6 +2032,36 @@ function _createPlayer(videoId) {
     },
   });
   _ensureWatchOnYoutubeLink();
+}
+
+// Create an HTML5 <video> player for a locally-served file and install a
+// YT-Player-compatible adapter on _videoSync.player so the rest of the
+// session code (seekTo, getCurrentTime, pauseVideo, getPlayerState) works
+// unchanged without knowing whether the source is YouTube or a local file.
+function _createLocalPlayer(url) {
+  const wrap = document.getElementById('yt-player');
+  wrap.innerHTML = '';
+  const el = document.createElement('video');
+  el.src = url;
+  el.controls = true;
+  el.preload = 'metadata';
+  el.style.cssText = 'width:100%;height:100%;display:block;background:#000';
+  wrap.appendChild(el);
+
+  const adapter = {
+    getCurrentTime() { return el.currentTime; },
+    seekTo(t) { el.currentTime = t; },
+    pauseVideo() { el.pause(); },
+    playVideo() { el.play().catch(() => {}); },
+    getPlayerState() { return el.paused ? 2 : 1; },
+    loadVideoById() { /* no-op: local single-file */ },
+  };
+  _videoSync.player = adapter;
+
+  el.addEventListener('loadedmetadata', () => _onVideoReady());
+  el.addEventListener('play', () => _onPlayerStateChange({data: 1}));
+  el.addEventListener('pause', () => _onPlayerStateChange({data: 2}));
+  el.addEventListener('ended', () => _onPlayerStateChange({data: 0}));
 }
 
 // Render the "Watch on YouTube" link once. The URL is computed live in the

@@ -2595,3 +2595,74 @@ off-network; iterate on auth, real-time, and PII-bearing data later.
 - The federation-as-transport option is attractive — it means the cloud
   isn't a special case in the codebase, just a peer with unusually high
   uptime. Worth a closer look before committing to a bespoke sync path.
+
+---
+
+## IDX-039: GoPro GPS-time auto-sync — zero-friction video-to-race alignment
+
+- **Date captured:** 2026-06-07
+- **Origin:** Conversation about whether HelmLog race data (GPS-timestamped via
+  Signal K) could be used to sync GoPro video, which embeds GPS UTC timestamps
+  in its GPMF metadata track.
+- **Status:** `raw`
+- **Related:** **IDX-009** (self-hosted video upload + auto-sync from file
+  metadata — broader, lower-precision precursor), `video.py`, `youtube.py`,
+  `insta360.py`, `storage.py` (`positions` table), `helmlog link-video` CLI,
+  YouTube auto-association pipeline
+
+**Description:**
+GoPro cameras (Hero 9 and later) embed a GPMF (GoPro Metadata Format) telemetry
+track directly in the `.MP4` file. This track includes GPS coordinates and UTC
+timestamps at up to 18 Hz. HelmLog's `positions` table is also UTC-referenced,
+with timestamps derived from the GNSS sentence received via Signal K (PGN 126992
+/ `$GNRMC`). Because both clocks are disciplined to the same GPS constellation,
+they agree to well under a second without any manual calibration.
+
+This makes fully automatic, sub-second video-to-race sync achievable:
+
+1. **Extract GPMF GPS track** from the `.MP4` — `ffmpeg`, `gopro-telemetry`, or
+   `gpmf-parser` (Python) can pull the GPS samples and their UTC timestamps.
+2. **Match to a HelmLog session** — find the race whose `positions` time range
+   and lat/lon track overlap the GoPro GPS track. Overlap threshold can be loose
+   (e.g. ≥ 60 s within 500 m) to handle the boat being stationary at the dock
+   while the camera is recording.
+3. **Compute the sync offset** — compare GPS timestamps in both tracks; ideally
+   offset ≈ 0 s (same constellation). Store as a `video_links` row using the
+   existing sync-point model.
+4. **Downstream features work immediately** — the replay scrubber, deep-links
+   (`?t=<seconds>`), and maneuver video overlays all consume `video_links` rows;
+   no further plumbing needed.
+
+Compared to the current `helmlog link-video --sync-utc … --sync-offset …`
+workflow, this eliminates the manual step of identifying a synchronisation moment
+visible in both the video and the instrument record.
+
+Compared to IDX-009 (which targets any video file and syncs from file creation
+timestamp), this is GoPro-specific but an order of magnitude more accurate:
+creation timestamp gives ±1 s at best; GPMF GPS time gives ±0.1 s or better.
+The two ideas are complementary — IDX-009's file-creation-timestamp fallback
+could still handle iPhone / GoPro-without-GPS-fix cases.
+
+**Open design questions:**
+
+- **Video hosting path:** Does the GoPro video still go to YouTube (and the
+  `video_links` row stores a YouTube URL), or does this imply local/self-hosted
+  storage? Likely YouTube for now — the sync CLI only needs a video URL to store,
+  not the file itself post-analysis.
+- **GPS cold-start / no-fix models:** Older GoPro models or cold-start shots may
+  have no GPS track, or a track that starts several minutes into recording while
+  the receiver acquires a fix. Need a graceful fallback (file-creation timestamp
+  from IDX-009's approach, or manual `--sync-utc`).
+- **Multi-clip sessions:** GoPro splits long recordings into ~4 GB chapters.
+  Need to handle multiple `.MP4` files mapping to one session.
+- **`helmlog sync-gopro` CLI vs. web upload UI:** CLI is lower-friction for a
+  solo operator; a drag-and-drop upload page on `/admin` would reach crew who
+  don't have terminal access.
+
+**Notes:**
+- *2026-06-07:* Initial capture. Arose from noticing that HelmLog's `ts` column
+  and GoPro GPMF timestamps share the same UTC reference — the sync problem is
+  essentially already solved by GPS. The main implementation work is GPMF
+  extraction + session-matching heuristic. Cross-references IDX-009 which covers
+  the broader self-hosted video story; this entry focuses on the GoPro-specific,
+  GPS-grade precision path.
