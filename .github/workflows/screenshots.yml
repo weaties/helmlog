@@ -1,0 +1,109 @@
+name: Screenshots
+
+# Capture the web UI against a synthetic, PII-free demo DB and publish the PNGs
+# to the orphan `screenshots` branch — one commit per build, so the visual
+# history is git-diffable (and release notes can diff a build against the last
+# stage tag to show what changed). Never runs on the Pi; dev/CI only.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # push to the screenshots branch
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2 libsndfile1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync
+
+      # shot-scraper's Playwright browser is the expensive download — cache it.
+      # Bust the key when the shot-scraper version changes (it pins a browser).
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-shotscraper
+
+      - name: Install shot-scraper browser
+        run: uvx shot-scraper install
+
+      - name: Seed synthetic demo DB
+        run: uv run python scripts/screenshots/seed_demo.py --db /tmp/demo.db --sessions 4
+
+      - name: Capture screenshots
+        run: SHOTS_DB=/tmp/demo.db uvx shot-scraper multi scripts/screenshots/shots.yml
+        # PNGs land in the working directory by the output: names in shots.yml.
+
+      - name: Publish to screenshots branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          shots=(*.png)
+          if [ ${#shots[@]} -eq 0 ]; then
+            echo "::error::no screenshots were produced"
+            exit 1
+          fi
+
+          mkdir -p /tmp/shots
+          mv "${shots[@]}" /tmp/shots/
+
+          url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # Fetch the existing screenshots branch, or start a fresh orphan.
+          if git clone --branch screenshots --depth 1 "$url" /tmp/sb 2>/dev/null; then
+            cd /tmp/sb
+          else
+            git clone --depth 1 "$url" /tmp/sb
+            cd /tmp/sb
+            git checkout --orphan screenshots
+            git rm -rfq . || true
+          fi
+
+          rm -f ./*.png
+          cp /tmp/shots/*.png .
+
+          # A browsable index so the branch renders on GitHub and diffs read well.
+          {
+            echo "# Web UI screenshots"
+            echo
+            echo "Auto-generated from a synthetic, PII-free demo DB by"
+            echo "\`.github/workflows/screenshots.yml\`. Do not edit by hand."
+            echo
+            echo "- Build: \`${GITHUB_SHA}\`"
+            echo "- Ref: \`${GITHUB_REF_NAME}\`"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            for f in $(ls *.png | sort); do
+              echo "## ${f%.png}"
+              echo
+              echo "![${f%.png}](./${f})"
+              echo
+            done
+          } > README.md
+
+          git add -A
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "screenshots: ${GITHUB_SHA::12} (${GITHUB_REF_NAME})" \
+            || { echo "No visual changes since last build."; exit 0; }
+          git push "$url" HEAD:screenshots
