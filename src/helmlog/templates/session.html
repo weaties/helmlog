@@ -231,6 +231,10 @@ body.live-race #session-tags-row{display:none!important}
   </div>
   <div id="yt-player-wrap" style="position:relative;aspect-ratio:16/9;border-radius:8px;overflow:hidden">
     <div id="yt-player" style="width:100%;height:100%"></div>
+    <!-- Drag-to-pan for 360° videos (#844). Shown only for spherical videos;
+         leaves YouTube's bottom control bar uncovered. -->
+    <div id="yt-pan-layer" title="Drag to look around · click to play/pause"
+      style="display:none;position:absolute;top:0;left:0;right:0;bottom:48px;cursor:grab;touch-action:none"></div>
   </div>
 </div>
 
@@ -582,6 +586,7 @@ body.live-race #session-tags-row{display:none!important}
 <script src="/static/tag-picker.js?v={{ git_sha }}"></script>
 <script src="/static/anchor-picker.js?v={{ git_sha }}"></script>
 <script src="/static/maneuver_viz.js?v={{ git_sha }}"></script>
+<script src="/static/video_pan.js?v={{ git_sha }}"></script>
 <!-- Markdown rendering for comment bodies (#809): vendored, no build step.
      Load before session.js so `markdownit`, `DOMPurify`, `hljs`, and
      `markdownitTaskLists` are global when renderMarkdown() first runs. -->

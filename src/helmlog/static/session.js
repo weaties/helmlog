@@ -8,6 +8,7 @@ let _session = null;
 let _map = null;
 let _trackData = null; // {latLngs, timestamps (as Date), line, cursor}
 let _videoSync = null; // {syncUtc (Date), syncOffsetS, durationS, player}
+let _videoPan = null; // {refresh} from attachVideoPan() — 360 drag-to-pan (#844)
 let _ytReady = false;
 let _syncTimer = null;
 
@@ -2005,10 +2006,8 @@ function _createPlayer(videoId) {
   }
   // Use the standard YT.Player div-based instantiation. The manual iframe
   // approach broke YouTube's embedder identity verification (Error 153).
-  // 360 video panning is NOT supported in YouTube iframe embeds for
-  // third-party domains regardless of `allow` attributes — it only works on
-  // youtube.com itself and in the YouTube app. We expose a "Watch on YouTube"
-  // link below the player as the workaround for spherical videos.
+  // The embed ignores mouse drags on 360 videos, but the IFrame API's
+  // setSphericalProperties() works — #yt-pan-layer (video_pan.js) drives it.
   _videoSync.player = new YT.Player('yt-player', {
     height: '100%',
     width: '100%',
@@ -2025,6 +2024,8 @@ function _createPlayer(videoId) {
     },
   });
   _ensureWatchOnYoutubeLink();
+  const panLayer = document.getElementById('yt-pan-layer');
+  if (panLayer) _videoPan = attachVideoPan(panLayer, () => _videoSync && _videoSync.player);
 }
 
 // Render the "Watch on YouTube" link once. The URL is computed live in the
@@ -2085,6 +2086,7 @@ function _startYtScrubWatch() {
 
 function _onVideoReady() {
   _startYtScrubWatch();
+  if (_videoPan) _videoPan.refresh();
   // Video is a consumer: seek to the requested UTC if it's within range.
   // Large jumps (>2 s) pause the player so audio doesn't keep playing from
   // wherever the user just clicked. Small deltas (playback ticks) don't
@@ -2149,6 +2151,9 @@ function switchVideo(idx) {
 }
 
 function _onPlayerStateChange(event) {
+  // Re-check on every state change: switchVideo() may load a flat video
+  // after a 360 one (or vice versa).
+  if (_videoPan) _videoPan.refresh();
   // YT.PlayerState.PLAYING = 1, PAUSED = 2, ENDED = 0, BUFFERING = 3
   if (event.data === 1) {
     // If we're inside the echo window from a recent programmatic seek,
