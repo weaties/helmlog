@@ -92,7 +92,7 @@ fi
 # defaults (the Pi's .env sets neither). Read from the last synced replica.
 # A failed read skips the step — guessing the mode could check out the wrong code.
 pi_settings() {
-  sqlite3 -separator '=' "file:$REPLICA?mode=ro" \
+  sqlite3 -separator '=' "$REPLICA" \
     "SELECT key, value FROM app_settings WHERE key IN ('DEPLOY_MODE', 'DEPLOY_BRANCH')"
 }
 
