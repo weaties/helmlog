@@ -10,6 +10,9 @@ footer,.site-nav{display:none}
 .compare-cell{position:relative;background:var(--bg-secondary);border:1px solid var(--border);border-radius:4px;overflow:hidden;display:flex;flex-direction:column}
 .compare-cell .yt-wrap{flex:1;min-height:0;border-radius:3px;overflow:hidden;background:#000;position:relative}
 .compare-cell .yt-wrap iframe{width:100%;height:100%}
+/* Drag-to-pan for 360° videos (#846): above the iframe, below the data overlays,
+   clear of YouTube's control bar. Shown by video_pan.js for spherical videos only. */
+.yt-pan-layer{display:none;position:absolute;top:0;left:0;right:0;bottom:48px;z-index:1;cursor:grab;touch-action:none}
 .compare-cell .cell-label{font-size:.68rem;color:var(--text-secondary);padding:2px 4px;line-height:1.3;display:flex;align-items:center;gap:4px;overflow:hidden}
 .compare-cell .cell-label b{color:var(--text-primary)}
 .cell-dismiss{position:absolute;top:4px;right:4px;z-index:10;background:rgba(0,0,0,.6);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:.75rem;cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .15s}
@@ -102,5 +105,6 @@ footer,.site-nav{display:none}
 
 {% block scripts %}
 <script src="/static/shared.js?v={{ git_sha }}"></script>
+<script src="/static/video_pan.js?v={{ git_sha }}"></script>
 <script src="/static/compare.js?v={{ git_sha }}"></script>
 {% endblock %}

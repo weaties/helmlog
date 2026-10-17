@@ -294,6 +294,7 @@ function _buildGrid() {
       '<button class="cell-dismiss" onclick="dismissCell(' + i + ')" title="Remove from comparison">&#10005;</button>'
       + '<div class="yt-wrap" id="' + wrapId + '" style="height:' + Math.max(60, videoH) + 'px">'
       + '<div id="' + divId + '" style="width:100%;height:100%"></div>'
+      + '<div class="yt-pan-layer" id="yt-pan-' + i + '" title="Drag to look around · click to play/pause"></div>'
       + trackSvg
       + courseSvg
       + gaugeSvg
@@ -343,6 +344,10 @@ function _updateSubtitle() {
 // ---------------------------------------------------------------------------
 
 function _createPlayer(divId, videoId, cueSeconds, maneuver, idx, nudge) {
+  // Drag-to-pan for 360° videos (#846). YT reports no spherical properties
+  // until playback starts, so visibility is re-checked on every state change.
+  let pan = null;
+  const panLayer = document.getElementById('yt-pan-' + idx);
   const player = new YT.Player(divId, {
     width: '100%',
     height: '100%',
@@ -362,9 +367,14 @@ function _createPlayer(divId, videoId, cueSeconds, maneuver, idx, nudge) {
         ev.target.setPlaybackRate(speed);
         // Initial gauge + track dot update for the paused state
         setTimeout(_tickUpdate, 500);
+        if (pan) pan.refresh();
+      },
+      onStateChange: function () {
+        if (pan) pan.refresh();
       },
     },
   });
+  if (panLayer) pan = attachVideoPan(panLayer, () => player);
   _players.push({ player, cueSeconds, maneuver, idx, nudge: nudge || 0 });
 }
 
