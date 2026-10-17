@@ -208,6 +208,13 @@ body.live-race #session-tags-row{display:none!important}
             style="background:none;border:1px solid var(--border);color:var(--text-secondary);border-radius:4px;padding:4px 10px;font-size:.75rem;cursor:pointer">
       Rename
     </button>
+    <button id="coach-share-btn"
+            type="button"
+            onclick="openCoachShareDialog({sessionIds: [{{ session_id }}], label: {{ ('Coach link — ' ~ session_name)|tojson }}, landingPath: location.pathname})"
+            title="Create an expiring, read-only link for a coach (#849)"
+            style="background:none;border:1px solid var(--border);color:var(--text-secondary);border-radius:4px;padding:4px 10px;font-size:.75rem;cursor:pointer">
+      Share with coach
+    </button>
     {% endif %}
   </div>
   {% if user_role != "coach" %}
@@ -597,6 +604,7 @@ body.live-race #session-tags-row{display:none!important}
 <script src="/static/vendor/purify.min.js?v={{ git_sha }}"></script>
 <script src="/static/vendor/highlight.min.js?v={{ git_sha }}"></script>
 <script src="/static/session.js?v={{ git_sha }}"></script>
+{% if user_role == "admin" %}<script src="/static/coach_share.js?v={{ git_sha }}"></script>{% endif %}
 {% if user_role != "coach" %}<script src="/static/llm.js?v={{ git_sha }}"></script>{% endif %}
 <script>
 async function renameSession() {

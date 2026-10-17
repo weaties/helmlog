@@ -484,4 +484,5 @@ async def logout(request: Request) -> Response:
         await storage.delete_session(cookie["session"].value)
     response = RedirectResponse(url="/login", status_code=303)
     response.delete_cookie("session")
+    response.delete_cookie("coach_link")  # coach share link (#849)
     return response

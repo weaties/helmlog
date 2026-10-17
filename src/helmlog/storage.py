@@ -7749,6 +7749,11 @@ class Storage:
         """All grants, newest first, each with its ``session_ids``."""
         return await self._coach_grant_rows("", ())
 
+    async def get_coach_grant_by_token_hash(self, token_hash: str) -> dict[str, Any] | None:
+        """The link grant whose token hashes to *token_hash* (#849), any state."""
+        rows = await self._coach_grant_rows("WHERE kind = 'link' AND token_hash = ?", (token_hash,))
+        return rows[0] if rows else None
+
     async def list_coach_grants_for_email(self, email: str) -> list[dict[str, Any]]:
         """Account grants for a coach email (any state)."""
         return await self._coach_grant_rows(

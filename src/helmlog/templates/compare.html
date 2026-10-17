@@ -61,6 +61,7 @@ footer,.site-nav{display:none}
   <span style="flex:1"></span>
   <div class="compare-controls" id="compare-controls" style="display:none">
     <button id="play-all-btn" type="button" onclick="togglePlayAll()">&#9654; Play All</button>
+    {% if user_role == "admin" %}<button id="coach-share-btn" type="button" onclick="shareCompareWithCoach()" title="Create an expiring, read-only link to this comparison for a coach" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border)">Share with coach</button>{% endif %}
     <button type="button" onclick="seekAllToStart()" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border)">&#9198; Reset</button>
     <button id="mute-btn" type="button" onclick="toggleMuteAll()" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border)">&#128263; Unmute</button>
     <label style="font-size:.75rem;color:var(--text-secondary)">Speed
@@ -107,4 +108,5 @@ footer,.site-nav{display:none}
 <script src="/static/shared.js?v={{ git_sha }}"></script>
 <script src="/static/video_pan.js?v={{ git_sha }}"></script>
 <script src="/static/compare.js?v={{ git_sha }}"></script>
+{% if user_role == "admin" %}<script src="/static/coach_share.js?v={{ git_sha }}"></script>{% endif %}
 {% endblock %}

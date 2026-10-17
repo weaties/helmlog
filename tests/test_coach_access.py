@@ -424,7 +424,9 @@ async def test_route_walk_guard(world: World, http: httpx.AsyncClient) -> None:
         if not isinstance(route, Route) or not route.methods:
             continue
         path = _concrete(route.path, world.other)
-        if path.startswith(("/static", "/auth/", "/co-op/")) or path in (
+        # Public routes (no principal needed). /share/ is the coach link
+        # entry point (#849), public by design.
+        if path.startswith(("/static", "/auth/", "/co-op/", "/share/")) or path in (
             "/login",
             "/logout",
             "/healthz",

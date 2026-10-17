@@ -146,6 +146,35 @@ async def load_coach_scope(storage: Storage, email: str) -> CoachScope:
     return build_scope(grants, datetime.now(UTC), excluded=await storage.list_peer_race_ids())
 
 
+COACH_LINK_COOKIE = "coach_link"
+
+
+async def resolve_coach_link(storage: Storage, token: str) -> dict[str, Any] | None:
+    """Principal for a coach share-link token (#849), or None if not active.
+
+    Link principals have no user row: ``id`` is None and the scope is exactly
+    the one link grant. Only the SHA-256 of the token is stored.
+    """
+    from helmlog.coach import build_scope, grant_state
+
+    grant = await storage.get_coach_grant_by_token_hash(hash_api_key(token))
+    now = datetime.now(UTC)
+    if grant is None or grant_state(grant, now) != "active":
+        return None
+    scope = build_scope([grant], now, excluded=await storage.list_peer_race_ids())
+    return {
+        "id": None,
+        "email": f"link:{grant['id']}",
+        "name": grant["label"],
+        "role": COACH_ROLE,
+        "is_developer": 0,
+        "is_active": 1,
+        "coach_scope": scope,
+        "coach_via": "link",
+        "coach_expires_at": grant["expires_at"],
+    }
+
+
 def is_coach(user: dict[str, Any] | None) -> bool:
     return bool(user) and user.get("role") == COACH_ROLE  # type: ignore[union-attr]
 

@@ -8,23 +8,30 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
 from helmlog.auth import (
+    COACH_LINK_COOKIE,
     COACH_ROLE,
     coach_scope,
     generate_token,
+    hash_api_key,
     invite_expires_at,
     is_coach,
     require_auth,
     require_reader,
 )
-from helmlog.coach import grant_state, validate_grant_window
-from helmlog.routes._helpers import audit, coach_json, get_storage, templates, tpl_ctx
+from helmlog.coach import (
+    DEAD_LINK_HTML,
+    coach_path_allowed,
+    grant_state,
+    validate_grant_window,
+)
+from helmlog.routes._helpers import audit, coach_json, get_storage, limiter, templates, tpl_ctx
 
 router = APIRouter()
 
@@ -58,7 +65,7 @@ async def _coach_sessions(
         if scope.can_video(r["id"]) and first_video.get(r["id"]):
             item["first_video_url"] = first_video[r["id"]]
         sessions.append(item)
-    expires: str | None = None
+    expires: str | None = user.get("coach_expires_at")  # link principals (#849)
     if user.get("coach_via") == "account":
         grants = await storage.list_coach_grants_for_email(user["email"])
         expires = max((g["expires_at"] for g in grants if g["id"] in scope.grant_ids), default=None)
@@ -125,8 +132,10 @@ async def _first_video_urls(storage: Any, race_ids: list[int]) -> dict[int, str]
 
 
 class GrantCreate(BaseModel):
+    kind: Literal["account", "link"] = "account"
     label: str
     coach_email: str = ""
+    landing_path: str | None = None
     all_sessions: bool = False
     allow_video: bool = False
     session_ids: list[int] = []
@@ -212,17 +221,41 @@ async def api_list_coach_grants(
     return JSONResponse({"grants": [_public_grant(g, now) for g in grants]})
 
 
+def _validate_landing_path(path: str | None) -> str | None:
+    """A share link may only land on a page a coach can open (no open redirect)."""
+    if not path:
+        return None
+    bare = path.split("?", 1)[0]
+    if not path.startswith("/") or path.startswith("//") or not coach_path_allowed("GET", bare):
+        raise HTTPException(
+            status_code=422, detail="landing_path must be a race or compare page on this site"
+        )
+    return path
+
+
 @router.post("/api/admin/coach-grants", status_code=201)
 async def api_create_coach_grant(
     request: Request,
     body: GrantCreate,
     user: dict[str, Any] = Depends(require_auth("admin")),  # noqa: B008
 ) -> JSONResponse:
-    """Create an account grant and, if the coach has no account yet, an invite."""
+    """Create a grant.
+
+    ``kind="account"`` (#848): invites the coach by email if they have no
+    account yet. ``kind="link"`` (#849): mints a share link; only the token's
+    SHA-256 is stored and the URL is returned once.
+    """
     storage = get_storage(request)
-    email = body.coach_email.strip().lower()
-    if not email or "@" not in email:
-        raise HTTPException(status_code=422, detail="coach_email must be an email address")
+    base = str(request.base_url).rstrip("/")
+    email: str | None = None
+    landing_path: str | None = None
+    existing: dict[str, Any] | None = None
+    if body.kind == "account":
+        email = body.coach_email.strip().lower()
+        if not email or "@" not in email:
+            raise HTTPException(status_code=422, detail="coach_email must be an email address")
+    else:
+        landing_path = _validate_landing_path(body.landing_path)
     starts_at = _parse_ts(body.starts_at, "starts_at") if body.starts_at else datetime.now(UTC)
     expires_at = _parse_ts(body.expires_at, "expires_at")
     session_ids = await _validate_common(
@@ -233,51 +266,91 @@ async def api_create_coach_grant(
         starts_at=starts_at,
         expires_at=expires_at,
     )
-    existing = await storage.get_user_by_email(email)
-    if existing is not None and existing["role"] != COACH_ROLE:
-        raise HTTPException(
-            status_code=409,
-            detail=f"{email} is already a {existing['role']} user — coaches need their own account",
-        )
+    if email is not None:
+        existing = await storage.get_user_by_email(email)
+        if existing is not None and existing["role"] != COACH_ROLE:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{email} is already a {existing['role']} user — coaches need their own account",
+            )
+    link_token = generate_token() if body.kind == "link" else None
     grant_id = await storage.create_coach_grant(
-        kind="account",
+        kind=body.kind,
         label=body.label.strip(),
         coach_email=email,
-        token_hash=None,
+        token_hash=hash_api_key(link_token) if link_token else None,
         all_sessions=body.all_sessions,
         allow_video=body.allow_video,
-        landing_path=None,
+        landing_path=landing_path,
         starts_at=starts_at.isoformat(),
         expires_at=expires_at.isoformat(),
         created_by=user["id"],
         session_ids=session_ids,
     )
     invite_url = None
-    if existing is None:
+    if email is not None and existing is None:
         # Deliberately no pre-created inactive user (unlike crew invites):
         # coaches must never appear in crew selectors.
         token = generate_token()
         await storage.create_invitation(
             token, email, COACH_ROLE, body.label.strip(), False, user["id"], invite_expires_at()
         )
-        invite_url = f"{str(request.base_url).rstrip('/')}/auth/accept-invite?token={token}"
+        invite_url = f"{base}/auth/accept-invite?token={token}"
     await audit(
         request,
         "coach.grant_create",
         detail=json.dumps(
             {
                 "grant_id": grant_id,
-                "kind": "account",
+                "kind": body.kind,
                 "coach_email": email,
                 "all_sessions": body.all_sessions,
                 "session_ids": session_ids,
                 "allow_video": body.allow_video,
+                "landing_path": landing_path,
                 "expires_at": expires_at.isoformat(),
             }
         ),
         user=user,
     )
-    return JSONResponse({"id": grant_id, "invite_url": invite_url}, status_code=201)
+    return JSONResponse(
+        {
+            "id": grant_id,
+            "invite_url": invite_url,
+            "share_url": f"{base}/share/{link_token}" if link_token else None,
+        },
+        status_code=201,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Share links (#849)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/share/{token}", include_in_schema=False)
+@limiter.limit("20/minute")
+async def open_share_link(request: Request, token: str) -> Response:
+    """Spec P9/P10: an active link sets the coach_link cookie and redirects;
+    anything else is a 404 with no cookie. The token never reaches the logs.
+    """
+    storage = get_storage(request)
+    grant = await storage.get_coach_grant_by_token_hash(hash_api_key(token))
+    now = datetime.now(UTC)
+    if grant is None or grant_state(grant, now) != "active":
+        return HTMLResponse(DEAD_LINK_HTML, status_code=404)
+    expires = datetime.fromisoformat(grant["expires_at"])
+    response = RedirectResponse(url=grant["landing_path"] or "/coach", status_code=303)
+    response.set_cookie(
+        COACH_LINK_COOKIE,
+        token,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        max_age=max(1, int((expires - now).total_seconds())),
+    )
+    await audit(request, "coach.link_open", detail=json.dumps({"grant_id": grant["id"]}))
+    return response
 
 
 async def _editable_grant(storage: Any, grant_id: int) -> dict[str, Any]:  # noqa: ANN401

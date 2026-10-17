@@ -41,6 +41,10 @@ td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:middle}
   are never shared. Video is shared only if you tick it. Every race a coach opens is logged in the audit log.</div>
 
 <div class="card">
+  <div id="mode-row" style="display:flex;gap:16px;margin-bottom:12px;font-size:.88rem">
+    <label class="check"><input type="radio" name="g-kind" value="account" checked onchange="setKind(this.value)"> Coach account (signs in, renew each season)</label>
+    <label class="check"><input type="radio" name="g-kind" value="link" onchange="setKind(this.value)"> Share link (no account, short-lived)</label>
+  </div>
   <div class="label" id="form-title">Invite a coach</div>
   <input type="hidden" id="edit-id" value="">
   <div class="cg-field"><label for="g-label">Label</label>
@@ -74,7 +78,18 @@ let _races = [];
 let _grants = [];
 
 function _esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
-function _defaultExpiry() { return new Date().getFullYear() + '-12-31'; }
+function _kind() { return document.querySelector('input[name="g-kind"]:checked').value; }
+function _defaultExpiry() {
+  if (_kind() === 'link') return new Date(Date.now() + 14 * 86400 * 1000).toISOString().slice(0, 10);
+  return new Date().getFullYear() + '-12-31';
+}
+function setKind(kind) {
+  const link = kind === 'link';
+  document.getElementById('email-field').style.display = link ? 'none' : '';
+  document.getElementById('form-title').textContent = link ? 'Create a share link' : 'Invite a coach';
+  document.getElementById('g-submit').textContent = link ? 'Create link' : 'Create & invite';
+  document.getElementById('g-expires').value = _defaultExpiry();
+}
 
 async function loadRaces() {
   const [a, b] = await Promise.all(['race', 'practice'].map(t =>
@@ -101,14 +116,12 @@ function toggleAll() {
 
 function resetForm() {
   document.getElementById('edit-id').value = '';
-  document.getElementById('form-title').textContent = 'Invite a coach';
-  document.getElementById('email-field').style.display = '';
+  document.getElementById('mode-row').style.display = 'flex';
   document.getElementById('g-label').value = '';
   document.getElementById('g-email').value = '';
   document.getElementById('g-all').checked = false;
   document.getElementById('g-video').checked = false;
-  document.getElementById('g-expires').value = _defaultExpiry();
-  document.getElementById('g-submit').textContent = 'Create & invite';
+  setKind(_kind());
   document.getElementById('g-cancel').style.display = 'none';
   document.getElementById('form-err').textContent = '';
   renderRaceList([]);
@@ -120,6 +133,7 @@ function editGrant(id) {
   document.getElementById('edit-id').value = g.id;
   document.getElementById('form-title').textContent = 'Edit grant — ' + g.label;
   document.getElementById('email-field').style.display = 'none';
+  document.getElementById('mode-row').style.display = 'none';
   document.getElementById('g-label').value = g.label;
   document.getElementById('g-all').checked = !!g.all_sessions;
   document.getElementById('g-video').checked = !!g.allow_video;
@@ -151,7 +165,8 @@ async function submitGrant() {
   if (editId) {
     r = await fetch('/api/admin/coach-grants/' + editId, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   } else {
-    body.coach_email = document.getElementById('g-email').value;
+    body.kind = _kind();
+    if (body.kind === 'account') body.coach_email = document.getElementById('g-email').value;
     r = await fetch('/api/admin/coach-grants', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   }
   if (!r.ok) {
@@ -162,9 +177,13 @@ async function submitGrant() {
   if (!editId) {
     const d = await r.json();
     resetForm();
-    ok.innerHTML = d.invite_url
-      ? 'Grant created. Send the coach this invite link (valid 7 days): <br><code>' + _esc(d.invite_url) + '</code>'
-      : 'Grant created. The coach already has an account — they’ll see the races next time they sign in.';
+    if (d.share_url) {
+      ok.innerHTML = 'Share link created. Copy it now — it isn’t shown again: <br><code>' + _esc(d.share_url) + '</code>';
+    } else {
+      ok.innerHTML = d.invite_url
+        ? 'Grant created. Send the coach this invite link (valid 7 days): <br><code>' + _esc(d.invite_url) + '</code>'
+        : 'Grant created. The coach already has an account — they’ll see the races next time they sign in.';
+    }
   } else {
     resetForm();
     ok.textContent = 'Changes saved.';

@@ -1252,3 +1252,22 @@ function _esc(s) {
   d.textContent = s;
   return d.innerHTML;
 }
+
+// ---------------------------------------------------------------------------
+// Share with coach (#849) — admin-only button; coach_share.js is loaded only
+// for admins. Shares exactly the races in this comparison and lands the
+// coach back on this view.
+// ---------------------------------------------------------------------------
+
+function shareCompareWithCoach() {
+  if (typeof openCoachShareDialog !== 'function') return;
+  const ids = _crossSession
+    ? _allManeuvers.map(m => m.session_id).filter(x => x != null)
+    : [parseInt(SESSION_ID, 10)];
+  const title = (document.getElementById('compare-header') || {}).textContent || 'comparison';
+  openCoachShareDialog({
+    sessionIds: ids,
+    label: 'Coach link — ' + title.trim().slice(0, 80),
+    landingPath: location.pathname + location.search,
+  });
+}

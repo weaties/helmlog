@@ -220,3 +220,22 @@ def strip_video_fields(value: Any) -> Any:  # noqa: ANN401 — arbitrary JSON
     if isinstance(value, list):
         return [strip_video_fields(v) for v in value]
     return value
+
+
+# Standalone page for an unusable share link (#849). Self-contained (no
+# base.html) because a link holder has no session to render the nav with.
+DEAD_LINK_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Link expired — HelmLog</title>
+<style>
+body{margin:0;font-family:system-ui,sans-serif;background:#0b1424;color:#e6edf6;
+display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px}
+main{max-width:420px;background:#14223a;border-radius:12px;padding:24px}
+h1{font-size:1.15rem;margin:0 0 8px;color:#7fb2ff}
+p{margin:0;color:#a9b8cc;line-height:1.5;font-size:.95rem}
+</style></head>
+<body><main><h1>This share link is invalid or has expired</h1>
+<p>Coach links are time-limited and can be revoked by the boat at any time.
+Ask the boat for a new link.</p></main></body></html>
+"""
