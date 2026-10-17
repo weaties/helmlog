@@ -516,6 +516,24 @@ nav.site-nav {
   font-weight: 600;
 }
 
+/* Coach nav (#848): sign-out is a POST form, styled like a nav link. */
+.nav-links .nav-logout {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.nav-links .nav-logout:hover,
+.nav-links .nav-logout:focus {
+  color: var(--text-primary);
+  background: var(--border);
+  outline: none;
+}
+
 .nav-links .admin-link {
   display: none;
 }

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Shared races — HelmLog{% endblock %}
+{% block extra_css %}
+<style>
+h1{font-size:1.3rem;font-weight:700;color:var(--accent);margin-bottom:4px}
+.sub{color:var(--text-secondary);font-size:.85rem;margin-bottom:16px}
+.card{background:var(--bg-secondary);border-radius:12px;padding:16px;margin-bottom:12px}
+.race{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
+.race:last-child{border-bottom:none}
+.race a{color:var(--text-primary);text-decoration:none;font-weight:600}
+.race a:hover{color:var(--accent)}
+.meta{color:var(--text-secondary);font-size:.8rem}
+.badge{font-size:.72rem;padding:2px 8px;border-radius:4px;border:1px solid var(--border);color:var(--text-secondary);white-space:nowrap}
+.empty{color:var(--text-secondary);font-size:.9rem}
+</style>
+{% endblock %}
+{% block content %}
+<h1>Races shared with you</h1>
+{% if sessions %}
+<div class="sub">Read-only coach access{% if expires_at %} · until {{ expires_at[:10] }}{% endif %}.
+  Instruments, track, maneuvers and results{% if sessions|selectattr("first_video_url")|list %}, plus video where shared{% endif %}.</div>
+<div class="card">
+  {% for s in sessions %}
+  <div class="race">
+    <div>
+      <a href="/session/{{ s.id }}">{{ s.name }}</a>
+      <div class="meta">{{ s.date or s.start_utc[:10] }}{% if s.event %} · {{ s.event }}{% endif %}</div>
+    </div>
+    {% if s.first_video_url %}<span class="badge">&#9654; video</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card empty">You have no active access right now. Coach access is time-limited and set by the boat — ask them to share races with you again.</div>
+{% endif %}
+{% endblock %}

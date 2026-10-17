@@ -12,6 +12,14 @@ Device API key auth (#423):
   ``Authorization: Bearer <key>``.  Keys are stored hashed (SHA-256) in the
   ``devices`` table.  Each device has a fixed role and optional scope.
 
+Coach access (#848):
+  Users with role ``coach`` are deliberately *not* in ``_ROLE_RANK``, so every
+  ``require_auth(...)`` route rejects them. Routes a coach may use opt in with
+  ``require_session_read`` / ``require_reader`` and check the principal's
+  :class:`helmlog.coach.CoachScope`, which is attached to the user dict as
+  ``coach_scope`` when the user is resolved. The auth middleware additionally
+  enforces a path allowlist for coaches (``helmlog.coach.coach_path_allowed``).
+
 Auth can be disabled entirely (e.g. in tests) by setting the env var
 ``AUTH_DISABLED=true``.  In that mode every request is treated as an admin.
 """
@@ -40,8 +48,9 @@ def _next_target(request: Request) -> str:
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
+    from helmlog.coach import CoachScope
     from helmlog.storage import Storage
 
 # ---------------------------------------------------------------------------
@@ -112,11 +121,125 @@ async def _resolve_user(
     if not user.get("is_active", 1):
         return None
 
+    if user.get("role") == COACH_ROLE:
+        user = {
+            **user,
+            "coach_scope": await load_coach_scope(storage, user["email"]),
+            "coach_via": "account",
+        }
+
     # Fire-and-forget last_seen update (best effort)
     with contextlib.suppress(Exception):
         await storage.update_user_last_seen(user["id"])
 
     return user
+
+
+COACH_ROLE = "coach"
+
+
+async def load_coach_scope(storage: Storage, email: str) -> CoachScope:
+    """Union of the active account grants for *email* (computed per request)."""
+    from helmlog.coach import build_scope
+
+    grants = await storage.list_coach_grants_for_email(email)
+    return build_scope(grants, datetime.now(UTC), excluded=await storage.list_peer_race_ids())
+
+
+def is_coach(user: dict[str, Any] | None) -> bool:
+    return bool(user) and user.get("role") == COACH_ROLE  # type: ignore[union-attr]
+
+
+def coach_scope(user: dict[str, Any]) -> CoachScope:
+    """The coach principal's scope (empty if somehow missing)."""
+    from helmlog.coach import CoachScope
+
+    scope = user.get("coach_scope")
+    return scope if isinstance(scope, CoachScope) else CoachScope()
+
+
+def ensure_coach_can_read(
+    user: dict[str, Any], session_ids: Iterable[int], *, video: bool = False
+) -> None:
+    """404 unless a coach principal may read every session (no-op for staff).
+
+    404 rather than 403 so a coach can't probe which race ids exist.
+    """
+    if not is_coach(user):
+        return
+    scope = coach_scope(user)
+    for sid in session_ids:
+        if not scope.can_read(sid) or (video and not scope.can_video(sid)):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+
+def _unauthenticated(request: Request) -> HTTPException:
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        return HTTPException(
+            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+            headers={"Location": f"/login?next={_next_target(request)}"},
+        )
+    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+
+async def _current_user(request: Request, session: str | None) -> dict[str, Any]:
+    user: dict[str, Any] | None = getattr(request.state, "user", None)
+    if user is None:
+        user = await _resolve_user(request, session)
+    if user is None:
+        raise _unauthenticated(request)
+    return user
+
+
+def _require_staff_or_coach(user: dict[str, Any]) -> None:
+    if is_coach(user):
+        return
+    if _ROLE_RANK.get(user["role"], -1) < _ROLE_RANK["viewer"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
+
+
+def require_reader() -> Callable[..., Any]:
+    """Viewer-or-above, or a coach. For coach-allowlisted routes whose session
+    ids aren't in the path — the handler must call ``ensure_coach_can_read``.
+    """
+
+    async def _dep(
+        request: Request,
+        session: Annotated[str | None, Cookie()] = None,
+    ) -> dict[str, Any]:
+        user = await _current_user(request, session)
+        _require_staff_or_coach(user)
+        return user
+
+    return _dep
+
+
+def require_session_read(*, video: bool = False) -> Callable[..., Any]:
+    """Viewer-or-above, or a coach whose scope covers the path's session.
+
+    Reads the session id from the ``session_id`` or ``race_id`` path param.
+    With ``video=True`` a coach also needs video access for that session.
+    """
+
+    async def _dep(
+        request: Request,
+        session: Annotated[str | None, Cookie()] = None,
+    ) -> dict[str, Any]:
+        user = await _current_user(request, session)
+        _require_staff_or_coach(user)
+        if is_coach(user):
+            raw = request.path_params.get("session_id", request.path_params.get("race_id"))
+            try:
+                sid = int(str(raw))
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Session not found"
+                ) from None
+            ensure_coach_can_read(user, [sid], video=video)
+        return user
+
+    return _dep
 
 
 def require_auth(min_role: str = "viewer") -> Callable[..., Any]:

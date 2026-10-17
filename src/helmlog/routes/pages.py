@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from helmlog.auth import require_auth
+from helmlog.auth import coach_scope, is_coach, require_auth
 from helmlog.routes._helpers import audit, get_storage, templates, tpl_ctx
 from helmlog.storage import RACE_SLUG_RETENTION_DAYS
 
@@ -118,6 +118,18 @@ async def _imported_session_redirect(request: Request, race: Any) -> RedirectRes
     )
 
 
+def _coach_page_guard(request: Request, race_id: int | None) -> None:
+    """404 for a coach principal outside their scope (#848). No-op for staff.
+
+    Runs before any slug redirect so a coach can't learn other races' names.
+    """
+    user: dict[str, Any] | None = getattr(request.state, "user", None)
+    if not is_coach(user):
+        return
+    if race_id is None or not coach_scope(user).can_read(race_id):  # type: ignore[arg-type]
+        raise HTTPException(status_code=404, detail="Session not found")
+
+
 async def _render_session_page(
     request: Request,
     race: Any,  # helmlog.races.Race  # noqa: ANN401
@@ -177,6 +189,7 @@ async def _render_session_page(
 )
 async def maneuver_compare_page(request: Request, session_id: int) -> Response:
     """Maneuver comparison page — synced multi-video playback (#565)."""
+    _coach_page_guard(request, session_id)
     storage = get_storage(request)
     race = await storage.get_race(session_id)
     if race is None:
@@ -336,6 +349,7 @@ async def session_detail_page_canonical(request: Request, session_id: int, slug:
       bust.
     * If the id doesn't exist → 404.
     """
+    _coach_page_guard(request, session_id)
     storage = get_storage(request)
     race = await storage.get_race(session_id)
     if race is None:
@@ -403,6 +417,11 @@ async def session_detail_page(request: Request, session_ref: str) -> Response:
     # like /session/104?moment=38&comment=20 don't lose their params on the
     # 301 hop to /session/104/{slug}.
     qs = f"?{request.url.query}" if request.url.query else ""
+
+    user: dict[str, Any] | None = getattr(request.state, "user", None)
+    if is_coach(user):
+        # Coaches only ever reach races by id — never debriefs or slugs.
+        _coach_page_guard(request, int(session_ref) if session_ref.isdigit() else None)
 
     if session_ref.isdigit():
         numeric_id = int(session_ref)

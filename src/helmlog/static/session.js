@@ -302,6 +302,9 @@ let _speakerMap = {}; // speaker_map from API (crew assignments)
 // Bootstrap
 // ---------------------------------------------------------------------------
 
+// Coach principals (#848) get a read-only subset of the page.
+const _IS_COACH = cfg.dataset.userRole === 'coach';
+
 async function init() {
   await initTimezone();
 
@@ -327,6 +330,22 @@ async function init() {
   _session = await r.json();
 
   renderHeader();
+  if (_IS_COACH) {
+    // Coach mode (#848): read-only view of granted data only. The server
+    // enforces this too — skipping the other loaders just avoids a page full
+    // of denied requests. Video only when the grant shares it.
+    const hasVideo = !!_session.first_video_url;
+    await Promise.all([loadTrack(), hasVideo ? loadVideoPlayer() : Promise.resolve()]);
+    loadManeuvers();
+    if (hasVideo) loadVideos();
+    if (_session.has_wind_field) loadWindField();
+    if (_session.type !== 'debrief') {
+      loadResults();
+      if (_session.end_utc) loadPolar();
+    }
+    _applyDeepLink();
+    return;
+  }
   // Load track and videos in parallel, then wire up sync
   await Promise.all([loadTrack(), loadVideoPlayer()]);
   loadManeuvers();
@@ -2549,7 +2568,7 @@ async function loadResults() {
   }
 
   body.innerHTML = html;
-  if (!imported) {
+  if (!imported && !_IS_COACH) {
     renderLinkImportedSlot();
   }
 }
@@ -6374,7 +6393,8 @@ function renderManeuverCard() {
       + (_maneuverLineChartsOn ? 'var(--bg-primary)' : 'var(--text-secondary)') + ';cursor:pointer;border-radius:3px"'
       + ' onclick="toggleManeuverLineCharts()"'
       + ' title="BSP / heading rate / TWA stacked line charts aligned at head-to-wind">line charts</button>'
-    + '<a href="/api/sessions/' + SESSION_ID + '/maneuvers.csv" download style="color:var(--accent);text-decoration:none">CSV &#8595;</a>'
+    // No CSV export for coaches (#848): policy forbids bulk export.
+    + (_IS_COACH ? '' : '<a href="/api/sessions/' + SESSION_ID + '/maneuvers.csv" download style="color:var(--accent);text-decoration:none">CSV &#8595;</a>')
     + '</div>';
 
   const filters = ['all', 'tack', 'gybe', 'rounding', 'P\u2192S', 'S\u2192P', 'good', 'bad'];
@@ -6631,7 +6651,7 @@ function _renderManeuverDetail(m) {
 // Small tag-picker strip rendered beneath the maneuver detail metrics
 // whenever a maneuver is selected in the session page table.
 function _renderManeuverTagRow(m) {
-  if (!m || m.id == null) return '';
+  if (!m || m.id == null || _IS_COACH) return '';
   return '<div style="margin-top:8px;padding:8px;background:var(--bg-secondary);border-radius:3px">'
     + '<div style="font-size:.7rem;color:var(--text-secondary);margin-bottom:4px">Tags</div>'
     + '<tag-picker entity-type="maneuver" entity-id="' + esc(String(m.id)) + '"></tag-picker>'

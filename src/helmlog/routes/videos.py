@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from helmlog.auth import require_auth
+from helmlog.auth import require_auth, require_session_read
 from helmlog.routes._helpers import VideoCreate, VideoUpdate, audit, get_storage
 
 router = APIRouter()
@@ -46,7 +46,7 @@ async def api_list_videos(
     request: Request,
     session_id: int,
     at: str | None = None,
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    _user: dict[str, Any] = Depends(require_session_read(video=True)),  # noqa: B008
 ) -> JSONResponse:
     """List videos linked to a session.
 

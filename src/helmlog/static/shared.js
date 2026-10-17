@@ -131,7 +131,10 @@ function initNav() {
 // ---------------------------------------------------------------------------
 
 function initTimezone() {
-  return fetch('/api/state').then(r => r.json()).then(s => {
+  // Coaches (#848) can't read /api/state (live boat data); they get the
+  // display timezone from a dedicated endpoint.
+  const url = document.body.dataset.coach === '1' ? '/api/coach/timezone' : '/api/state';
+  return fetch(url).then(r => r.json()).then(s => {
     if (s.timezone) _tz = s.timezone;
     return s;
   }).catch(() => null);

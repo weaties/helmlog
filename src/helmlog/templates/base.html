@@ -9,13 +9,17 @@
 {% if theme_css %}<style>{{ theme_css }}</style>{% endif %}
 {% block extra_css %}{% endblock %}
 </head>
-<body>
+<body{% if is_coach %} data-coach="1"{% endif %}>
 {% block body_wrapper %}
 <div class="page">
 {% block pre_nav %}{% endblock %}
 <nav class="site-nav" id="site-nav">
   <button id="nav-hamburger" class="nav-hamburger" aria-label="Toggle navigation" aria-expanded="false" aria-controls="nav-links" onclick="toggleNav()">&#9776;</button>
   <div id="nav-links" class="nav-links">
+    {% if is_coach %}
+    <a href="/coach"{% if active_page == "/coach" %} class="active"{% endif %}>Shared races</a>
+    <form method="post" action="/logout" style="display:inline;margin:0"><button type="submit" class="nav-logout">Sign out</button></form>
+    {% else %}
     <a href="/"{% if active_page == "/" %} class="active"{% endif %}>Home</a>
     <a href="/control" class="admin-link{% if active_page == "/control" %} active{% endif %}">Control</a>
     <a href="/race-start"{% if active_page == "/race-start" %} class="active"{% endif %}>Start</a>
@@ -25,6 +29,7 @@
     <a href="/attention"{% if active_page == "/attention" %} class="active"{% endif %} id="nav-attention">Attention<span id="notif-badge" style="display:none;background:var(--danger);color:var(--bg-primary);font-size:.65rem;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:700"></span></a>
     <a href="/admin/boats"{% if active_page == "/admin/boats" %} class="active"{% endif %}>Boats</a>
     <a href="/admin/users" class="admin-link{% if active_page == "/admin/users" %} active{% endif %}">Users</a>
+    <a href="/admin/coaches" class="admin-link{% if active_page == "/admin/coaches" %} active{% endif %}">Coaches</a>
     <a href="/admin/audit" class="admin-link{% if active_page == "/admin/audit" %} active{% endif %}">Audit</a>
     <a href="/admin/controls" class="admin-link{% if active_page == "/admin/controls" %} active{% endif %}">Controls</a>
     <a href="/admin/cameras" class="admin-link{% if active_page == "/admin/cameras" %} active{% endif %}">Cameras</a>
@@ -43,6 +48,7 @@
     <a href="/admin/vakaros" class="admin-link{% if active_page == "/admin/vakaros" %} active{% endif %}">Vakaros</a>
     <a href="/admin/deployment" class="admin-link{% if active_page == "/admin/deployment" %} active{% endif %}" id="nav-deploy">Deploy</a>
     <a href="/profile" class="profile-link" id="nav-profile"{% if active_page == "/profile" %} class="active"{% endif %}><img id="nav-avatar" src="" alt="" style="width:18px;height:18px;border-radius:50%;vertical-align:middle;margin-right:3px"><span id="nav-profile-name">Profile</span></a>
+    {% endif %}
   </div>
 </nav>
 {% block content %}{% endblock %}
@@ -50,8 +56,10 @@
 </div>
 {% endblock %}
 <script src="/static/shared.js?v={{ git_sha }}"></script>
+{% if not is_coach %}
 <script src="/static/race_start_widget.js?v={{ git_sha }}"></script>
 <script>initNav();(async()=>{try{const r=await fetch('/api/notifications/count');if(r.ok){const d=await r.json();const b=document.getElementById('notif-badge');if(d.unread>0){b.textContent=d.unread;b.style.display='inline';}}}catch(e){}})();</script>
+{% endif %}
 {% block scripts %}{% endblock %}
 </body>
 </html>

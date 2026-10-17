@@ -233,7 +233,7 @@ _LIVE_KEYS = (
 # Schema version & migrations
 # ---------------------------------------------------------------------------
 
-_CURRENT_VERSION: int = 88
+_CURRENT_VERSION: int = 89
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -2189,6 +2189,37 @@ _MIGRATIONS: dict[int, str] = {
             raw_hex      TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_pgn_audit_observed_at ON pgn_audit (observed_at);
+    """,
+    89: """
+        -- Coach access grants (#848, spec on the issue). A grant gives a coach
+        -- time-limited, read-only access to selected races. kind is 'account'
+        -- (coach signs in, matched by coach_email to a user with role coach)
+        -- or 'link' (no account, token stored as a SHA-256 hash, #849).
+        -- all_sessions = 1 covers every race while the grant is active.
+        -- allow_video is the boat owner's explicit opt-in to YouTube links.
+        -- State (scheduled / active / expired / revoked) is computed from
+        -- starts_at, expires_at and revoked_at at request time.
+        CREATE TABLE IF NOT EXISTS coach_grants (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind          TEXT    NOT NULL CHECK (kind IN ('account', 'link')),
+            label         TEXT    NOT NULL,
+            coach_email   TEXT,
+            token_hash    TEXT    UNIQUE,
+            all_sessions  INTEGER NOT NULL DEFAULT 0,
+            allow_video   INTEGER NOT NULL DEFAULT 0,
+            landing_path  TEXT,
+            starts_at     TEXT    NOT NULL,
+            expires_at    TEXT    NOT NULL,
+            revoked_at    TEXT,
+            created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at    TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_coach_grants_email ON coach_grants (coach_email);
+        CREATE TABLE IF NOT EXISTS coach_grant_sessions (
+            grant_id    INTEGER NOT NULL REFERENCES coach_grants(id) ON DELETE CASCADE,
+            session_id  INTEGER NOT NULL REFERENCES races(id) ON DELETE CASCADE,
+            PRIMARY KEY (grant_id, session_id)
+        );
     """,
 }
 
@@ -7629,6 +7660,163 @@ class Storage:
     # ------------------------------------------------------------------
     # Audit log (#93)
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Coach grants (#848)
+    # ------------------------------------------------------------------
+
+    async def create_coach_grant(
+        self,
+        *,
+        kind: str,
+        label: str,
+        coach_email: str | None,
+        token_hash: str | None,
+        all_sessions: bool,
+        allow_video: bool,
+        landing_path: str | None,
+        starts_at: str,
+        expires_at: str,
+        created_by: int | None,
+        session_ids: list[int],
+    ) -> int:
+        """Insert a coach grant and its session list; return the new id."""
+        from datetime import UTC
+        from datetime import datetime as _datetime
+
+        if kind not in ("account", "link"):
+            raise ValueError(f"invalid grant kind: {kind!r}")
+        email = coach_email.lower().strip() if coach_email else None
+        now = _datetime.now(UTC).isoformat()
+        db = self._conn()
+        cur = await db.execute(
+            "INSERT INTO coach_grants (kind, label, coach_email, token_hash, all_sessions,"
+            " allow_video, landing_path, starts_at, expires_at, created_by, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                kind,
+                label,
+                email,
+                token_hash,
+                int(all_sessions),
+                int(allow_video),
+                landing_path,
+                starts_at,
+                expires_at,
+                created_by,
+                now,
+            ),
+        )
+        assert cur.lastrowid is not None
+        grant_id = cur.lastrowid
+        await db.executemany(
+            "INSERT OR IGNORE INTO coach_grant_sessions (grant_id, session_id) VALUES (?, ?)",
+            [(grant_id, sid) for sid in session_ids],
+        )
+        await db.commit()
+        return grant_id
+
+    async def _coach_grant_rows(self, where: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
+        db = self._conn()
+        cur = await db.execute(
+            "SELECT id, kind, label, coach_email, token_hash, all_sessions, allow_video,"
+            " landing_path, starts_at, expires_at, revoked_at, created_by, created_at"
+            f" FROM coach_grants {where} ORDER BY id DESC",
+            params,
+        )
+        grants = [dict(r) for r in await cur.fetchall()]
+        if not grants:
+            return []
+        ids = [g["id"] for g in grants]
+        placeholders = ",".join("?" * len(ids))
+        scur = await db.execute(
+            "SELECT grant_id, session_id FROM coach_grant_sessions"
+            f" WHERE grant_id IN ({placeholders}) ORDER BY session_id",
+            ids,
+        )
+        by_grant: dict[int, list[int]] = {}
+        for r in await scur.fetchall():
+            by_grant.setdefault(r["grant_id"], []).append(r["session_id"])
+        for g in grants:
+            g["session_ids"] = by_grant.get(g["id"], [])
+        return grants
+
+    async def get_coach_grant(self, grant_id: int) -> dict[str, Any] | None:
+        rows = await self._coach_grant_rows("WHERE id = ?", (grant_id,))
+        return rows[0] if rows else None
+
+    async def list_coach_grants(self) -> list[dict[str, Any]]:
+        """All grants, newest first, each with its ``session_ids``."""
+        return await self._coach_grant_rows("", ())
+
+    async def list_coach_grants_for_email(self, email: str) -> list[dict[str, Any]]:
+        """Account grants for a coach email (any state)."""
+        return await self._coach_grant_rows(
+            "WHERE kind = 'account' AND coach_email = ?", (email.lower().strip(),)
+        )
+
+    async def update_coach_grant(
+        self,
+        grant_id: int,
+        *,
+        label: str,
+        all_sessions: bool,
+        allow_video: bool,
+        expires_at: str,
+        session_ids: list[int],
+    ) -> None:
+        """Replace a grant's editable fields and its session list."""
+        db = self._conn()
+        await db.execute(
+            "UPDATE coach_grants SET label = ?, all_sessions = ?, allow_video = ?,"
+            " expires_at = ? WHERE id = ?",
+            (label, int(all_sessions), int(allow_video), expires_at, grant_id),
+        )
+        await db.execute("DELETE FROM coach_grant_sessions WHERE grant_id = ?", (grant_id,))
+        await db.executemany(
+            "INSERT OR IGNORE INTO coach_grant_sessions (grant_id, session_id) VALUES (?, ?)",
+            [(grant_id, sid) for sid in session_ids],
+        )
+        await db.commit()
+
+    async def revoke_coach_grant(self, grant_id: int, revoked_at: str) -> None:
+        db = self._conn()
+        await db.execute(
+            "UPDATE coach_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+            (revoked_at, grant_id),
+        )
+        await db.commit()
+
+    async def list_peer_race_ids(self) -> set[int]:
+        """Ids of races that belong to other co-op boats (stored via federation)."""
+        cur = await self._conn().execute("SELECT id FROM races WHERE peer_fingerprint IS NOT NULL")
+        return {int(r["id"]) for r in await cur.fetchall()}
+
+    async def list_races_for_coach(self, session_ids: list[int] | None) -> list[dict[str, Any]]:
+        """Minimal race rows for the coach landing page, newest first.
+
+        ``None`` means every race (an all-sessions grant). Only coach-safe
+        columns are selected.
+        """
+        db = self._conn()
+        # Same recorded-session filter as the history list: imported scoring
+        # rows (clubspot / styc) carry no telemetry.
+        base = (
+            "SELECT id, name, event, race_num, date, start_utc, end_utc, session_type, slug"
+            " FROM races WHERE (source IS NULL OR source IN ('live', 'synthesized'))"
+            " AND peer_fingerprint IS NULL"
+        )
+        if session_ids is None:
+            cur = await db.execute(f"{base} ORDER BY start_utc DESC")
+        else:
+            if not session_ids:
+                return []
+            placeholders = ",".join("?" * len(session_ids))
+            cur = await db.execute(
+                f"{base} AND id IN ({placeholders}) ORDER BY start_utc DESC",
+                session_ids,
+            )
+        return [dict(r) for r in await cur.fetchall()]
 
     async def log_action(
         self,

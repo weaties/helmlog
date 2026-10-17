@@ -18,7 +18,7 @@ from slowapi.util import get_remote_address
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterable
     from datetime import datetime
 
     from fastapi import Request
@@ -206,8 +206,11 @@ async def cached_json_response(
 def tpl_ctx(request: Request, page: str, **extra: Any) -> dict[str, Any]:  # noqa: ANN401
     """Build the standard template context dict."""
     theme_css: str = getattr(request.state, "theme_css", "")
+    user = getattr(request.state, "user", None)
     return {
         "request": request,
+        # Coach principals (#848) get a stripped-down nav and no live widgets.
+        "is_coach": user is not None and user.get("role") == "coach",
         "active_page": page,
         "git_info": GIT_INFO,
         "git_sha": GIT_SHORT_SHA,
@@ -228,6 +231,33 @@ async def audit(
     ip = request.client.host if request.client else None
     ua = request.headers.get("user-agent")
     await storage.log_action(action, detail=detail, user_id=uid, ip_address=ip, user_agent=ua)
+
+
+def coach_json(payload: Any) -> JSONResponse:  # noqa: ANN401
+    """JSON response for a coach principal (#848).
+
+    Coach payloads are filtered per principal, so they bypass the shared
+    T1/T2 caches and must never be cached or revalidated by the browser
+    (a browser shared with a staff user could otherwise replay an
+    unfiltered body through ETag revalidation).
+    """
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+
+async def audit_coach_views(
+    request: Request, user: dict[str, Any], session_ids: Iterable[int]
+) -> None:
+    """Log ``coach.session_view`` per session (policy: every coach view is logged)."""
+    import json
+
+    from helmlog.auth import coach_scope
+
+    scope = coach_scope(user)
+    for sid in sorted(set(session_ids)):
+        detail = json.dumps(
+            {"session_id": sid, "grant_ids": list(scope.grant_ids), "via": user.get("coach_via")}
+        )
+        await audit(request, "coach.session_view", detail=detail, user=user)
 
 
 async def load_cameras(request: Request) -> list[Any]:

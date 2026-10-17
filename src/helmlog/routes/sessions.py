@@ -16,11 +16,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from loguru import logger
 
-from helmlog.auth import require_auth, require_developer
+from helmlog.auth import (
+    coach_scope,
+    ensure_coach_can_read,
+    is_coach,
+    require_auth,
+    require_developer,
+    require_reader,
+    require_session_read,
+)
+from helmlog.coach import filter_detail_for_coach, strip_video_fields
 from helmlog.current import compute_set_drift
 from helmlog.routes._helpers import (
     audit,
+    audit_coach_views,
     cached_json_response,
+    coach_json,
     get_storage,
     get_web_cache,
     limiter,
@@ -301,7 +312,7 @@ async def api_synthesize_session(
 async def api_session_track(
     request: Request,
     session_id: int,
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    _user: dict[str, Any] = Depends(require_session_read()),  # noqa: B008
 ) -> Response:
     """Return GPS track as GeoJSON for map display."""
     storage = get_storage(request)
@@ -637,7 +648,7 @@ async def _compute_session_summary(storage: Storage, session_id: int) -> dict[st
 async def api_session_vakaros_overlay(
     request: Request,
     session_id: int,
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    _user: dict[str, Any] = Depends(require_session_read()),  # noqa: B008
 ) -> JSONResponse:
     """Return Vakaros overlay data (track, start line, race events) for a race (#458).
 
@@ -673,7 +684,7 @@ async def api_session_vakaros_overlay(
 async def api_session_race_start_overlay(
     request: Request,
     session_id: int,
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    _user: dict[str, Any] = Depends(require_session_read()),  # noqa: B008
 ) -> JSONResponse:
     """Return HelmLog start-line ping history + computed line for the session.
 
@@ -760,7 +771,7 @@ async def api_session_race_start_overlay(
 async def api_session_course_overlay(
     request: Request,
     session_id: int,
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    _user: dict[str, Any] = Depends(require_session_read()),  # noqa: B008
 ) -> JSONResponse:
     """Return course marks + start/finish line geometry for the replay map.
 
@@ -817,7 +828,7 @@ _SESSION_DETAIL_TTL_S: float = 60.0
 async def api_session_detail(
     request: Request,
     session_id: int,
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    user: dict[str, Any] = Depends(require_session_read()),  # noqa: B008
 ) -> Response:
     """Return full metadata for a single session."""
     # Race-mutation hook invalidates the race-keyed T1 entry directly; the
@@ -828,6 +839,14 @@ async def api_session_detail(
 
     async def _compute() -> dict[str, Any]:
         return await _compute_session_detail(storage, session_id)
+
+    if is_coach(user):
+        # Coach payloads are filtered, so they never touch the shared cache.
+        detail = filter_detail_for_coach(
+            await _compute(), video=coach_scope(user).can_video(session_id)
+        )
+        await audit_coach_views(request, user, [session_id])
+        return coach_json(detail)
 
     return await t1_cached_json_response(
         request,
@@ -1008,7 +1027,7 @@ async def api_session_wind_field(
     session_id: int,
     elapsed_s: float = 0.0,
     grid_size: int = 20,
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    _user: dict[str, Any] = Depends(require_session_read()),  # noqa: B008
 ) -> Response:
     """Return a spatial grid of TWD/TWS values and course marks."""
     # The wind field is a function of (session_id, elapsed_s, grid_size). Bake
@@ -1118,7 +1137,7 @@ async def api_session_wind_timeseries(
     request: Request,
     session_id: int,
     step_s: int = 10,
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    _user: dict[str, Any] = Depends(require_session_read()),  # noqa: B008
 ) -> JSONResponse:
     """Return TWD/TWS time series at port, center, and starboard positions."""
     storage = get_storage(request)
@@ -1191,7 +1210,7 @@ async def api_session_wind_timeseries(
 async def api_session_polar(
     request: Request,
     session_id: int,
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    _user: dict[str, Any] = Depends(require_session_read()),  # noqa: B008
 ) -> JSONResponse:
     storage = get_storage(request)
     import helmlog.polar as _polar
@@ -1235,7 +1254,7 @@ async def api_session_polar(
 async def api_session_replay(
     request: Request,
     session_id: int,
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    _user: dict[str, Any] = Depends(require_session_read()),  # noqa: B008
 ) -> Response:
     """Return the payload the replay UI needs: session bounds, a per-second
     instrument series for the HUD, and per-segment polar grades (#464/#469).
@@ -1590,7 +1609,7 @@ async def _compute_session_replay(storage: Storage, session_id: int) -> dict[str
 async def api_session_maneuvers(
     request: Request,
     session_id: int,
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    user: dict[str, Any] = Depends(require_session_read()),  # noqa: B008
 ) -> JSONResponse:
     """Return detected maneuvers for a session with full per-maneuver metrics.
 
@@ -1611,6 +1630,10 @@ async def api_session_maneuvers(
     for m in enriched:
         mid = m.get("id")
         m["tags"] = tag_map.get(mid, []) if mid is not None else []
+    if is_coach(user):
+        if not coach_scope(user).can_video(session_id):
+            enriched = strip_video_fields(enriched)
+        return coach_json(enriched)
     return JSONResponse(enriched)
 
 
@@ -1675,7 +1698,7 @@ async def api_session_maneuvers_compare(
     request: Request,
     session_id: int,
     ids: str = Query(..., description="Comma-separated maneuver IDs"),
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    user: dict[str, Any] = Depends(require_session_read()),  # noqa: B008
 ) -> JSONResponse:
     """Return enriched maneuver data and video sync info for a set of maneuver IDs.
 
@@ -1696,7 +1719,13 @@ async def api_session_maneuvers_compare(
     enriched, video_sync = await enrich_session_maneuvers(storage, session_id)
     selected = [m for m in enriched if m.get("id") in requested_ids]
 
-    return JSONResponse({"maneuvers": selected, "video_sync": video_sync})
+    payload = {"maneuvers": selected, "video_sync": video_sync}
+    if is_coach(user):
+        if not coach_scope(user).can_video(session_id):
+            payload = strip_video_fields(payload)
+        await audit_coach_views(request, user, [session_id])
+        return coach_json(payload)
+    return JSONResponse(payload)
 
 
 # Sentinel for synthesized race-start pseudo-maneuvers in cross-session URLs
@@ -1879,7 +1908,7 @@ def _synth_start_entry(
 async def api_cross_session_maneuvers_compare(
     request: Request,
     ids: str = Query(..., description="Comma-separated <session_id>:<maneuver_id> pairs"),
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    user: dict[str, Any] = Depends(require_reader()),  # noqa: B008
 ) -> JSONResponse:
     """Cross-session version of the compare-page data feed (#584).
 
@@ -1900,6 +1929,8 @@ async def api_cross_session_maneuvers_compare(
 
     if not pairs:
         raise HTTPException(status_code=422, detail="ids must not be empty")
+    # Coach (#848): every requested session must be in scope, or 404 the lot.
+    ensure_coach_can_read(user, [sid for sid, _ in pairs])
 
     # Split real maneuver ids from start pseudo-ids so the enrichment
     # helper only sees real rows.
@@ -1958,6 +1989,22 @@ async def api_cross_session_maneuvers_compare(
                 )
             )
 
+    if is_coach(user):
+        scope = coach_scope(user)
+        maneuvers = [
+            m if scope.can_video(int(m["session_id"])) else strip_video_fields(m) for m in maneuvers
+        ]
+        video_sync_by_session = {
+            k: v for k, v in video_sync_by_session.items() if scope.can_video(k)
+        }
+        await audit_coach_views(request, user, [sid for sid, _ in pairs])
+        return coach_json(
+            {
+                "maneuvers": maneuvers,
+                "video_sync_by_session": {str(k): v for k, v in video_sync_by_session.items()},
+            }
+        )
+
     return JSONResponse(
         {
             "maneuvers": maneuvers,
@@ -1970,7 +2017,7 @@ async def api_cross_session_maneuvers_compare(
 async def api_maneuvers_overlay(
     request: Request,
     ids: str = Query(..., description="Comma-separated <session_id>:<maneuver_id> pairs"),
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    user: dict[str, Any] = Depends(require_reader()),  # noqa: B008
 ) -> JSONResponse:
     """Time-aligned multi-maneuver overlay series (#619).
 
@@ -1998,6 +2045,9 @@ async def api_maneuvers_overlay(
             detail="ids must be comma-separated <session_id>:<maneuver_id> pairs",
         ) from exc
 
+    # Coach (#848): every requested session must be in scope. The overlay
+    # carries no video or other filtered fields, so the shared cache is safe.
+    ensure_coach_can_read(user, [sid for sid, _ in parsed])
     pairs: list[tuple[int, int]] = [(sid, mid) for sid, mid in parsed if isinstance(mid, int)]
     if not pairs:
         return JSONResponse(

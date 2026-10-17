@@ -144,6 +144,7 @@ def create_app(
         return await bandwidth_middleware(request, call_next)
 
     from helmlog.auth import _is_auth_disabled, _resolve_user, check_device_scope, resolve_device
+    from helmlog.coach import coach_path_allowed
 
     _PUBLIC_PATHS = {
         "/login",
@@ -205,6 +206,16 @@ def create_app(
 
             return _JR({"detail": "Not authenticated"}, status_code=401)
         request.state.user = user
+        # Coach principals (#848): deny by default — only allowlisted read
+        # paths get through. Per-session scope is enforced in the routes.
+        if user.get("role") == "coach" and not coach_path_allowed(request.method, path):
+            if "text/html" in request.headers.get("accept", "") and request.method == "GET":
+                from starlette.responses import RedirectResponse as _RR
+
+                return _RR(url="/coach", status_code=303)
+            from starlette.responses import JSONResponse as _JR
+
+            return _JR({"detail": "Not available to coaches"}, status_code=403)
         return await call_next(request)  # type: ignore[no-any-return]
 
     # -- Include domain routers --
@@ -217,6 +228,7 @@ def create_app(
         auth,
         boat_settings,
         cameras,
+        coach,
         comments,
         controls,
         crew,
@@ -249,6 +261,7 @@ def create_app(
 
     for module in (
         pages,
+        coach,
         me,
         auth,
         admin,

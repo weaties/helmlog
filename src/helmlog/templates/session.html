@@ -176,7 +176,7 @@ body.live-race #session-tags-row{display:none!important}
   data-live="{{ '1' if live else '' }}"
   style="display:none"></div>
 
-<a href="/history" class="back-link">&larr; History</a>
+{% if user_role == "coach" %}<a href="/coach" class="back-link">&larr; Shared races</a>{% else %}<a href="/history" class="back-link">&larr; History</a>{% endif %}
 
 {% if renamed_from %}
 <div class="card" style="background:var(--bg-secondary);border:1px dashed var(--accent-strong);font-size:.78rem;color:var(--text-secondary);margin-bottom:8px">
@@ -210,10 +210,12 @@ body.live-race #session-tags-row{display:none!important}
     </button>
     {% endif %}
   </div>
+  {% if user_role != "coach" %}
   <div id="session-tags-row" style="margin-top:8px">
     <div style="font-size:.72rem;color:var(--text-secondary);margin-bottom:4px">Tags</div>
     <tag-picker entity-type="session" entity-id="{{ session_id }}"></tag-picker>
   </div>
+  {% endif %}
 </div>
 
 <div id="video-container" class="card" style="display:none">
@@ -551,7 +553,7 @@ body.live-race #session-tags-row{display:none!important}
 <div class="card" id="maneuvers-card" style="display:none">
   <div style="display:flex;align-items:center;justify-content:space-between">
     <div class="section-title" style="margin-bottom:0" onclick="toggleSection('maneuvers')">Maneuvers <span id="maneuvers-toggle">&#9660;</span></div>
-    <button id="detect-maneuvers-btn" onclick="detectManeuvers()" style="font-size:.72rem;color:var(--accent);background:none;border:none;cursor:pointer;padding:2px 0">&#8635; Detect</button>
+    {% if user_role != "coach" %}<button id="detect-maneuvers-btn" onclick="detectManeuvers()" style="font-size:.72rem;color:var(--accent);background:none;border:none;cursor:pointer;padding:2px 0">&#8635; Detect</button>{% endif %}
   </div>
   <div class="section-body" id="maneuvers-body" style="margin-top:6px"></div>
 </div>
@@ -595,7 +597,7 @@ body.live-race #session-tags-row{display:none!important}
 <script src="/static/vendor/purify.min.js?v={{ git_sha }}"></script>
 <script src="/static/vendor/highlight.min.js?v={{ git_sha }}"></script>
 <script src="/static/session.js?v={{ git_sha }}"></script>
-<script src="/static/llm.js?v={{ git_sha }}"></script>
+{% if user_role != "coach" %}<script src="/static/llm.js?v={{ git_sha }}"></script>{% endif %}
 <script>
 async function renameSession() {
   const sessionId = document.getElementById('app-config').dataset.sessionId;

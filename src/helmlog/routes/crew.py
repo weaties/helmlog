@@ -7,7 +7,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from helmlog.auth import require_auth
+from helmlog.auth import is_coach, require_auth, require_session_read
+from helmlog.coach import filter_results_for_coach
 from helmlog.routes._helpers import (
     BoatCreate,
     BoatUpdate,
@@ -16,6 +17,7 @@ from helmlog.routes._helpers import (
     PositionEntry,
     RaceResultEntry,
     audit,
+    coach_json,
     get_storage,
 )
 
@@ -229,6 +231,8 @@ async def api_crew_users(
     pending_emails = await storage.list_pending_invitation_emails()
     for u in users:
         u["pending"] = u["email"] in pending_emails
+    # Coaches (#848) are never crew — keep them out of crew selectors.
+    users = [u for u in users if u.get("role") != "coach"]
     role_order = {"crew": 0, "admin": 1, "viewer": 2}
     users.sort(key=lambda u: (role_order.get(u["role"], 99), u.get("name") or ""))
     return JSONResponse({"users": users})
@@ -316,10 +320,12 @@ async def api_delete_boat(
 async def api_get_results(
     request: Request,
     race_id: int,
-    _user: dict[str, Any] = Depends(require_auth("viewer")),  # noqa: B008
+    user: dict[str, Any] = Depends(require_session_read()),  # noqa: B008
 ) -> JSONResponse:
     storage = get_storage(request)
     results = await storage.list_race_results(race_id)
+    if is_coach(user):
+        return coach_json(filter_results_for_coach(results))
     return JSONResponse(results)
 
 

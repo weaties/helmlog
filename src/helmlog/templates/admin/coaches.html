@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}Coach access — HelmLog{% endblock %}
+{% block extra_css %}
+<style>
+h1{font-size:1.3rem;font-weight:700;color:var(--accent);margin-bottom:4px}
+.sub{color:var(--text-secondary);font-size:.85rem;margin-bottom:16px;max-width:720px}
+.card{background:var(--bg-secondary);border-radius:12px;padding:16px;margin-bottom:16px}
+.label{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:8px}
+table{width:100%;border-collapse:collapse;font-size:.85rem}
+th{text-align:left;padding:6px 8px;color:var(--text-secondary);font-weight:500;border-bottom:1px solid var(--border)}
+td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:middle}
+.field{margin-bottom:12px}
+.field>label{font-size:.8rem;color:var(--text-secondary);display:block;margin-bottom:4px}
+.field input[type=text],.field input[type=email],.field input[type=date]{background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text-primary);font-size:.9rem;width:100%;max-width:360px;box-sizing:border-box}
+.check{display:flex;align-items:center;gap:8px;font-size:.88rem;color:var(--text-primary)}
+.hint{font-size:.76rem;color:var(--text-secondary);margin-top:2px}
+#race-list{max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px;max-width:520px}
+#race-list .check{padding:4px 0}
+#race-list .when{color:var(--text-secondary);font-size:.76rem;margin-left:auto}
+.btn{padding:9px 16px;border:none;border-radius:8px;font-size:.88rem;font-weight:700;cursor:pointer;background:var(--accent-strong);color:var(--bg-primary)}
+.btn-sm{padding:5px 10px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);font-size:.78rem;cursor:pointer}
+.btn-del{color:var(--danger);border-color:var(--danger)}
+.state{font-size:.75rem;font-weight:600;padding:2px 8px;border-radius:4px;border:1px solid var(--border)}
+.state-active{color:var(--success);border-color:var(--success)}
+.state-scheduled{color:var(--warning);border-color:var(--warning)}
+.state-expired,.state-revoked{color:var(--text-secondary)}
+#form-err{color:var(--danger);font-size:.82rem;margin-top:6px}
+#form-ok{font-size:.85rem;color:var(--success);margin-top:8px;word-break:break-all}
+@media (max-width: 640px){
+  table thead{display:none}
+  tbody tr{display:block;border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px}
+  tbody td{display:flex;justify-content:space-between;gap:8px;border:none;padding:3px 0}
+  tbody td::before{content:attr(data-label);color:var(--text-secondary);font-size:.76rem}
+}
+</style>
+{% endblock %}
+{% block content %}
+<h1>Coach access</h1>
+<div class="sub">Give a coach time-limited, read-only access to selected races: track, instruments,
+  polars, maneuvers, maneuver compare and results. Crew, audio, transcripts, notes, sails and exports
+  are never shared. Video is shared only if you tick it. Every race a coach opens is logged in the audit log.</div>
+
+<div class="card">
+  <div class="label" id="form-title">Invite a coach</div>
+  <input type="hidden" id="edit-id" value="">
+  <div class="field"><label for="g-label">Label</label>
+    <input type="text" id="g-label" placeholder="e.g. Coach Pat — 2026 season"></div>
+  <div class="field" id="email-field"><label for="g-email">Coach email</label>
+    <input type="email" id="g-email" placeholder="coach@example.com">
+    <div class="hint">They get an invite link to create a coach account.</div></div>
+  <div class="field"><label>Races</label>
+    <label class="check"><input type="checkbox" id="g-all" onchange="toggleAll()"> All races, including ones recorded while access lasts</label>
+    <div id="race-list" style="margin-top:6px"><div class="hint">Loading races…</div></div></div>
+  <div class="field"><label class="check"><input type="checkbox" id="g-video"> Include race video (YouTube links)</label>
+    <div class="hint">Video shows crew faces — only share it if your crew is OK with that.</div></div>
+  <div class="field"><label for="g-expires">Access ends</label>
+    <input type="date" id="g-expires">
+    <div class="hint">At most one year. Renew with a new grant next season.</div></div>
+  <button class="btn" id="g-submit" onclick="submitGrant()">Create &amp; invite</button>
+  <button class="btn-sm" id="g-cancel" onclick="resetForm()" style="display:none;margin-left:8px">Cancel edit</button>
+  <div id="form-err"></div>
+  <div id="form-ok"></div>
+</div>
+
+<div class="card">
+  <div class="label">Grants</div>
+  <table><thead><tr><th>Label</th><th>Coach</th><th>Races</th><th>Video</th><th>Ends</th><th>State</th><th></th></tr></thead>
+  <tbody id="grant-tbody"><tr><td colspan="7" class="hint">Loading…</td></tr></tbody></table>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let _races = [];
+let _grants = [];
+
+function _esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function _defaultExpiry() { return new Date().getFullYear() + '-12-31'; }
+
+async function loadRaces() {
+  const [a, b] = await Promise.all(['race', 'practice'].map(t =>
+    fetch('/api/sessions?type=' + t + '&limit=200').then(r => r.ok ? r.json() : {sessions: []})));
+  _races = [...a.sessions, ...b.sessions].sort((x, y) => (y.start_utc || '').localeCompare(x.start_utc || ''));
+  renderRaceList([]);
+}
+
+function renderRaceList(selected) {
+  const el = document.getElementById('race-list');
+  if (!_races.length) { el.innerHTML = '<div class="hint">No races recorded yet.</div>'; return; }
+  el.innerHTML = _races.map(r =>
+    '<label class="check"><input type="checkbox" class="race-cb" value="' + r.id + '"' +
+    (selected.includes(r.id) ? ' checked' : '') + '> ' + _esc(r.name) +
+    '<span class="when">' + _esc((r.start_utc || '').slice(0, 10)) + '</span></label>').join('');
+  toggleAll();
+}
+
+function toggleAll() {
+  const all = document.getElementById('g-all').checked;
+  document.querySelectorAll('.race-cb').forEach(cb => cb.disabled = all);
+  document.getElementById('race-list').style.opacity = all ? .5 : 1;
+}
+
+function resetForm() {
+  document.getElementById('edit-id').value = '';
+  document.getElementById('form-title').textContent = 'Invite a coach';
+  document.getElementById('email-field').style.display = '';
+  document.getElementById('g-label').value = '';
+  document.getElementById('g-email').value = '';
+  document.getElementById('g-all').checked = false;
+  document.getElementById('g-video').checked = false;
+  document.getElementById('g-expires').value = _defaultExpiry();
+  document.getElementById('g-submit').textContent = 'Create & invite';
+  document.getElementById('g-cancel').style.display = 'none';
+  document.getElementById('form-err').textContent = '';
+  renderRaceList([]);
+}
+
+function editGrant(id) {
+  const g = _grants.find(x => x.id === id);
+  if (!g) return;
+  document.getElementById('edit-id').value = g.id;
+  document.getElementById('form-title').textContent = 'Edit grant — ' + g.label;
+  document.getElementById('email-field').style.display = 'none';
+  document.getElementById('g-label').value = g.label;
+  document.getElementById('g-all').checked = !!g.all_sessions;
+  document.getElementById('g-video').checked = !!g.allow_video;
+  document.getElementById('g-expires').value = g.expires_at.slice(0, 10);
+  document.getElementById('g-submit').textContent = 'Save changes';
+  document.getElementById('g-cancel').style.display = '';
+  document.getElementById('form-ok').textContent = '';
+  renderRaceList(g.session_ids);
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+async function submitGrant() {
+  const err = document.getElementById('form-err');
+  const ok = document.getElementById('form-ok');
+  err.textContent = ''; ok.textContent = '';
+  const date = document.getElementById('g-expires').value;
+  if (!date) { err.textContent = 'Choose when access ends.'; return; }
+  // End of the chosen day in the viewer's local time.
+  const expires = new Date(date + 'T23:59:59');
+  const body = {
+    label: document.getElementById('g-label').value,
+    all_sessions: document.getElementById('g-all').checked,
+    allow_video: document.getElementById('g-video').checked,
+    session_ids: [...document.querySelectorAll('.race-cb:checked')].map(cb => parseInt(cb.value, 10)),
+    expires_at: expires.toISOString(),
+  };
+  const editId = document.getElementById('edit-id').value;
+  let r;
+  if (editId) {
+    r = await fetch('/api/admin/coach-grants/' + editId, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  } else {
+    body.coach_email = document.getElementById('g-email').value;
+    r = await fetch('/api/admin/coach-grants', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  }
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    err.textContent = typeof d.detail === 'string' ? d.detail : 'Could not save (HTTP ' + r.status + ').';
+    return;
+  }
+  if (!editId) {
+    const d = await r.json();
+    resetForm();
+    ok.innerHTML = d.invite_url
+      ? 'Grant created. Send the coach this invite link (valid 7 days): <br><code>' + _esc(d.invite_url) + '</code>'
+      : 'Grant created. The coach already has an account — they’ll see the races next time they sign in.';
+  } else {
+    resetForm();
+    ok.textContent = 'Changes saved.';
+  }
+  loadGrants();
+}
+
+async function revokeGrant(id) {
+  const g = _grants.find(x => x.id === id);
+  if (!g || !window.confirm('Revoke "' + g.label + '"? The coach loses access immediately.')) return;
+  const r = await fetch('/api/admin/coach-grants/' + id + '/revoke', {method: 'POST'});
+  if (r.ok) loadGrants();
+}
+
+async function loadGrants() {
+  const r = await fetch('/api/admin/coach-grants');
+  const tb = document.getElementById('grant-tbody');
+  if (!r.ok) { tb.innerHTML = '<tr><td colspan="7">Could not load grants.</td></tr>'; return; }
+  _grants = (await r.json()).grants;
+  if (!_grants.length) { tb.innerHTML = '<tr><td colspan="7" class="hint">No coach grants yet.</td></tr>'; return; }
+  tb.innerHTML = _grants.map(g => {
+    const live = g.state === 'active' || g.state === 'scheduled';
+    const races = g.all_sessions ? 'All' : g.session_ids.length;
+    return '<tr>' +
+      '<td data-label="Label">' + _esc(g.label) + '</td>' +
+      '<td data-label="Coach">' + _esc(g.coach_email || 'share link') + '</td>' +
+      '<td data-label="Races">' + races + '</td>' +
+      '<td data-label="Video">' + (g.allow_video ? 'Yes' : 'No') + '</td>' +
+      '<td data-label="Ends">' + _esc(g.expires_at.slice(0, 10)) + '</td>' +
+      '<td data-label="State"><span class="state state-' + g.state + '">' + g.state + '</span></td>' +
+      '<td>' + (live ? '<button class="btn-sm" onclick="editGrant(' + g.id + ')">Edit</button> ' +
+        '<button class="btn-sm btn-del" onclick="revokeGrant(' + g.id + ')">Revoke</button>' : '') + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+document.getElementById('g-expires').value = _defaultExpiry();
+loadRaces();
+loadGrants();
+</script>
+{% endblock %}
