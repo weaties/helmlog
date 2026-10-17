@@ -8,6 +8,7 @@ tests focus on the link principal itself.
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -326,6 +327,10 @@ async def test_share_button_admin_only(env: dict[str, Any]) -> None:
     _cookies(c, session=env["admin"])
     admin = (await c.get(page, headers=HTML)).text
     assert 'id="coach-share-btn"' in admin and "/static/coach_share.js" in admin
+    # The onclick must survive HTML attribute quoting (a JSON-quoted label
+    # inside onclick="..." once truncated it).
+    onclick = re.search(r'id="coach-share-btn".*?onclick="([^"]*)"', admin, re.S)
+    assert onclick and onclick.group(1).rstrip().endswith("})")
     compare = (await c.get(f"/session/{env['granted']}/compare", headers=HTML)).text
     assert 'id="coach-share-btn"' in compare and "/static/coach_share.js" in compare
     _cookies(c, session=env["viewer"])

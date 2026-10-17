@@ -210,8 +210,9 @@ body.live-race #session-tags-row{display:none!important}
     </button>
     <button id="coach-share-btn"
             type="button"
-            onclick="openCoachShareDialog({sessionIds: [{{ session_id }}], label: {{ ('Coach link — ' ~ session_name)|tojson }}, landingPath: location.pathname})"
-            title="Create an expiring, read-only link for a coach (#849)"
+            data-label="Coach link — {{ session_name }}"
+            onclick="openCoachShareDialog({sessionIds: [{{ session_id }}], label: this.dataset.label, landingPath: location.pathname})"
+            title="Create an expiring, read-only link for a coach"
             style="background:none;border:1px solid var(--border);color:var(--text-secondary);border-radius:4px;padding:4px 10px;font-size:.75rem;cursor:pointer">
       Share with coach
     </button>

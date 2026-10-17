@@ -21,8 +21,15 @@ function openCoachShareDialog(opts) {
   if (dlg) dlg.remove();
   dlg = document.createElement('dialog');
   dlg.id = 'coach-share-dialog';
+  // margin:auto re-centres the modal (base.css resets margins globally).
   dlg.style.cssText = 'background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);'
-    + 'border-radius:12px;padding:20px;max-width:440px;width:calc(100% - 32px)';
+    + 'border-radius:12px;padding:20px;max-width:440px;width:calc(100% - 32px);margin:auto';
+  if (!document.getElementById('coach-share-style')) {
+    const st = document.createElement('style');
+    st.id = 'coach-share-style';
+    st.textContent = '#coach-share-dialog::backdrop{background:rgba(0,0,0,.6)}';
+    document.head.appendChild(st);
+  }
   const races = sessionIds.length === 1 ? 'this race' : sessionIds.length + ' races';
   dlg.innerHTML =
     '<div style="font-weight:700;margin-bottom:6px">Share with coach</div>'
