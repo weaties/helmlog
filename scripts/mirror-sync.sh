@@ -3,6 +3,8 @@
 #
 # Run every ~15 min by launchd (com.helmlog.mirror-sync, installed by
 # setup-mirror-mac.sh). Each run:
+#   0. If $MIRROR_TRACK_BRANCH is set, moves $MIRROR_CODE_DIR to the latest
+#      origin/<branch> and restarts the server (evergreen, like the Pi).
 #   1. Pulls logger.db from the Pi into $MIRROR_ROOT/replica/ with
 #      sqlite3_rsync — only changed pages cross the wire, the Pi's live DB is
 #      read in a consistent transaction, and nothing is written on the Pi.
@@ -14,14 +16,15 @@
 # When the Pi is unreachable (on the water) the run exits 0 quietly — the
 # mirror keeps serving the last copy and catches up when the Pi is back.
 #
-# Holding a demo: `touch $MIRROR_ROOT/HOLD` skips step 3 (no restart, no swap)
-# until the file is removed. Steps 1–2 keep running.
+# Holding a demo: `touch $MIRROR_ROOT/HOLD` skips steps 0 and 3 (no code
+# update, no swap, no restart) until the file is removed. Steps 1–2 keep running.
 #
 # Environment (all optional):
 #   PI                 SSH target              (default: helmlog-backup@corvopi-live)
 #   SSH_KEY            local SSH key           (default: ~/.ssh/helmlog-backup)
 #   MIRROR_ROOT        mirror directory        (default: ~/helmlog-mirror)
 #   MIRROR_CODE_DIR    checkout to serve       (default: $MIRROR_ROOT/code)
+#   MIRROR_TRACK_BRANCH evergreen: follow origin/<branch> (default: unset = pinned)
 #   PI_HELMLOG_DIR     helmlog dir on the Pi   (default: /home/weaties/helmlog)
 #   PI_SQLITE3_RSYNC   sqlite3_rsync on the Pi (default: /home/helmlog-backup/bin/sqlite3_rsync)
 #   SQLITE3_RSYNC      sqlite3_rsync locally   (default: $MIRROR_ROOT/bin/sqlite3_rsync)
@@ -36,6 +39,7 @@ PI="${PI:-helmlog-backup@corvopi-live}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/helmlog-backup}"
 MIRROR_ROOT="${MIRROR_ROOT:-$HOME/helmlog-mirror}"
 MIRROR_CODE_DIR="${MIRROR_CODE_DIR:-$MIRROR_ROOT/code}"
+MIRROR_TRACK_BRANCH="${MIRROR_TRACK_BRANCH:-}"
 PI_HELMLOG_DIR="${PI_HELMLOG_DIR:-/home/weaties/helmlog}"
 PI_SQLITE3_RSYNC="${PI_SQLITE3_RSYNC:-/home/helmlog-backup/bin/sqlite3_rsync}"
 SQLITE3_RSYNC="${SQLITE3_RSYNC:-$MIRROR_ROOT/bin/sqlite3_rsync}"
@@ -73,6 +77,28 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   exit 75
 fi
 trap 'rmdir "$LOCK"' EXIT
+
+# ── 0. Code (evergreen) ───────────────────────────────────────────────────────
+# Like the Pi's evergreen deploy mode: follow origin/$MIRROR_TRACK_BRANCH and
+# restart the server when it advances. Runs even when the Pi is offline.
+if [ -n "$MIRROR_TRACK_BRANCH" ] && [ ! -e "$MIRROR_ROOT/HOLD" ]; then
+  if with_timeout 60 git -C "$MIRROR_CODE_DIR" fetch -q origin "$MIRROR_TRACK_BRANCH"; then
+    want=$(git -C "$MIRROR_CODE_DIR" rev-parse FETCH_HEAD)
+    have=$(git -C "$MIRROR_CODE_DIR" rev-parse HEAD)
+    if [ "$want" != "$have" ]; then
+      log "Code: ${have:0:7} → ${want:0:7} (origin/$MIRROR_TRACK_BRANCH)"
+      if git -C "$MIRROR_CODE_DIR" checkout -q --detach "$want" \
+        && (cd "$MIRROR_CODE_DIR" && uv sync -q); then
+        launchctl kickstart -k "gui/$(id -u)/$SERVE_LABEL" 2>/dev/null \
+          || log "  WARNING: $SERVE_LABEL not loaded — not restarted"
+      else
+        log "  WARNING: code update failed — still serving ${have:0:7}"
+      fi
+    fi
+  else
+    log "  WARNING: git fetch origin $MIRROR_TRACK_BRANCH failed — code not updated"
+  fi
+fi
 
 # ── 1. Database ───────────────────────────────────────────────────────────────
 if ! with_timeout "$SSH_TIMEOUT_S" "$SSH_WRAPPER" "$PI" true 2>/dev/null; then

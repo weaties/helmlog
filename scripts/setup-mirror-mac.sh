@@ -19,7 +19,9 @@
 # Environment (all optional):
 #   MIRROR_ROOT      (default: ~/helmlog-mirror)
 #   MIRROR_CODE_DIR  checkout to serve        (default: $MIRROR_ROOT/code, created detached)
-#   MIRROR_REF       ref for a new code dir   (default: origin/main)
+#   MIRROR_REF       ref for a new code dir   (default: origin/$MIRROR_TRACK_BRANCH)
+#   MIRROR_TRACK_BRANCH  evergreen branch the code dir follows (default: live;
+#                    set empty to pin the code dir and update it by hand)
 #   MIRROR_PORT      local web port           (default: 3012)
 #   MIRROR_HOSTNAME  public hostname          (default: corvo105-mirror.helmlog.org)
 #   BACKUP_DEST      snapshot root to seed the replica from (default: ~/backups/helmlog)
@@ -36,7 +38,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MIRROR_ROOT="${MIRROR_ROOT:-$HOME/helmlog-mirror}"
 MIRROR_CODE_DIR="${MIRROR_CODE_DIR:-$MIRROR_ROOT/code}"
-MIRROR_REF="${MIRROR_REF:-origin/main}"
+MIRROR_TRACK_BRANCH="${MIRROR_TRACK_BRANCH-live}"
+MIRROR_REF="${MIRROR_REF:-origin/${MIRROR_TRACK_BRANCH:-main}}"
 MIRROR_PORT="${MIRROR_PORT:-3012}"
 MIRROR_HOSTNAME="${MIRROR_HOSTNAME:-corvo105-mirror.helmlog.org}"
 BACKUP_DEST="${BACKUP_DEST:-$HOME/backups/helmlog}"
@@ -102,6 +105,7 @@ write_plist() { # label, program-args xml, extra keys xml
     <key>HOME</key><string>$HOME</string>
     <key>MIRROR_ROOT</key><string>$MIRROR_ROOT</string>
     <key>MIRROR_CODE_DIR</key><string>$MIRROR_CODE_DIR</string>
+    <key>MIRROR_TRACK_BRANCH</key><string>$MIRROR_TRACK_BRANCH</string>
   </dict>
   $3
 </dict>

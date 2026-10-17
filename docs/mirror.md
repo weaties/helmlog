@@ -39,7 +39,12 @@ of scope until there's a need.
 
 ## Which code it serves
 
-`~/helmlog-mirror/code` is a detached worktree. To demo a branch:
+`~/helmlog-mirror/code` is a detached worktree that is **evergreen on `live`**:
+each sync run fetches `origin/live`, and when it has advanced, checks it out,
+`uv sync`s and restarts the server — the same promote flow the boat uses
+(`main → stage → live`). `HOLD` pauses this too. Set `MIRROR_TRACK_BRANCH`
+when running `setup-mirror-mac.sh` to follow another branch, or to empty to
+pin the checkout and update it by hand:
 
 ```bash
 git -C ~/helmlog-mirror/code checkout --detach <branch-or-sha>
@@ -47,8 +52,9 @@ git -C ~/helmlog-mirror/code checkout --detach <branch-or-sha>
 launchctl kickstart -k gui/$(id -u)/com.helmlog.mirror-serve
 ```
 
-Schema migrations from that branch run against the served copy only; the
-replica stays on the Pi's schema, and the next swap re-applies them.
+Schema migrations from that code run against the served copy only; the
+replica stays on the Pi's schema, and the next swap re-applies them. Code
+older than the DB's schema is fine — newer migration versions are skipped.
 
 ## Setup
 
