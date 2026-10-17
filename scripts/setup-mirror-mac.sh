@@ -116,6 +116,11 @@ EOF
 
 load() {
   launchctl bootout "gui/$(id -u)/$1" 2>/dev/null || true
+  # bootout returns before the job is gone; bootstrapping too early fails with EIO.
+  for _ in $(seq 30); do
+    launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
   launchctl bootstrap "gui/$(id -u)" "$AGENTS/$1.plist"
   log "Loaded $1"
 }

@@ -90,16 +90,23 @@ fi
 # ── 0. Code — same branch and mode as the Pi ──────────────────────────────────
 # Same precedence as helmlog.deploy.DeployConfig: DB setting, then the
 # defaults (the Pi's .env sets neither). Read from the last synced replica.
-pi_setting() {
-  sqlite3 "file:$REPLICA?mode=ro" \
-    "SELECT value FROM app_settings WHERE key = '$1'" 2>/dev/null
+# A failed read skips the step — guessing the mode could check out the wrong code.
+pi_settings() {
+  sqlite3 -separator '=' "file:$REPLICA?mode=ro" \
+    "SELECT key, value FROM app_settings WHERE key IN ('DEPLOY_MODE', 'DEPLOY_BRANCH')"
 }
 
 if [ "$MIRROR_FOLLOW_PI" = 1 ] && [ ! -e "$MIRROR_ROOT/HOLD" ]; then
-  mode=$(pi_setting DEPLOY_MODE); mode=${mode:-explicit}
-  branch=$(pi_setting DEPLOY_BRANCH); branch=${branch:-main}
+  if settings=$(pi_settings 2>&1); then
+    mode=$(sed -n 's/^DEPLOY_MODE=//p' <<<"$settings"); mode=${mode:-explicit}
+    branch=$(sed -n 's/^DEPLOY_BRANCH=//p' <<<"$settings"); branch=${branch:-main}
+  else
+    log "  WARNING: can't read the Pi's deploy settings from the replica ($settings) — code not updated"
+    mode=unknown
+  fi
   want=""
   case "$mode" in
+    unknown) ;;
     evergreen)
       if with_timeout 60 git -C "$MIRROR_CODE_DIR" fetch -q origin "$branch"; then
         want=$(git -C "$MIRROR_CODE_DIR" rev-parse FETCH_HEAD)
