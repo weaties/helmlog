@@ -39,12 +39,18 @@ of scope until there's a need.
 
 ## Which code it serves
 
-`~/helmlog-mirror/code` is a detached worktree that is **evergreen on `live`**:
-each sync run fetches `origin/live`, and when it has advanced, checks it out,
-`uv sync`s and restarts the server — the same promote flow the boat uses
-(`main → stage → live`). `HOLD` pauses this too. Set `MIRROR_TRACK_BRANCH`
-when running `setup-mirror-mac.sh` to follow another branch, or to empty to
-pin the checkout and update it by hand:
+`~/helmlog-mirror/code` is a detached worktree that **runs what the Pi runs,
+in the Pi's deploy mode** (`DEPLOY_MODE` / `DEPLOY_BRANCH`, read from the
+synced DB — change them on the Pi's Deploy admin and the mirror follows):
+
+| Pi mode | Mirror code |
+|---|---|
+| `evergreen` | latest `origin/<DEPLOY_BRANCH>`, checked each sync — keeps advancing while the Pi is offline, as the Pi will when it reconnects |
+| `explicit` | the commit checked out on the Pi, read over SSH when it's reachable |
+
+On a change it checks out, `uv sync`s and restarts the server. `HOLD` pauses
+this too. To demo a branch the Pi doesn't run, set `MIRROR_FOLLOW_PI=0` when
+running `setup-mirror-mac.sh`, then:
 
 ```bash
 git -C ~/helmlog-mirror/code checkout --detach <branch-or-sha>
