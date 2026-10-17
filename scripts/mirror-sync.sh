@@ -150,9 +150,11 @@ if ! "$SQLITE3_RSYNC" --ssh "$SSH_WRAPPER" --exe "$PI_SQLITE3_RSYNC" \
 fi
 
 # ── 2. Files referenced by the DB ─────────────────────────────────────────────
+# -rlt, not -a: the Pi's setgid/ACL dir modes can't be applied on macOS.
 for d in audio notes avatars; do
-  rsync -a -e "$SSH_WRAPPER" "$PI:$PI_HELMLOG_DIR/data/$d/" "$MIRROR_ROOT/data/$d/" 2>/dev/null \
-    || log "  WARNING: rsync data/$d failed (may not exist on the Pi)"
+  "$SSH_WRAPPER" "$PI" "test -d '$PI_HELMLOG_DIR/data/$d'" 2>/dev/null || continue
+  rsync -rlt -e "$SSH_WRAPPER" "$PI:$PI_HELMLOG_DIR/data/$d/" "$MIRROR_ROOT/data/$d/" 2>/dev/null \
+    || log "  WARNING: rsync data/$d failed"
 done
 
 # ── 3. Refresh the served copy ────────────────────────────────────────────────
