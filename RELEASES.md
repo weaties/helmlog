@@ -1,5 +1,88 @@
 # Release Notes
 
+## Coach Access, 360° Video Panning & Results Import Fixes (2026-10-17)
+
+The headline this cycle is coaching: a coach can now watch how the boat is
+doing without being crew, either by signing in with a time-limited account or
+by opening an expiring share link. Both show only the races the owner picks,
+and never show crew, audio, notes or sails. Race videos shot in 360° can now
+be panned by dragging, the cockpit gets a configurable e-paper repeater,
+history cards show video thumbnails, and results import handles Yacht
+Scoring, multi-day distance races and venue-local Clubspot dates.
+
+### Coach access
+
+- **Time-limited coach accounts** — on the new **Admin → Coaches** page, invite
+  a coach by email and choose which races they see (a list, or all races),
+  whether video is included, and an expiry date (at most a year). The coach
+  sees track, polars, wind, maneuvers, maneuver compare and results for those
+  races only. Crew, emails, audio, transcripts, notes, sails, tuning, live data
+  and CSV/GPX downloads are never shown. Races synced from other co-op boats
+  are excluded, every race a coach opens is written to the audit log, and
+  revoking a grant takes effect on the coach's next page load. Adds schema
+  v89 (`coach_grants`), which migrates on first start.
+  ([#850](https://github.com/weaties/helmlog/pull/850))
+- **Expiring share links, no account needed** — an admin-only **Share with
+  coach** button on race and compare pages creates a read-only link to what's
+  on screen. It defaults to 14 days, video is opt-in, and it can be revoked
+  under Admin → Coaches.
+  ([#851](https://github.com/weaties/helmlog/pull/851))
+
+### Video
+
+- **Drag to pan 360° videos** — Insta360 videos embedded from YouTube used to
+  show only the middle of the shot. Dragging the player now pans and tilts
+  the view, on both the race page
+  ([#845](https://github.com/weaties/helmlog/pull/845)) and maneuver compare
+  ([#847](https://github.com/weaties/helmlog/pull/847)); a click without a
+  drag still plays and pauses. Flat videos behave as before.
+- **Video thumbnails on history cards** — races with a linked YouTube video
+  show a thumbnail that links to it, with "+N more" when there are several
+  clips. With no internet on the boat, it falls back to a text badge.
+  ([#828](https://github.com/weaties/helmlog/pull/828))
+- **Video-derived fleet analysis tooling** — `scripts/analysis/video/`
+  extracts frames from 360° race videos, detects the start horn, and records
+  structured observations of the fleet. Design is in
+  `docs/video-analysis.md`. This is offline analysis tooling, not part of
+  the running logger.
+  ([#840](https://github.com/weaties/helmlog/pull/840),
+  [#841](https://github.com/weaties/helmlog/pull/841))
+
+### Cockpit e-paper repeater
+
+- **Server-rendered e-paper display** — `GET /api/display.png` (to preview)
+  and `/api/display.raw` (the panel's framebuffer format) render STW, VMG and
+  wind for a LilyGo T5 e-paper panel. Refresh cadence is set by admin
+  settings, so changing it needs no reflash.
+  ([#821](https://github.com/weaties/helmlog/pull/821))
+- **Configurable screens** — build screen layouts from a metric list and
+  templates (including a compass dial) on the admin Display page, and pick
+  them from the device's touch menu. They're stored as an app setting, so no
+  migration. ([#823](https://github.com/weaties/helmlog/pull/823))
+
+### Results import
+
+- **Yacht Scoring provider** — imports results from yachtscoring.com through
+  its public API, so Race Week results link to the local sessions.
+  ([#837](https://github.com/weaties/helmlog/pull/837))
+- **Clubspot dates are venue-local** — an evening race is no longer dated the
+  next (UTC) day, refetching keeps existing hand-made links, and races the
+  boat is scored DNC/DNS in are never auto-linked.
+  ([#838](https://github.com/weaties/helmlog/pull/838))
+- **Sail-number matching ignores country prefixes** (`USA 475` matches `475`)
+  ([#836](https://github.com/weaties/helmlog/pull/836)), and **STYC multi-day
+  distance races** such as Race to the Straits now parse
+  ([#834](https://github.com/weaties/helmlog/pull/834)).
+
+### Backups & docs
+
+- **Torn backup detection** — `validate_snapshot.py` checks the newest row
+  per table, so a backup that passes SQLite's own checks but was copied from
+  the live file mid-write is caught instead of reported as a success.
+  ([#825](https://github.com/weaties/helmlog/pull/825))
+- **Deploy docs** now point to the web Deploy admin as the routine path.
+  ([#824](https://github.com/weaties/helmlog/pull/824))
+
 ## GPS-Disciplined Timestamps, Safer Backups & Moments Markdown (2026-07-02)
 
 The headline this cycle is time integrity: the Pi runs Signal K locally, so
