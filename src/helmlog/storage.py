@@ -9618,6 +9618,15 @@ class Storage:
                     (s, e),
                 )
 
+        # Rows tagged with this race_id can sit just outside the window (GPS-
+        # disciplined timestamps on records queued as the race opened). Their
+        # race_id FK has no CASCADE, so leaving them blocks the delete below.
+        for table in ("headings", "speeds", "depths", "positions", "cogsog", "winds"):
+            await db.execute(
+                f"DELETE FROM {table} WHERE race_id = ?",  # noqa: S608
+                (session_id,),
+            )
+
         await db.execute("DELETE FROM races WHERE id = ?", (session_id,))
         await db.commit()
         await self._invalidate_race_cache(session_id)

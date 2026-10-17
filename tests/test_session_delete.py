@@ -258,6 +258,54 @@ async def test_delete_cascades_instrument_data(storage: Storage) -> None:
     assert row[0] == 0
 
 
+@pytest.mark.asyncio
+async def test_delete_removes_tagged_rows_outside_time_window(storage: Storage) -> None:
+    """Rows tagged with the session's race_id but stamped just before its
+    start_utc (GPS-disciplined timestamps on records queued as the race
+    opened) used to survive the time-window delete and then block the
+    session row via the non-cascading race_id FK — a 500 on delete."""
+    race_id = await _create_ended_session(storage)
+    db = storage._conn()
+    early = datetime(2026, 3, 1, 11, 59, 59, 900000, tzinfo=UTC).isoformat()
+    for sql, params in (
+        ("INSERT INTO headings (ts, source_addr, heading_deg, race_id)", (180.0,)),
+        ("INSERT INTO speeds (ts, source_addr, speed_kts, race_id)", (5.5,)),
+        ("INSERT INTO depths (ts, source_addr, depth_m, race_id)", (12.0,)),
+        (
+            "INSERT INTO positions (ts, source_addr, latitude_deg, longitude_deg, race_id)",
+            (47.6, -122.4),
+        ),
+        ("INSERT INTO cogsog (ts, source_addr, cog_deg, sog_kts, race_id)", (90.0, 6.0)),
+        (
+            "INSERT INTO winds (ts, source_addr, wind_speed_kts, wind_angle_deg, reference,"
+            " race_id)",
+            (10.0, 45.0, 2),
+        ),
+    ):
+        values = ", ".join("?" * (len(params) + 3))
+        await db.execute(f"{sql} VALUES ({values})", (early, 0, *params, race_id))
+    await db.commit()
+
+    _, session_id = await _create_user(storage, "admin")
+    with patch.dict(os.environ, {"AUTH_DISABLED": "false"}):
+        app = create_app(storage)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+            cookies={"session": session_id},
+        ) as client:
+            resp = await client.delete(f"/api/sessions/{race_id}")
+    assert resp.status_code == 204
+
+    for table in ("headings", "speeds", "depths", "positions", "cogsog", "winds"):
+        cur = await db.execute(f"SELECT COUNT(*) FROM {table} WHERE race_id = ?", (race_id,))  # noqa: S608
+        row = await cur.fetchone()
+        assert row[0] == 0, table
+    cur = await db.execute("SELECT COUNT(*) FROM races WHERE id = ?", (race_id,))
+    row = await cur.fetchone()
+    assert row[0] == 0
+
+
 # ---------------------------------------------------------------------------
 # Guard: audit log entry created
 # ---------------------------------------------------------------------------
