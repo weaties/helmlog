@@ -2595,3 +2595,71 @@ off-network; iterate on auth, real-time, and PII-bearing data later.
 - The federation-as-transport option is attractive — it means the cloud
   isn't a special case in the codebase, just a peer with unusually high
   uptime. Worth a closer look before committing to a bespoke sync path.
+
+---
+
+## IDX-039: HelmLog Lite — M5Stack Core2 boats + central server, tiered participation
+
+- **Date captured:** 2026-10-19
+- **Origin:** Review of the M5Stack Core2 v1.3
+  (https://docs.m5stack.com/en/core/Core2_v1.3) as a way to make HelmLog
+  cheaper to run on more boats, alongside a central server being built
+  separately. Shared (as an AI-written summary) with Peer Gynt and Creative.
+- **Status:** `raw`
+- **Related:** **IDX-038** / #757 (cloud-hosted viewer + replication — the
+  central server this would feed), IDX-034 (DB replication), IDX-032 (ESP32
+  accelerometer sea state), IDX-030 (ESP32 rudder sensor), #423 (device API
+  keys), #660 / `docs/esp32cam-setup.md` (ESP32 push-mode pattern),
+  `vakaros_inbox.py` (external-device log → session import), #822 (screen
+  JSON model), #789 (B&G start timer), `docs/federation-design.md`,
+  `docs/data-licensing.md`
+
+**Description:**
+Lower the barrier to entry by letting boats participate without running the
+full Pi stack. Once a central server does decoding/analysis/comparison, a boat
+only needs to capture data and upload it. Three tiers, all feeding the same
+server so every boat can compare races and share in the co-op:
+
+1. **Full Pi** (Corvo, Creative today) — audio, video, onboard web UI.
+   Optionally syncs to the central server (doubles as off-boat backup).
+2. **M5Stack Lite** (Peer Gynt today runs only an M5Stack) — Core2 (~$55;
+   ESP32, 8 MB PSRAM, 2" touchscreen, IMU, microSD, Wi-Fi, battery) plus a
+   Grove CAN transceiver (~$15) reads NMEA 2000 directly via the ESP32's TWAI
+   controller. Logs to SD, uploads after racing. ~$100 all in, no Linux box.
+3. **No instruments** — Core2 + Grove GPS + onboard IMU (heel/pitch) for
+   tracks, starts, maneuvers. Fits club/charter boats or boats with no
+   instrument system.
+
+**Design sketch:**
+- Firmware logs **raw, PGN-filtered frames** (position, COG/SOG, wind, STW,
+  heading, attitude) append + fsync per record. Decoding happens server-side
+  with the existing `nmea2000.py` — a deliberate exception to "decode early":
+  dumb firmware, reuses tested decoders, logs are re-decodable after decoder
+  fixes.
+- Ingest endpoint (e.g. `POST /api/ingest/raw`) authenticated by device API
+  key (#423) or an Ed25519-signed upload; modeled on the Vakaros inbox import.
+- Central store: simplest shape is one SQLite file per boat opened by the
+  existing `Storage` — preserves per-boat ownership, export and deletion map
+  to a file.
+- Side use: Core2 as a cockpit remote for Pi boats (start timer, mark/moment
+  buttons, vibration countdown), rendering the #822 screen JSON. IPS LCD is
+  weak in sunlight vs e-paper and needs a waterproof case.
+
+**Open questions:**
+- What firmware does Peer Gynt's M5Stack run, what does it record, and how do
+  logs come off it? (Assumed it logs instrument data — unverified.)
+- Does the ESP32 keep up with the bus at the filtered PGN set?
+- Data licensing for a central store: `federation-design.md` currently says
+  "no central server" and the gateway holds no sailing data at rest. Embargo,
+  co-op opt-in, protest firewall and deletion enforcement move from boat to
+  server. Policy to be evolved alongside the central server work.
+- Cost honesty: a Pi Zero 2 W + CAN HAT is similar BOM to Core2 + CAN unit.
+  The real per-boat saving is ops burden (cards, Tailscale, deploys, backups),
+  which the central server removes — not the board itself.
+
+**Notes:**
+- *2026-10-19:* Initial capture. Not mature enough for an issue — depends on
+  the separately built central server and on what Peer Gynt's device already
+  does. Natural first step: get Peer Gynt's M5Stack logs into HelmLog and
+  diff against a Pi boat (Corvo/Creative) on the same race. Alternative
+  bench test: Core2 + CAN unit alongside Corvo's Pi for one race.
