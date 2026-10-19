@@ -12285,14 +12285,24 @@ class Storage:
         ts = race_start_event["ts"]
         db = self._read_conn()
 
+        # Index-friendly ts bounds (#859). The ABS(strftime) test truncates to
+        # whole seconds, so matches fall in [floor(ts) - 5 s, floor(ts) + 6 s).
+        # Pad by a second each way so string comparison against stored ISO
+        # timestamps (with or without fractional seconds) is a strict superset;
+        # the ABS predicate below still decides exactly which rows qualify.
+        ts_floor = datetime.fromisoformat(ts).replace(microsecond=0)
+        ts_lo = (ts_floor - timedelta(seconds=6)).isoformat()
+        ts_hi = (ts_floor + timedelta(seconds=7)).isoformat()
+
         # Nearest SK sample within ±5 seconds of the race start.
         async def _nearest(table: str, columns: str) -> dict[str, Any] | None:
             cur = await db.execute(
                 f"SELECT {columns} FROM {table} "
-                "WHERE ABS(strftime('%s', ts) - strftime('%s', ?)) <= 5 "
+                "WHERE ts >= ? AND ts < ? "
+                "  AND ABS(strftime('%s', ts) - strftime('%s', ?)) <= 5 "
                 "ORDER BY ABS(strftime('%s', ts) - strftime('%s', ?)) ASC "
                 "LIMIT 1",
-                (ts, ts),
+                (ts_lo, ts_hi, ts, ts),
             )
             row = await cur.fetchone()
             return dict(row) if row is not None else None
@@ -12309,9 +12319,10 @@ class Storage:
         wind_cur = await db.execute(
             "SELECT ts, wind_speed_kts, wind_angle_deg, reference FROM winds "
             "WHERE reference IN (0, 4) "
+            "  AND ts >= ? AND ts < ? "
             "  AND ABS(strftime('%s', ts) - strftime('%s', ?)) <= 5 "
             "ORDER BY ABS(strftime('%s', ts) - strftime('%s', ?)) ASC LIMIT 1",
-            (ts, ts),
+            (ts_lo, ts_hi, ts, ts),
         )
         wind_row_raw = await wind_cur.fetchone()
         wind_row = dict(wind_row_raw) if wind_row_raw is not None else None

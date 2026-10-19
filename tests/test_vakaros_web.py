@@ -1293,3 +1293,70 @@ async def test_admin_vakaros_ingest_rejects_path_traversal(
         )
 
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_race_start_context_nearest_lookups_use_ts_index(storage: Storage) -> None:
+    """Nearest-sample lookups must be index range scans, not full table scans (#859).
+
+    A function-wrapped ``ts`` predicate forced SQLite to scan every row of the
+    instrument tables (~15 s on a season-sized DB), blocking the shared read
+    connection for every other request.
+    """
+    from datetime import UTC, datetime
+
+    race_start_ts = datetime(2026, 4, 9, 12, 5, 0, tzinfo=UTC).isoformat()
+    statements: list[str] = []
+    db = storage._read_conn()
+    await db.set_trace_callback(statements.append)
+    try:
+        await storage._build_race_start_context(
+            [{"ts": race_start_ts, "event_type": "race_start", "timer_value_s": 0}],
+            None,
+        )
+    finally:
+        await db.set_trace_callback(None)
+
+    tables = ("speeds", "cogsog", "positions", "headings", "winds")
+    lookups = [s for s in statements if any(f"FROM {t} " in s for t in tables)]
+    assert len(lookups) == len(tables)
+    for sql in lookups:
+        cur = await db.execute(f"EXPLAIN QUERY PLAN {sql}")
+        plan = " | ".join(str(r["detail"]) for r in await cur.fetchall())
+        assert "SCAN" not in plan, f"full scan in plan: {plan} for {sql}"
+        assert "INDEX" in plan, f"no index used: {plan} for {sql}"
+
+
+@pytest.mark.asyncio
+async def test_race_start_context_nearest_lookup_window_and_ordering(storage: Storage) -> None:
+    """The nearest sample within ±5 s wins; samples further out are ignored (#859)."""
+    from datetime import UTC, datetime, timedelta
+
+    t = datetime(2026, 4, 9, 12, 5, 0, 500000, tzinfo=UTC)
+    db = storage._conn()
+    for delta, kts in ((-9, 1.0), (-3, 3.0), (2, 2.0), (8, 8.0)):
+        await db.execute(
+            "INSERT INTO speeds (ts, source_addr, speed_kts) VALUES (?, ?, ?)",
+            ((t + timedelta(seconds=delta)).isoformat(), 5, kts),
+        )
+    # Second-resolution timestamp (no fractional part) at the window edge.
+    await db.execute(
+        "INSERT INTO cogsog (ts, source_addr, cog_deg, sog_kts) VALUES (?, ?, ?, ?)",
+        ("2026-04-09T12:05:05+00:00", 5, 0.0, 4.4),
+    )
+    await db.commit()
+
+    ctx = await storage._build_race_start_context(
+        [{"ts": t.isoformat(), "event_type": "race_start", "timer_value_s": 0}], None
+    )
+    assert ctx is not None
+    assert ctx["bsp_kts"] == pytest.approx(2.0)
+    assert ctx["sog_kts"] == pytest.approx(4.4)
+
+    # Nothing within ±5 s → fields are None.
+    far = (t + timedelta(minutes=10)).isoformat()
+    ctx_far = await storage._build_race_start_context(
+        [{"ts": far, "event_type": "race_start", "timer_value_s": 0}], None
+    )
+    assert ctx_far is not None
+    assert ctx_far["bsp_kts"] is None
