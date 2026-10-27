@@ -425,11 +425,13 @@ async def test_route_walk_guard(world: World, http: httpx.AsyncClient) -> None:
             continue
         path = _concrete(route.path, world.other)
         # Public routes (no principal needed). /share/ is the coach link
-        # entry point (#849), public by design.
+        # entry point (#849), public by design. /api/internal/timer-event is
+        # the Signal K timer plugin hook, gated by its own bearer token.
         if path.startswith(("/static", "/auth/", "/co-op/", "/share/")) or path in (
             "/login",
             "/logout",
             "/healthz",
+            "/api/internal/timer-event",
         ):
             continue
         for method in sorted(route.methods - {"HEAD", "OPTIONS"}):

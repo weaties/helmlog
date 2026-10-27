@@ -144,6 +144,7 @@ function render(s) {
   const cur = s.current_race;
   const curCard = document.getElementById('current-card');
   const btnEnd = document.getElementById('btn-end');
+  const btnTrim = document.getElementById('btn-trim');
   const btnStartRace = document.getElementById('btn-start-race');
   const btnStartPractice = document.getElementById('btn-start-practice');
 
@@ -167,6 +168,7 @@ function render(s) {
   if(cur) {
     curCard.classList.remove('hidden');
     btnEnd.classList.remove('hidden');
+    btnTrim.classList.remove('hidden');
     btnStartRace.classList.add('hidden');
     btnStartPractice.classList.add('hidden');
     document.getElementById('cur-name').textContent = cur.name;
@@ -188,6 +190,7 @@ function render(s) {
   } else {
     curCard.classList.add('hidden');
     btnEnd.classList.add('hidden');
+    btnTrim.classList.add('hidden');
     btnStartRace.classList.remove('hidden');
     btnStartPractice.classList.remove('hidden');
     curRaceStartMs = null;
@@ -1062,6 +1065,61 @@ function _clearEndConfirm(btn) {
   if (state && state.current_race) {
     btn.textContent = '\u25A0 FINISH ' + state.current_race.name;
   }
+}
+
+async function trimNonRaceData() {
+  // Manual, human-confirmed trim (#11). Never acts on its own — the
+  // heuristic only ever suggests a cutoff; the user must confirm before
+  // anything is changed. Falls back to a manual time entry if the
+  // heuristic can't find a plausible finish (e.g. a distance race).
+  if(!state || !state.current_race) return;
+  const raceId = state.current_race.id;
+  let preview;
+  try {
+    const r = await fetch(`/api/races/${raceId}/trim-preview`);
+    preview = await r.json();
+  } catch(e) {
+    alert('Could not check for non-race data: ' + e.message);
+    return;
+  }
+
+  let cutoffIso, source;
+  if(preview.detected) {
+    const removedMin = Math.round(preview.duration_removed_s / 60);
+    const rowSummary = Object.entries(preview.rows_by_table)
+      .filter(([, n]) => n > 0).map(([t, n]) => `${t}: ${n}`).join(', ');
+    const ok = confirm(
+      `Detected finish around ${fmtTime(preview.cutoff_utc)}.\n` +
+      `This would trim ~${removedMin} min of non-race data (${rowSummary}).\n\n` +
+      `Trim now?`
+    );
+    if(!ok) return;
+    cutoffIso = preview.cutoff_utc;
+    source = 'heuristic';
+  } else {
+    const manual = prompt(
+      "Couldn't auto-detect a finish (e.g. a distance race). " +
+      'Enter a cutoff time (local, HH:MM:SS) to trim everything after it, or Cancel:'
+    );
+    if(!manual) return;
+    const d = new Date(`${new Date().toDateString()} ${manual}`);
+    if (isNaN(d.getTime())) { alert('Could not parse that time.'); return; }
+    cutoffIso = d.toISOString();
+    source = 'manual';
+  }
+
+  const resp = await fetch(`/api/races/${raceId}/trim`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({cutoff_utc: cutoffIso, source}),
+  });
+  if(!resp.ok) {
+    alert('Trim failed: ' + resp.status);
+    return;
+  }
+  const result = await resp.json();
+  alert(`Trimmed ${result.rows_detached} telemetry points.`);
+  await loadState();
 }
 
 async function finishRace() {

@@ -113,7 +113,7 @@ Outcomes:
 - The fork's `scripts/can_monitor.py` / `scripts/send_timer.py` dev aids — useful
   but optional; revisit in Phase 3 if handy. `send_timer.py` **transmits** to the
   bus, so it is not part of the read-only validation branch.
-- The fork's ideation entry IDX-039 (GoPro GPS-time auto-sync) — unrelated.
+- The fork's ideation entry IDX-041 (GoPro GPS-time auto-sync) — unrelated.
 
 ## Open decisions (intuited here, not discussed in the source repo)
 

@@ -60,6 +60,48 @@ tactician, or pit can hit without breaking flow.
   (CYC); free-form on other days, persisted across logger restarts.
 - **Live duration counter** — ticks every second while a race is open.
 
+### Race start (`/race-start`)
+
+Touch-optimised race timer and start-line tool. Designed for one-handed use
+at the helm. Auth: `crew` to control; `viewer` for read-only display.
+
+- **Timer display** — large countdown clock. Colour shifts to amber inside
+  the last 60 seconds and green at 0:00 (gun).
+- **Start** — opens a new race (silently closes any race left open), starts
+  the countdown timer. Sends `start` to B&G instruments when integration
+  is ON.
+- **Stop Race** — freezes the timer at the current remaining time and ends
+  the race in the database. Sends `stop` to B&G instruments when
+  integration is ON.
+- **Reset** — resets the countdown to the stored duration without stopping
+  the timer. Sends `reset` to B&G instruments.
+- **Sync** — snaps the running timer to the nearest whole minute. Use when
+  you hear the prep gun slightly late. Sends `nearest-minute` to B&G.
+- **Set Start Value** — disabled while the timer is running. Tap to replace
+  the clock display with a numeric input; enter whole minutes (1–60) and
+  confirm. The new duration takes effect on the next Start. Sends `SET` to
+  B&G instruments when integration is ON.
+- **Rolling Timer** — toggle switch. When ON the timer automatically restarts
+  at the stored duration when the countdown reaches 0:00 (practice-start
+  loops).
+- **Boat-end ping / Pin-end ping** — record the current GPS position as one
+  end of the start line. Hold Shift to enter coordinates manually if GPS is
+  unavailable.
+- **Line metrics panel** — computed from the two pinged end positions plus
+  the boat's live GPS, COG/SOG, and TWD:
+  - Right (primary): **Distance to line**, **Time to line** — large-format
+    display for tactical use.
+  - Left (secondary): Line bearing, Line length, Bias (favoured end and
+    degrees).
+- **Instrument Timer (B&G)** — toggle switch at the bottom of the page.
+  When ON, inbound B&G timer events update the HelmLog clock, and Start
+  page actions send CAN commands to instruments. When OFF, HelmLog operates
+  standalone and B&G events are ignored. State persists through reboots.
+  Switches ON automatically on the first inbound B&G event (headless mode).
+
+See [`docs/specs/simradtimerintegration.md`](specs/simradtimerintegration.md)
+for the full technical spec including headless mode and the CAN command table.
+
 ### Live instruments
 
 - **Gauges panel** — boatspeed, true and apparent wind, heading, COG,
