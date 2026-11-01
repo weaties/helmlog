@@ -2657,12 +2657,57 @@ server so every boat can compare races and share in the co-op:
   The real per-boat saving is ops burden (cards, Tailscale, deploys, backups),
   which the central server removes — not the board itself.
 
+**Hardware candidate: LILYGO T-Beam Supreme (added 2026-11-01):**
+SailSix (https://sailsix.com, a GPX fleet-replay site) is prototyping its own
+logger on this board
+(https://sailsix.com/news-and-updates/f238a2a3-a3a5-4295-a954-c2ec1cdf1b55).
+It is an alternative to the Core2 for tiers 2 and 3, and adds a radio link:
+- ESP32-S3 (8 MB PSRAM, built-in TWAI CAN controller), u-blox MAX-M10S or
+  Quectel L76K GNSS, SX1262 LoRa (915 MHz variant for the US), QMI8658 IMU,
+  QMC6310 magnetometer, BME280, PCF8563 RTC, microSD, 1.3" OLED, 18650 holder
+  with AXP2101 charger. About $60–70 for the 915 MHz board.
+- NMEA 2000: add a 3.3 V CAN transceiver (SN65HVD230) on two free header
+  GPIOs (GPIO38/2/21 per the third-party espboards.dev pinout; verify against
+  LILYGO's wiki), run TWAI **listen-only** (no address claim, never
+  transmits), and decode on the server with `nmea2000.py` as above.
+- GPS-only tier 3 works out of the box. Heel and pitch come from the IMU.
+- Weak spots vs the Core2: an OLED instead of a touchscreen, few free GPIOs,
+  and no case (it needs an IP67 box).
+
+**Live link to the race committee ("poor man's Vakaros"):**
+- LoRa star network, not a general mesh: each boat sends a tiny,
+  time-slotted position packet (TDMA keyed to the start sequence) to an RC-boat
+  gateway. About 1 Hz across 20+ boats is the realistic ceiling. 915 MHz in
+  the US has dwell-time rules but no duty-cycle cap, unlike EU 868 MHz.
+- Meshtastic already runs on this board, so a range and reliability test
+  needs no custom firmware.
+- Accuracy is the limit, not the radio. An M10 at 4 Hz is about 1.5–2.5 m
+  horizontal, plus about 0.75 m of travel between fixes at 6 kn. That is enough
+  for advisory start analytics (line %, distance at −10 s, rank at +60 s,
+  `race_start.line_metrics`) but not for authoritative OCS calls.
+- Getting closer means RTK: a dual-band F9P per boat (about $150–200 more)
+  with the RC boat as base, and RTCM corrections over the same LoRa link.
+  Bandwidth is tight, so this would be a pilot.
+- Missing pieces on our side: an RC-boat app (ping the line, run the sequence,
+  show live OCS) and mark pings.
+
+Rollout phases: (1) a GPS + IMU + N2K logger with Wi-Fi upload into HelmLog,
+plus SailSix-compatible GPX; (2) a LoRa link to an RC gateway for advisory
+live start analytics; (3) an RTK pilot to see whether OCS can be called
+credibly.
+
 **Notes:**
 - *2026-10-19:* Initial capture. Not mature enough for an issue — depends on
   the separately built central server and on what Peer Gynt's device already
   does. Natural first step: get Peer Gynt's M5Stack logs into HelmLog and
   diff against a Pi boat (Corvo/Creative) on the same race. Alternative
   bench test: Core2 + CAN unit alongside Corvo's Pi for one race.
+- *2026-11-01:* Added the T-Beam Supreme as a hardware candidate and the
+  LoRa RC-link idea, from a review of SailSix. First test planned: three
+  boards (two boats + one RC gateway) on Meshtastic for range, then custom
+  listen-only N2K firmware on one boat alongside Corvo's Pi. SailSix may be a
+  collaborator. Their logger has no NMEA input, and its firmware licence is
+  unstated.
 
 ---
 
