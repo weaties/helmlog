@@ -151,9 +151,13 @@ fi
 
 # ── 2. Files referenced by the DB ─────────────────────────────────────────────
 # -rlt, not -a: the Pi's setgid/ACL dir modes can't be applied on macOS.
+# --rsync-path='sudo rsync' (same as backup.sh): data/notes/<race_id>/ dirs
+# lack group x, so helmlog-backup can't traverse them without it. The Pi's
+# sudoers grants helmlog-backup NOPASSWD for /usr/bin/rsync only.
 for d in audio notes avatars; do
   "$SSH_WRAPPER" "$PI" "test -d '$PI_HELMLOG_DIR/data/$d'" 2>/dev/null || continue
-  rsync -rlt -e "$SSH_WRAPPER" "$PI:$PI_HELMLOG_DIR/data/$d/" "$MIRROR_ROOT/data/$d/" 2>/dev/null \
+  rsync -rlt --rsync-path='sudo rsync' -e "$SSH_WRAPPER" \
+    "$PI:$PI_HELMLOG_DIR/data/$d/" "$MIRROR_ROOT/data/$d/" 2>/dev/null \
     || log "  WARNING: rsync data/$d failed"
 done
 
