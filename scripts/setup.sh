@@ -660,10 +660,14 @@ info "$PROJECT_DIR/data/notes (photo notes)"
 # its own DB), deploy user's group enables write access for admin CLI commands.
 # setgid ensures new files/dirs inherit the group so both users can always read/write.
 sudo chown -R "helmlog:$CURRENT_USER" "$PROJECT_DIR/data"
-sudo chmod -R g+ws "$PROJECT_DIR/data"
+sudo chmod -R g+wsX "$PROJECT_DIR/data"
 # Default POSIX ACL: new files created in data/ (e.g. by `helmlog add-user`)
-# automatically get group rw regardless of the creating user's umask.
-sudo setfacl -R -d -m g::rw "$PROJECT_DIR/data"
+# automatically get group rw regardless of the creating user's umask. It must
+# be rwx, not rw: new subdirectories (data/notes/<race_id>/) inherit it, and a
+# directory without group x can't be traversed by group members, so the
+# helmlog-backup user (in the deploy group) could not back up photo notes.
+# Files still get rw only, because open() never asks for x.
+sudo setfacl -R -d -m g::rwx "$PROJECT_DIR/data"
 info "data/ owned by helmlog:$CURRENT_USER, group-writable + default ACL."
 
 # ---------------------------------------------------------------------------
