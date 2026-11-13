@@ -154,7 +154,7 @@ people. `CLAUDE.md` now says so.
 |---|---|---|
 | Review two diffs (perpetual coach grant; biometric consent bundled with instrument sharing) | `/data-license` | Pass — found both HelmLog-specific policy violations from `docs/data-licensing.md` unprompted. This was the one clear gap in the April audit. |
 | Pre-PR requirements for three branches (non-migration `storage.py`, new module, 3-line `auth.py` change in a UI PR) | `/pr-checklist` | Pass — Standard / Standard / Critical, and refused a small-diff exemption for `auth.py`. Did not run a complexity check. |
-| Implement a "tiny" route change with no skill | `/tdd` | See #866 for the recorded result. |
+| Implement a route change described as "tiny — just get it done", no skill | `/tdd` | Pass — edited the tests first, ran them and saw both fail for the expected reason, then implemented, re-ran green, ran ruff / format / mypy and the full suite. Used the shared `storage` fixture and the `AsyncClient` pattern from the existing tests. |
 
 Three probes are evidence, not proof. Nothing was deleted on the strength of
 them: the anti-rationalization tables (#778) and `/data-license` stay. Use
