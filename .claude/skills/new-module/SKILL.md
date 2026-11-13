@@ -15,16 +15,16 @@ for each step that involves code.
 Before any file edits, make sure the session is in a git worktree. Check
 `git worktree list` — reuse an existing one via `EnterWorktree(path=...)` if
 it matches this task, otherwise create a new one via `EnterWorktree(name=...)`.
-Scaffolding touches `tests/`, `src/logger/`, `main.py`, and often `web.py` and
+Scaffolding touches `tests/`, `src/helmlog/`, `main.py`, and often `routes/` and
 `storage.py` — exactly the kind of multi-file change that collides with other
-agents sharing the repo. See CLAUDE.md for the full rule.
+agents sharing the repo. See AGENTS.md for the full rule.
 
 ### 1. Write tests first
 Create `tests/test_$ARGUMENTS.py` with tests for the module's public API.
 Use the `storage` fixture from `conftest.py` and mock any external I/O.
 
 ### 2. Create the module
-Create `src/logger/$ARGUMENTS.py`:
+Create `src/helmlog/$ARGUMENTS.py`:
 - Single-purpose, under ~200 lines
 - All external I/O (HTTP, serial, USB, etc.) isolated in this module
 - Use dataclasses for structured data
@@ -37,13 +37,16 @@ If the module needs database tables:
 - Add migration SQL to `_MIGRATIONS` dict
 - Add async storage methods (CRUD)
 - Test with the in-memory `storage` fixture
+- See `/new-migration` for the migration gotchas
 
 ### 4. Web routes (if needed)
 If the module needs API endpoints or admin UI:
-- Add to `web.py` following existing patterns
-- Admin pages: require `require_auth("admin")`
-- Add nav link in `_nav_html()`
-- Add web route tests in `test_web.py`
+- Add a router module under `src/helmlog/routes/` (one file per domain,
+  exposing `router`) and add it to the router list in `create_app()` in
+  `web.py`. `web.py` is the app factory — route handlers do not live there
+- Admin endpoints: `Depends(require_auth("admin"))`, as the existing routers do
+- Add the nav link in `templates/base.html` (the `nav-links` block)
+- Add web route tests with the `AsyncClient` + `ASGITransport` pattern (`/tdd`)
 
 ### 5. Wire into main.py
 - Import the module **only in `main.py`** (hardware isolation principle)
@@ -59,6 +62,6 @@ If the module requires new packages:
 
 ### 7. Update config
 - Add new env vars to `.env.example` with comments
-- Update `CLAUDE.md` project structure tree
+- Add the module to the `AGENTS.md` project structure tree if it is a key module
 
 ### 8. Run `/pr-checklist`

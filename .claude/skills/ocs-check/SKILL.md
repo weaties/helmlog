@@ -5,69 +5,65 @@ description: Detect OCS (over-the-line at gun, returned to clear) races against 
 
 # /ocs-check — auto-detect and tag OCS races
 
-Run the OCS detection logic from `scripts/analysis/ocs_detect.py`
-against the live `corvopi-live` database, identify any races where
-the boat was over the line at the gun and returned to clear, and
-apply the `ocs` tag to those sessions.
+Run `scripts/analysis/ocs_detect.py` against the live `corvopi-live`
+database, identify any races where the boat was over the line at the gun
+and returned to clear, and apply the `ocs` tag to those sessions.
+
+The script is the source of truth for the detection algorithm (windows,
+sample minimums, classification). Run it — do not re-derive the algorithm
+from memory or from this skill. This skill covers what the script does
+not: which results get tagged, the confirmation step, and the report.
 
 ## Usage
 
-- `/ocs-check` — scan all completed races (not yet OCS-checked) and
-  tag any new OCS-returned ones.
-- `/ocs-check <race-id>` — scan one specific race.
-- `/ocs-check --since YYYY-MM-DD` — only scan races on or after a date.
+- `/ocs-check` — scan all completed races and tag any new OCS-returned ones.
+- `/ocs-check <race-id>` — report and tag one specific race.
+- `/ocs-check --since YYYY-MM-DD` — only races on or after a date.
 
 ## Inputs
 
 - DB: live on `weaties@corvopi-live:/home/weaties/helmlog/data/logger.db`.
-  All reads via SSH + sqlite3; tags are inserted via SQL on the same
-  DB (the helmlog `tags` API would work too, but direct SQL is
-  simpler and doesn't need auth).
+  Query it in place over SSH; do not copy it locally.
 
 ## Steps
 
-1. **Resolve the race set.** Default: every race session
-   (`session_type='race'`, `end_utc IS NOT NULL`, `start_utc != end_utc`,
-   `name NOT LIKE '%RTTS%'`) with a Vakaros gun event AND
-   `vakaros_line_positions` endpoints, that has not already been
-   tagged `ocs`.
+1. **Run the detector.** It is stdlib-only and only reads:
 
-2. **Run the detection.** For each candidate race, follow the algorithm
-   in `scripts/analysis/ocs_detect.py`:
+   ```bash
+   ssh weaties@corvopi-live \
+     "cd ~/helmlog && python3 scripts/analysis/ocs_detect.py data/logger.db"
+   ```
 
-   a. Find the gun: latest `vakaros_race_events` row with
-      `event_type='race_start'` between `start_utc` and `end_utc`.
+   It scans every completed race (it already excludes practice sessions
+   and RTTS-style distance races) and has no race or date filter, so for
+   `<race-id>` or `--since` filter its output. If the script is missing
+   from the Pi's checkout, read its `main()` and run the same queries over
+   `ssh … sqlite3` rather than improvising a different method.
 
-   b. Find the most recent line endpoints (boat + pin) at or before
-      the gun from `vakaros_line_positions`. If either is missing, skip
-      the race with a "no line data" note.
+   Each race gets one of three verdicts: `clean`, `OCS — RETURNED`, or
+   `OCS? (no return)`. Races with no Vakaros session, gun event or line
+   endpoints are skipped silently by the script — list those yourself as
+   "no line data" by comparing against the full completed-race list.
 
-   c. Compute the boat's "side of line" each second across the window
-      `[gun-90s, gun+300s]` using a cross-product on lat/lon-projected
-      coords (use `latlon_to_xy` and `side_of_line` in
-      `scripts/analysis/start_quality.py`).
+2. **Check existing tags.**
 
-   d. **pre_side** = majority side over `[gun-60s, gun-10s]` (need ≥5
-      samples non-zero).
+   ```sql
+   SELECT entity_id FROM entity_tags
+   WHERE entity_type='session'
+     AND tag_id=(SELECT id FROM tags WHERE name='ocs');
+   ```
 
-   e. **at_gun_side** = majority side over `[gun-3s, gun+3s]` (need ≥2
-      samples).
+   If the `ocs` tag does not exist, or no session carries it at all, stop
+   and ask — sessions 35 and 55 were tagged before this skill existed, so
+   an empty result means something was cleared. Never create the tag
+   yourself.
 
-   f. **returned** = at any point in `[gun+5s, gun+300s]`, side ==
-      pre_side.
+3. **Confirm before writing.** Show the `OCS — RETURNED` races that are
+   not yet tagged and wait for a yes. This writes to the live boat
+   database. (When `/debrief` invokes this for the one race the user
+   already confirmed, that confirmation covers this race's tag.)
 
-   g. Classify:
-      - `clean` — pre_side == at_gun_side
-      - `OCS — returned` — pre_side != at_gun_side AND returned
-      - `OCS? (no return)` — pre_side != at_gun_side AND not returned
-
-   The "OCS? (no return)" cases are usually false positives from
-   pre-start positioning noise (boat happens to be on race side at
-   gun without an actual OCS) — do **not** auto-tag these. List them
-   for manual review.
-
-3. **Apply tags for confirmed OCS races.** For each `OCS — returned`
-   race that doesn't already have the tag:
+4. **Apply the tags** for the confirmed races:
 
    ```sql
    INSERT INTO entity_tags (tag_id, entity_type, entity_id, created_at, source)
@@ -84,16 +80,13 @@ apply the `ocs` tag to those sessions.
    ), last_used_at='{now_iso}' WHERE name='ocs';
    ```
 
-   The `ocs` tag already exists (id 20, color #dc2626). Don't create it.
-
-4. **Report.** Print a summary table:
+5. **Report.** Print a summary table:
 
    ```
    OCS scan complete. {N} races scanned.
 
    Newly tagged as OCS:
      - 2026-04-14  20260414-Ballard cup 1-1 (https://corvo105.helmlog.org/session/35/...)
-     - 2026-04-19  20260419-PSSR-2          (https://...)
 
    Already tagged (no change):
      - {date  name}
@@ -107,17 +100,9 @@ apply the `ocs` tag to those sessions.
 
 ## DO NOT
 
-- Do not auto-tag the "no return" cases (high false-positive rate;
-  they need a human to look at the track).
+- Do not auto-tag the `OCS? (no return)` cases. They are usually
+  pre-start positioning noise (the boat happens to be on the race side at
+  the gun without an actual OCS) and need a human to look at the track.
 - Do not delete or modify existing OCS tags.
-- Do not bump `usage_count` if no new tags were inserted.
-- Do not run against practice sessions or RTTS-style long-distance
-  races.
-
-## Pre-existing OCS tags (as of 2026-05-12)
-
-- session 35 (4/14 Ballard Cup 1-1)
-- session 55 (4/19 PSSR-2)
-
-If those are missing from the live DB when the skill runs, something
-got cleared — confirm with the user before re-tagging.
+- Do not run the `UPDATE tags` statement if no new tags were inserted.
+- Do not run against practice sessions or RTTS-style long-distance races.

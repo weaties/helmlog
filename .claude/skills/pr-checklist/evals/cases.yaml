@@ -203,7 +203,7 @@
   type: preference
   scenario: |
     A PR introduces a brand-new module (weather_overlay.py) that doesn't
-    appear in the risk tier table. Per CLAUDE.md rules, new modules default
+    appear in the risk tier table. Per AGENTS.md rules, new modules default
     to Standard until explicitly classified.
   mock_input: |
     git diff --name-only main...HEAD:

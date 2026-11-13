@@ -11,27 +11,19 @@ project conventions in `AGENTS.md`, not here.
 
 ## Claude Code specifics
 
-- **Worktrees.** `AGENTS.md`'s "always work in a git worktree" rule is enforced
-  here via the **`EnterWorktree`** tool: before any edit, check
-  `git worktree list` and `ls .claude/worktrees/`, then enter an existing
-  worktree if the branch matches, otherwise `EnterWorktree` a new one. Read-only
-  work doesn't need one.
+- **Worktrees.** Before any edit, check `git worktree list`, then
+  `EnterWorktree` — `path=` for an existing worktree whose branch matches the
+  task, `name=` for a new one. A `PreToolUse` hook
+  (`.claude/hooks/require_worktree.py`, wired in `.claude/settings.json`)
+  blocks Edit/Write on files in the primary checkout. If it fires, enter a
+  worktree; don't route around it with a shell edit.
 
-- **Skills.** The harness lists available skills each session; invoke them with
-  the Skill tool (`/name`). The ones that back rules in `AGENTS.md`:
-  - `/architecture` — module map, data flow, complexity hotspots, "what changed".
-  - `/domain` — sailing instrument tribal knowledge (B&G quirks, J/105 polar
-    targets, miscalibration symptoms) not grep-recoverable from the code.
-  - `/data-license` — review changes against `docs/data-licensing.md`.
-  - `/spec` — structured spec (decision table / state diagram / EARS) for
-    Critical- and High-tier features.
-  - `/tdd` — HelmLog test patterns + the ruff/mypy pre-existing-error allowlist.
-  - `/integration-test` — pick the federation test layer (in-process / Pi / Docker).
-  - `/diagnose` — systematic Pi troubleshooting runbook.
-  - `/release-notes` — draft the `RELEASES.md` entry the promote gate requires.
-  - `/debrief`, `/ocs-check`, `/pr-checklist`, `/ideate` — race + workflow helpers.
+- **Skills.** `/name` in `AGENTS.md` refers to a skill under `.claude/skills/`.
+  The harness lists every skill with its description each session, so they are
+  not catalogued here. `/deploy-pi`, `/new-migration` and `/new-module` are
+  manual-only (`disable-model-invocation`) — invoke them by name when relevant.
 
-- **Memory.** File-based memory persists across sessions under
-  `~/.claude/projects/-Users-dweatbrook-src-helmlog/memory/`, indexed by
-  `MEMORY.md`. Save durable facts there (user prefs, project state, references);
-  don't restate what the repo or `AGENTS.md` already records.
+- **Memory is private; the repo is shared.** File-based memory is per-user and
+  invisible to other agents and tools. A gotcha or convention that another
+  agent working here would need belongs in the repo — a skill, `AGENTS.md`, or
+  `docs/` — not only in memory.

@@ -5,15 +5,20 @@ Method per race:
      endpoints (boat + pin) at or before the gun.
   2. Establish the "pre-start side" of the line by averaging the boat's
      side-of-line during the 60–10 sec window BEFORE the gun.
-  3. Determine the boat's side AT the gun (avg over ±2 sec).
+  3. Determine the boat's side AT the gun (majority over ±3 sec).
   4. If at-gun side != pre-start side → boat was over early. Then check the
-     post-gun window (gun → gun+300s) for a return to the pre-start side.
-  5. Classify:
-       - clean        → at-gun on pre-start side
-       - over_clear   → at-gun on race side AND returned to pre-start side
-       - over_no_clear→ at-gun on race side BUT no documented return (could
-                        be wrong, could be DSQ, could be race officials called
-                        them back later — flag for review)
+     post-gun window (gun+5s → gun+300s) for a return to the pre-start side.
+  5. Classify (the verdict strings printed in the report):
+       - "clean"            → at-gun on pre-start side
+       - "OCS — RETURNED"   → at-gun on race side AND returned to pre-start side
+       - "OCS? (no return)" → at-gun on race side BUT no documented return
+                              (could be wrong, could be DSQ, could be race
+                              officials called them back later — flag for review)
+
+Races are skipped silently when they have no Vakaros session, no race_start
+event, no line endpoints at or before the gun, or fewer than 30 position
+samples in the window. This docstring and `main()` are the source of truth for
+the algorithm — the `/ocs-check` skill runs this script rather than restating it.
 """
 
 from __future__ import annotations

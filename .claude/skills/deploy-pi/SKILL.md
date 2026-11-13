@@ -35,8 +35,9 @@ cd ~/helmlog
 ./scripts/deploy.sh
 ```
 
-The script: pulls the tracked branch, syncs Python deps, re-applies Tailscale
-Funnel routes, updates `PUBLIC_URL` in `.env`, restarts `helmlog`, prints status.
+The script: pulls the tracked branch, syncs Python deps, refreshes the Grafana,
+Loki/Promtail and nginx configs, checks `cloudflared`, fixes `data/`
+permissions, restarts `helmlog`, and prints status.
 
 ## Full Setup (if systemd units or apt packages changed)
 
@@ -57,11 +58,14 @@ The service runs as a dedicated `helmlog` system account (not the login user):
 
 ## Networking
 
-- **Signal K**: `127.0.0.1:3000` — exposed publicly via Tailscale Funnel at `/signalk/`
+- **Signal K**: `127.0.0.1:3000` — published at `/signalk/` on the public hostname
 - **InfluxDB**: `127.0.0.1:8086` only
 - **Grafana**: `127.0.0.1:3001` only
 - **helmlog web**: `0.0.0.0:3002`
-- **Public ingress**: Tailscale Funnel (path stripping built-in)
+- **Public ingress**: Cloudflare Tunnel (`cloudflared`, one `<boat>.helmlog.org`
+  hostname per Pi) is the recommended path; Tailscale Funnel is the documented
+  alternative — see `docs/https-deployment.md`. With a tunnel, the web UI stays
+  reachable when Tailscale is down
 
 ## Auth
 

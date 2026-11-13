@@ -20,6 +20,18 @@ not just a change.
 If the target has no `evals/cases.yaml`, stop with: "No eval cases
 found for <skill>. Run `/skill-eval` to add cases first."
 
+## Why three contexts
+
+One context cannot generate both outputs and then score them blind: it
+knows which instructions produced which output, and it has read the
+rubric before writing either. So the work is split:
+
+| Role | Sees | Never sees |
+|---|---|---|
+| **Subject** subagent (one per version, per case) | one version's `SKILL.md`, the case's `scenario` + `mock_input` | the other version, the criteria, the case name |
+| **Grader** subagent (one per case) | the two outputs labelled Alpha / Beta, the criteria | either `SKILL.md`, which version is which |
+| **Parent** (you) | everything, including the label mapping | — and therefore does no scoring |
+
 ## Workflow
 
 ### 1. Load the two versions
@@ -27,61 +39,52 @@ found for <skill>. Run `/skill-eval` to add cases first."
 - Default: `git show main:<path-to-SKILL.md>` vs working-tree file.
 - `--file`: `SKILL.md` vs `SKILL.md.new` in the same directory.
 
-Assign random labels — **Alpha / Beta** or **Left / Right**, never
-"old/new" or "A/B" (those bias scoring). Record the mapping privately;
-reveal at the end. If the two versions are identical, stop.
+If the two versions are identical, stop. Print a unified diff of the two
+before running cases, so the user sees what changed.
 
-### 2. Show the diff
+### 2. For each eval case
 
-Print a unified diff of the two SKILL.md versions before running cases,
-so the user sees what changed.
+a. **Launch two subject subagents**, one per version, with the prompt
+   shape from `/skill-eval` step 2a (skill text, scenario, mock input,
+   "do not use the Skill tool, reply with your final output only").
 
-### 3. For each eval case
+b. **Assign labels at random, per case** — Alpha / Beta, never "old/new"
+   or "A/B". Keep the mapping to yourself.
 
-a. **Generate outputs from both versions.** Mentally apply each
-   version's instructions to the case's `scenario` + `mock_input`.
-   Keep the two outputs separate.
+c. **Launch a grader subagent** with the two labelled outputs and the
+   case's `expected` / `anti_expected`. Ask it to:
 
-b. **Blind-score on four dimensions** (1–5 each, scored without knowing
-   which version produced the output):
+   - score each output on four dimensions, 1–5, scoring each output
+     fully before looking at the other;
 
-   | Dimension | What to evaluate |
-   |---|---|
-   | Correctness | Hits `expected`, avoids `anti_expected` |
-   | Completeness | All relevant aspects of the scenario covered |
-   | Conciseness | Right-sized — neither bloated nor skeletal |
-   | Actionability | User can act without further clarification |
+     | Dimension | What to evaluate |
+     |---|---|
+     | Correctness | Hits `expected`, avoids `anti_expected` |
+     | Completeness | All relevant aspects of the scenario covered |
+     | Conciseness | Right-sized — neither bloated nor skeletal |
+     | Actionability | User can act without further clarification |
 
-c. **Pick a per-case winner.** Total scores within 1 point on all four
-   dimensions = Tie. Otherwise higher total wins.
+   - mark every criterion pass/fail for each output — this separates
+     "feels better" from "passes more criteria";
+   - name a winner, or a tie when the totals are within 1 point on all
+     four dimensions. When in doubt, tie.
 
-d. **Also record `expected` / `anti_expected` pass/fail** as
-   `/skill-eval` does — distinguishes "feels better" from "passes
-   more criteria."
+### 3. Aggregate and report
 
-### 4. Aggregate and report
+Un-blind the labels, then report: cases won per version, ties, dimension
+averages, criteria pass rate, and a per-case breakdown. Record the model
+ID. Append the summary to `<skill-dir>/evals/compare-log.md` as a
+historical record.
 
-Summary table with cases won, ties, dimension averages, criteria pass
-rate. Per-case breakdown table. Reveal label mapping and declare a
-winner (or tie). Append the summary to
-`<skill-dir>/evals/compare-log.md` as a historical record.
-
-### 5. Interpreting results
+### 4. Interpreting results
 
 | Result | Action |
 |---|---|
-| Beta wins ≥70% of cases | Strong improvement — ship it |
-| Beta wins 50–70% | Marginal — check for trade-offs (e.g., correctness up but conciseness down) |
-| Tie within 1 case | Not worth the diff complexity |
-| Alpha wins | Regression — revert or rethink |
+| New version wins ≥70% of cases | Strong improvement — ship it |
+| New version wins 50–70% | Marginal — check for trade-offs (e.g., correctness up but conciseness down) |
+| Tie within 1 case | A shorter version that ties is a win; a longer one is not worth the diff |
+| Old version wins | Regression — revert or rethink |
 
-## Bias guards
-
-- **Randomize label assignment every run.** Don't always map main → Alpha.
-- **Score each output independently** before comparing — don't look at
-  one output while scoring the other.
-- **When in doubt, tie.** A genuine tie is more honest than a forced
-  winner.
-- If a comparison is a tie but you believe the change is better, the
-  eval cases may be too coarse — add cases that target the specific
-  improvement.
+If the result is a tie but you believe the change is better, the eval
+cases may be too coarse — add cases that target the specific
+improvement, then re-run.

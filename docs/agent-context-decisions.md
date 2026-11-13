@@ -83,3 +83,79 @@ in this repo:
 **Conclusion:** no immediate action items. The federation guardrail is
 the highest-value future hardening; spin into a separate issue if/when a
 peer-summarising skill is built.
+
+## Skill + agent-file refresh (#866, November 2026)
+
+Follow-up to the #692 skill audit, prompted by a newer model generation and a
+harness that now does several things these files used to do by hand.
+
+### Decision: no hand-written skill catalog or memory notes in `CLAUDE.md`
+
+**Chose:** `CLAUDE.md` is the `@AGENTS.md` import plus three short
+Claude-Code-only notes (worktree tool + hook, skills, memory vs repo).
+
+**Why:** the harness injects every skill's name and description into each
+session, and its own memory instructions. The hand-written catalog had already
+drifted (12 of 17 skills listed, one with a description of content that no
+longer existed). A list that duplicates what the harness provides can only be
+wrong.
+
+### Decision: enforce the worktree rule with a hook, not only prose
+
+**Chose:** a `PreToolUse` hook (`.claude/hooks/require_worktree.py`, wired in
+the committed `.claude/settings.json`) blocks Edit/Write/NotebookEdit on
+non-ignored files in the primary checkout. It allows linked worktrees,
+gitignored files and anything outside this repo, fails open on any error, and
+has an explicit override (`HELMLOG_ALLOW_PRIMARY_EDITS=1`). Covered by
+`tests/test_worktree_hook.py`.
+
+**Why:** the rule exists because concurrent agents collide in a shared
+checkout, and a rule that matters that much should not depend on every agent
+re-reading a paragraph. The hook does not catch shell edits (`sed -i`); it is a
+guard against the common path, not a sandbox. The rule stays in `AGENTS.md` for
+agents that do not run Claude Code hooks.
+
+### Decision: `AGENTS.md` states each rule once
+
+**Chose:** removed the Do/Don't rows that restated Top rules, Testing or
+Architecture principles, and the `<important>` block that restated the risk-tier
+table directly above it. The Pi `<important>` block stays — its content appears
+nowhere else.
+
+**Why:** the duplicates were where drift showed up (a hardcoded home-directory
+path in a tool-agnostic file; `boat_settings.py` in `docs/risk-tiers.md` and
+`/pr-checklist` but not in the `AGENTS.md` tier table).
+
+### Decision: skill evals run in subagents, with a bare-model arm
+
+**Chose:** `/skill-eval` runs every case in a fresh subagent that never sees
+the rubric, and `--bare` runs the same case with no skill. `/skill-compare`
+uses separate subject and grader subagents. Trigger tests likewise.
+
+**Why:** the old instructions had one context "mentally apply" a skill and then
+score its own output against criteria it had already read — a test that cannot
+fail. The #692 audit already used fresh bare-model agents by hand; the skills
+now encode that method. The bare arm answers the question that matters as
+models improve: is this skill still load-bearing?
+
+### Decision: repo-relevant gotchas live in the repo, not in agent memory
+
+**Chose:** moved into skills three things that had only been recorded in one
+user's private agent memory: the semicolon-in-migration-comment failure
+(`/new-migration`), the race-analysis data gotchas (`/debrief`), and the
+boat's actual instrument hardware (`/domain`).
+
+**Why:** private memory is invisible to other agents, other tools and other
+people. `CLAUDE.md` now says so.
+
+### Bare-model probes on the current model (3 probes, no skill loaded)
+
+| Probe | Skill it stands in for | Result |
+|---|---|---|
+| Review two diffs (perpetual coach grant; biometric consent bundled with instrument sharing) | `/data-license` | Pass — found both HelmLog-specific policy violations from `docs/data-licensing.md` unprompted. This was the one clear gap in the April audit. |
+| Pre-PR requirements for three branches (non-migration `storage.py`, new module, 3-line `auth.py` change in a UI PR) | `/pr-checklist` | Pass — Standard / Standard / Critical, and refused a small-diff exemption for `auth.py`. Did not run a complexity check. |
+| Implement a route change described as "tiny — just get it done", no skill | `/tdd` | Pass — edited the tests first, ran them and saw both fail for the expected reason, then implemented, re-ran green, ran ruff / format / mypy and the full suite. Used the shared `storage` fixture and the `AsyncClient` pattern from the existing tests. |
+
+Three probes are evidence, not proof. Nothing was deleted on the strength of
+them: the anti-rationalization tables (#778) and `/data-license` stay. Use
+`/skill-eval <skill> --bare` for the full case sets before slimming further.

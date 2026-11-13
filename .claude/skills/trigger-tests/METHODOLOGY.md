@@ -25,8 +25,17 @@ activating when they should (recall) and staying silent when they shouldn't
 
 ### Systematic evaluation
 
-Use `/skill-eval` with this test suite once the eval framework (#349)
-supports trigger testing.
+Run each case in a **fresh subagent** (one per prompt, no shared context):
+give it only the prompt, let it start the task, and stop it after its first
+few tool calls. Record which skills it invoked through the Skill tool and
+compare against `should_trigger` / `should_not_trigger`. A fresh subagent
+sees the same skill listing a new session does, so this measures the
+descriptions rather than the evaluator's memory of them. Never judge
+triggering by asking one context "would this trigger?" — that tests the
+evaluator, not the description.
+
+Skills with `disable-model-invocation: true` (`deploy-pi`, `new-migration`,
+`new-module`) never auto-trigger and are out of scope.
 
 ## When to re-run
 

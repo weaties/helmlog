@@ -20,14 +20,15 @@ uv run pytest tests/integration/ -v --tb=short
 **When to use:** Any change touching federation, co-op, peer API, or data
 licensing code. Runs automatically in CI via `.github/workflows/integration.yml`.
 
-**What it covers (32 tests):**
+**What it covers:**
 
-| File | Tests | Covers |
-|------|-------|--------|
-| `test_federation_e2e.py` | 10 | Identity, session list, track fetch, audit logging |
-| `test_auth_e2e.py` | 10 | Valid/invalid sigs, replay, forgery, non-member rejection |
-| `test_embargo_e2e.py` | 5 | Embargo enforcement, lift, share/unshare lifecycle |
-| `test_data_license_e2e.py` | 7 | Field allowlist, PII protection, private session isolation |
+| File | Covers |
+|------|--------|
+| `test_federation_e2e.py` | Identity, session list, track fetch, audit logging |
+| `test_auth_e2e.py` | Valid/invalid sigs, replay, forgery, non-member rejection |
+| `test_embargo_e2e.py` | Embargo enforcement, lift, share/unshare lifecycle |
+| `test_data_license_e2e.py` | Field allowlist, PII protection, private session isolation |
+| `test_session_matching_e2e.py` | Session matching: propose → confirm → name across two boats |
 
 **Key fixture: `fleet`** (from `tests/integration/conftest.py`):
 - `fleet.boat_a` — admin boat (Javelina, sail 42)
@@ -119,5 +120,5 @@ deploying to actual Pis.
 |------|------|----------|
 | Mac (dev machine) | Docker host, test orchestrator, Layer 1 | No |
 | corvopi-tst1 | Test Pi, Layer 2 source | Yes |
-| corvopi-live | Live Pi, Layer 2 target | Yes |
+| corvopi-live | Live boat Pi, Layer 2 target | **No** — the harness sets `AUTH_DISABLED=true` during setup; confirm with the user before running it here |
 | Docker containers | Disposable, Layer 3 | Yes |

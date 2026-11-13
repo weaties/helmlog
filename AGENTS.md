@@ -8,7 +8,7 @@ This file is the canonical project guide for **any** coding agent (Claude Code,
 Cursor, Codex, Copilot, …) and for humans — the single source of truth for
 conventions and workflow. Claude Code reads it via an `@AGENTS.md` import in
 `CLAUDE.md`, which adds only the Claude-Code-specific mechanics (the worktree
-tool, the skill catalog, file-based memory). References to `/name` below are
+tool and hook, skills, memory). References to `/name` below are
 Claude Code skill shortcuts; the behavior they wrap is described inline or in
 `docs/`, so any agent can follow the rule without them.
 
@@ -71,7 +71,9 @@ src/helmlog/        # all Python; one module per concern. Key modules:
   sk_reader.py      #   Signal K WebSocket reader (primary data source)
   can_reader.py     #   CAN bus reader (legacy, DATA_SOURCE=can)
   storage.py        #   SQLite schema, migrations, read/write — single source of truth
-  web.py            #   FastAPI routes and API endpoints
+                    #   (12k+ lines: search for a table or method, don't read it whole)
+  web.py            #   FastAPI app factory (create_app): middleware + router wiring
+  routes/           #   FastAPI routers and API endpoints, one module per domain
   auth.py           #   magic-link authentication
   federation.py     #   boat identity (Ed25519), co-op membership
   peer_api.py / peer_auth.py / peer_client.py  # inter-boat peer API + signing
@@ -171,20 +173,14 @@ those rules here. The non-enforceable ones:
 
 ## Do / Don't
 
+Rules not already stated in the sections above:
+
 | Do | Don't |
 |---|---|
-| Enter a worktree before any file edit. | Edit files in the primary checkout `/Users/dweatbrook/src/helmlog`. |
-| Land changes via merged PRs on a feature branch. | Push directly to `main` — even for Pi hotfixes. |
-| Include `Closes #N` in every PR body that resolves an issue. | Open a PR without linking the issue; the tracker rots. |
-| Follow TDD: failing test → implement → green → lint. | Write code first and bolt tests on later. |
-| Flush each decoded record to SQLite as it arrives. | Hold data in memory across long runs — a reboot loses it all. |
 | Use `canboat` decoders; add new PGNs as dataclasses in `nmea2000.py`. | Hand-parse NMEA 2000 PGNs from raw bytes unless no library covers them. |
 | Read device paths from `.env` / config (`.env.example` is the reference). | Hardcode `/dev/can0` or similar paths. |
-| Keep `main.py` as wiring only — start the loop, no business logic. | Mix decode/storage/web logic into `main.py`. |
 | Add deps via `uv add <pkg>` then `uv sync`; verify the import. | Edit `pyproject.toml` by hand for deps, or use `uv pip install`. |
 | After a local pull or branch switch, run `uv sync`. Deploy to the Pi from the web **Deploy admin** (`/admin/deployment`). | Hand-run `./scripts/deploy.sh` / `systemctl` on the Pi as the routine path, or assume the venv is up to date — the service runs `--no-sync`. |
-| Commit + push every change before stopping work. | Leave uncommitted edits on the Pi — the next deploy wipes them. |
-| Run `uv run pytest tests/integration/ -v` for federation/co-op/peer-API changes. | Skip integration tests for federation work because unit tests pass. |
 | Keep `.db` files and the `data/` directory out of git. | Commit `helmlog.db` or other local data. |
 
 ## Risk tiers
@@ -195,13 +191,11 @@ small the diff looks. Full detail: [docs/risk-tiers.md](docs/risk-tiers.md).
 | Tier | Modules | Extra requirements |
 |---|---|---|
 | **Critical** | `auth.py`, `peer_auth.py`, `federation.py`, `storage.py` (migrations), `can_reader.py` | TDD + integration tests + data-licensing review (`docs/data-licensing.md`) + a structured spec before implementation |
-| **High** | `sk_reader.py`, `peer_api.py`, `peer_client.py`, `export.py`, `transcribe.py` | Integration tests where applicable |
+| **High** | `sk_reader.py`, `peer_api.py`, `peer_client.py`, `export.py`, `transcribe.py`, `boat_settings.py` | Integration tests where applicable |
 
-<important if="touching auth.py / peer_auth.py / federation.py / storage.py migrations / can_reader.py">
-**Critical-tier change.** Required: TDD + integration tests + a data-licensing
-review (`docs/data-licensing.md`) + a structured spec before implementation. See
-[docs/risk-tiers.md](docs/risk-tiers.md).
-</important>
+A PR's tier is the highest tier of any file it touches, whatever the size of
+that file's diff. `storage.py` is Critical only when migrations change.
+Modules not listed default to Standard.
 
 <important if="working on the Pi (deployed device, not Mac dev)">
 - **Deploys go through the web Deploy admin** (`/admin/deployment`, nav →

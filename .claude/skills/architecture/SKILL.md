@@ -18,7 +18,7 @@ the steps to get there.
 
 ## Severity thresholds (use these exact labels, not synonyms)
 
-The 200-line module convention from CLAUDE.md applies. Classify hotspots:
+The 200-line module convention from AGENTS.md applies. Classify hotspots:
 
 | Severity | Lines | Stance |
 |---|---|---|

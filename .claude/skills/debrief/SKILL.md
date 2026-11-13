@@ -53,8 +53,9 @@ they open the session detail page.
      `scripts/analysis/start_quality.py`.
    - **OCS:** if the start analysis flags this race as OCS-returned,
      call it out and apply the `ocs` tag (see /ocs-check).
-   - **Crew weight:** lookup default crew (1,070 lb on Corvo as of May
-     2026) — note if a per-race override exists in `crew_defaults`.
+   - **Crew weight:** sum `body_weight + gear_weight` from `crew_defaults`
+     (rows with this `race_id` override the boat-level rows where
+     `race_id IS NULL`). Read it from the DB — don't assume a number.
 
 3. **Pull and analyze the audio transcripts.** Each race has audio in
    one or more `audio_sessions` rows linked by `race_id`:
@@ -88,12 +89,11 @@ they open the session detail page.
    - **No transcript row exists** for an audio_session → kick off
      transcription via the helmlog API:
      ```
-     curl -X POST -b ~/.helmlog-cookie \
+     curl -X POST -H "Cookie: session=$(cat ~/.config/helmlog/pi-session-cookie)" \
           https://corvo105.helmlog.org/api/audio/{audio_session_id}/transcribe
      ```
-     This returns 202 Accepted and the worker on the user's Mac
-     (com.helmlog.transcribe-worker, Tailscale 100.127.219.117:8321)
-     picks up the job. **The auth cookie file must exist; if it
+     This returns 202 Accepted and the worker on the user's Mac (the
+     `com.helmlog.transcribe-worker` launchd job) picks up the job. **The auth cookie file must exist; if it
      doesn't, prompt the user to log in once and save it.**
    - **`error`** → show the error_msg field, don't auto-retry. Suggest
      the user retranscribes manually if appropriate.
@@ -170,7 +170,7 @@ they open the session detail page.
    moment")}
    ```
 
-6. **Attach to the session.** Insert the debrief as a moment on the
+5. **Attach to the session.** Insert the debrief as a moment on the
    session via direct SQL on the live DB (the API requires a session
    cookie that's awkward to wire up from the Mac).
 
@@ -203,11 +203,34 @@ they open the session detail page.
    supported); the moment **subject** stays a one-line summary so the
    moment list is scannable.
 
-7. **Report the URL.** Tell the user the moment was created and give
+6. **Report the URL.** Tell the user the moment was created and give
    them the deep link:
    `https://corvo105.helmlog.org/session/{race_id}/{slug}?moment={moment_id}`
    (or just `/session/{id}/{slug}` if the `?moment=` deep-link param
    doesn't exist on the session detail page).
+
+## Data gotchas
+
+Things the schema does not tell you, each of which has skewed an analysis
+before:
+
+- **Only `source='live'` races have instrument data.** `races` also holds
+  `clubspot`- and `styc`-sourced rows: external scoring duplicates of the
+  same races with no winds, speeds or headings. Filter them out.
+- **Some `live` races are synthesized from the Vakaros track, not logged
+  by the Pi.** Their `positions`/`cogsog` rows have `source_addr=0` and
+  there is no B&G wind or STW. Skip the speed, VMG and shift sections for
+  those and say why.
+- **`boat_settings.race_id` is always NULL.** Rig and sail settings are a
+  timestamped change-log. The tune in effect for a race is the latest
+  value per parameter with `ts <= race.start_utc`.
+- **Polar % is self-relative.** `polar_baseline` is built from our own
+  races, so ~100% means "our season average for that (TWS, TWA) cell",
+  not fleet pace. Below 5 kt TWS the baseline is unreliable.
+- **Don't pool cached `polar_segment_grades` across races** — they span
+  many `baseline_version`s. Regrade against one baseline instead.
+- **`storage.py` is over 12,000 lines.** Search it for a table or method
+  name; don't read it whole.
 
 ## Conventions
 
