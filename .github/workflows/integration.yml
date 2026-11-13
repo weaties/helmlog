@@ -16,7 +16,9 @@ permissions:
 
 jobs:
   integration:
-    runs-on: ubuntu-latest
+    # Pinned: on ubuntu-26.04 libportaudio2 has a PulseAudio backend, and with no
+    # PulseAudio server on the runner `import sounddevice` fails (#868).
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
