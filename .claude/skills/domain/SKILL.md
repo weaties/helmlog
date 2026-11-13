@@ -1,6 +1,6 @@
 ---
 name: domain
-description: Sailing instrument tribal knowledge that is NOT directly grep-recoverable from the code — common-mistake guards, B&G/instrument-vendor quirks, J/105 polar reference targets, and calibration miscalibration symptoms. Auto-triggers when working on sk_reader.py, can_reader.py, nmea2000.py, polar.py, boat_settings.py, synthesize.py, maneuver_detector.py, export.py, or calibration-related code. Skill content is intentionally narrow — for paths, PGN byte layouts, conversion constants, and table schemas already encoded in the source, read sk_reader.py / nmea2000.py / storage.py directly.
+description: Sailing instrument tribal knowledge that is NOT directly grep-recoverable from the code — common-mistake guards, B&G/instrument-vendor quirks, J/105 polar reference targets, and calibration miscalibration symptoms. Auto-triggers when working on sk_reader.py, can_reader.py, nmea2000.py, polar.py, boat_settings.py, synthesize.py, maneuver_detector.py, export.py, or calibration-related code. Skill content is intentionally narrow — for paths, PGN byte layouts, conversion constants, and table schemas already encoded in the source, read sk_reader.py / nmea2000.py and search storage.py.
 ---
 
 # Sailing Instrument Domain — Tribal Knowledge
@@ -9,7 +9,8 @@ This skill encodes only what the codebase does NOT make obvious on its own:
 common mistakes the model has made before, vendor-specific quirks, polar
 target speeds for our hull, and miscalibration symptoms. For Signal K paths,
 PGN byte layouts, conversion constants, table schemas, and unit conversions,
-read `sk_reader.py`, `nmea2000.py`, and `storage.py` directly — those files
+read `sk_reader.py` and `nmea2000.py`, and search `storage.py` (it is over
+12,000 lines — grep for the table or method, don't read it whole). Those files
 are the source of truth and are always more current than this skill.
 
 ---
@@ -24,8 +25,8 @@ instrument-handling code.
   favorable current makes the boat look 1 knot faster at every TWA/TWS bin
   and contaminates the polar.
 - **TWA is derived FROM apparent wind, not the reverse.** AWA + AWS + BSP →
-  TWA + TWS. The masthead wand measures AWA directly; TWA is computed by the
-  instrument processor (B&G Zeus). Code that "derives AWA from TWA" is
+  TWA + TWS. The masthead wand measures AWA directly; TWA is computed upstream by
+  the B&G instrument system. Code that "derives AWA from TWA" is
   upside-down.
 - **TWA is 0–180 in HelmLog**, not 0–360. Port/starboard symmetry is assumed
   for polars. If you find yourself wrapping a TWA value through 360, you are
@@ -96,6 +97,13 @@ part is what miscalibration *looks like* in the data:
 
 If a debrief shows asymmetric upwind speed across tacks, the first
 hypothesis should be AWA offset, not crew technique.
+
+**The boat's instrument system is B&G Triton² displays, not an H5000
+processor.** Triton² has a single global STW calibration and no
+processor-grade features: no per-tack STW cal, no leeway compensation, no
+heel-compensated deviation table. Anything of that kind has to be corrected
+in HelmLog software, so do not recommend
+"set it in the processor" as a fix.
 
 ---
 

@@ -1,11 +1,11 @@
 ---
 name: tdd
-description: HelmLog-specific test patterns and the pre-existing-error allowlist for ruff/mypy. The Red-Green-Refactor cycle and lint commands are already mandated in CLAUDE.md — this skill encodes only the patterns and known-pre-existing-errors list that aren't recoverable from existing tests at a glance. TRIGGER when writing or modifying Python source code in src/helmlog/. DO NOT trigger for documentation, config, templates, CSS/JS, skill definitions, or changes that don't affect runtime behavior.
+description: HelmLog-specific test patterns — the shared in-memory storage fixture, async web-route tests, and hardware mocking. The Red-Green-Refactor cycle and lint commands are already mandated in AGENTS.md — this skill encodes only the patterns that aren't recoverable from existing tests at a glance. TRIGGER when writing or modifying Python source code in src/helmlog/. DO NOT trigger for documentation, config, templates, CSS/JS, skill definitions, or changes that don't affect runtime behavior.
 ---
 
 # TDD — HelmLog patterns
 
-CLAUDE.md already mandates: failing test → implement → green → lint. This
+AGENTS.md already mandates: failing test → implement → green → lint. This
 skill encodes only the project-specific bits that aren't obvious from
 existing tests:
 
@@ -56,16 +56,14 @@ and their rebuttals:
 | Rationalization | Rebuttal |
 |---|---|
 | "This change is too small to need a test." | Size predicts neither breakage nor regression. A failing test first is what proves the change does what you think — write it. |
-| "I'll write the test after I see it work." | Test-after rationalizes whatever the code already does, bugs included. Red-Green-Refactor is mandated in CLAUDE.md for a reason. |
+| "I'll write the test after I see it work." | Test-after rationalizes whatever the code already does, bugs included. Red-Green-Refactor is mandated in AGENTS.md for a reason. |
 | "It's just a renderer/route tweak — I'll eyeball it." | Web routes are the easiest place to ship a silent 500. Use the `AsyncClient`/`ASGITransport` pattern above. |
 | "Tests pass, so it's correct." | Passing tests are evidence, not proof. Confirm the test exercises the new behavior and would actually fail without your change. |
-| "ruff/mypy is noisy here, I'll skip the lint gate." | Only the pre-existing-error allowlist below is exempt. Everything else is green-before-PR. |
+| "ruff/mypy is noisy here, I'll skip the lint gate." | `main` is clean — zero ruff and mypy errors, no allowlist. Any error you see came from your change; fix it before the PR. |
 
-## Pre-existing errors to ignore
+## Lint and types: no allowlist
 
-Do not fix these unless explicitly asked — they are tracked separately:
-
-- `web.py`: `Item "None" of "datetime | None" has no attribute "isoformat"`
-- `web.py`: `Item "None" of "AudioRecorder | None" has no attribute "stop"` (×2)
-- `main.py`: `Unused "type: ignore" comment`
-- `storage.py`: 2 pre-existing E501 line-length violations
+`uv run ruff check .`, `uv run ruff format --check .` and `uv run mypy src/`
+all pass with zero errors on `main`. There are no known pre-existing errors
+to ignore — if one shows up, your change caused it or exposed a regression.
+Fix it rather than working around it.

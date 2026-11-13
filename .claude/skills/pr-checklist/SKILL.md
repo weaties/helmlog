@@ -6,8 +6,8 @@ description: Run pre-PR verification checks before creating a pull request. TRIG
 # /pr-checklist — Pre-PR verification
 
 The lint / format / type / test commands and the worktree-and-feature-branch
-rule are already in CLAUDE.md. This skill encodes only the pre-PR steps
-that are NOT obvious from CLAUDE.md alone — tier resolution rules with
+rule are already in AGENTS.md. This skill encodes only the pre-PR steps
+that are NOT obvious from AGENTS.md alone — tier resolution rules with
 their special cases, the documentation-update map, and the per-tier
 checklist matrix.
 
@@ -41,7 +41,7 @@ Report the resolved tier — e.g., "This PR touches `auth.py` → **Critical**."
 - **New / unclassified module.** Any changed `.py` not in the tier list
   defaults to **Standard**. Flag it: "Module `X` is not explicitly
   classified — defaults to Standard. Consider adding it to the Risk
-  Tiers table in CLAUDE.md."
+  Tiers table in AGENTS.md."
 
 ## Per-tier checks
 
@@ -65,14 +65,13 @@ If the change involved any of these, update accordingly:
 
 | Change | Update |
 |---|---|
-| New module | Project structure tree in `CLAUDE.md` |
+| New module | Project structure tree in `AGENTS.md` |
 | New env vars | `.env.example` |
-| New CLI command | Common Commands in `CLAUDE.md` |
-| New stack tool | Stack & Tooling table in `CLAUDE.md` |
-| Schema migration | Schema version in `CLAUDE.md` Stack table |
+| New CLI command | Common Commands in `AGENTS.md` |
+| New stack tool | Stack & Tooling table in `AGENTS.md` |
 | Data handling change | Verify against `docs/data-licensing.md` |
 | New dependency | In `pyproject.toml` and installs via `uv sync` |
-| New module with risk implications | Risk Tiers table in `CLAUDE.md` |
+| New module with risk implications | Risk Tiers table in `AGENTS.md` |
 
 ## Complexity check
 
@@ -91,7 +90,7 @@ excuses and their rebuttals:
 |---|---|
 | "The `storage.py` change is tiny, skip the spec." | Tier is set by file + migration content, not diff size. If migrations changed, it's Critical and needs an approved `/spec` before merge. |
 | "Unit tests pass — integration tests are overkill." | For federation/peer/auth/PII changes, integration tests are Required regardless of unit coverage. Run them. |
-| "This Pi hotfix is urgent, just commit to main." | Never. Branch + PR + merge — even for hotfixes (CLAUDE.md). Urgency is not an exception. |
+| "This Pi hotfix is urgent, just commit to main." | Never. Branch + PR + merge — even for hotfixes (AGENTS.md). Urgency is not an exception. |
 | "Module isn't in the tier table, so it's low-risk." | Unclassified `.py` defaults to **Standard**, not Low — and you must flag it for classification. |
 | "Docs are out of scope for this PR." | If you added a module / env var / CLI command / migration / dep, the documentation-update map below is part of the PR. |
 

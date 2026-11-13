@@ -7,28 +7,34 @@ description: Run evaluation test cases against a skill to measure quality, detec
 
 Run test cases against a skill to measure whether it produces correct, consistent
 output. Use this to establish baselines, detect regressions after model or skill
-changes, and compare skill versions.
+changes, and decide whether a skill still earns its place.
 
 ## Usage
 
 ```
 /skill-eval <skill-name>           # run all evals for a skill
 /skill-eval <skill-name> <case>    # run a single named case
+/skill-eval <skill-name> --bare    # also run each case with NO skill (baseline)
 /skill-eval all                    # run evals for all skills that have them
 ```
 
 ## How It Works
 
-Each skill can have test cases in `<skill-dir>/evals/cases.yaml`. Each test case
+Each skill can have test cases in `<skill-dir>/evals/cases.yaml`. Each case
 defines a scenario, the input the skill would receive, and criteria for judging
 the output.
 
-The eval runner:
-1. Reads the target skill's SKILL.md (the instructions being tested)
-2. Reads the test cases from `evals/cases.yaml`
-3. For each case, applies the skill's instructions to the test scenario
-4. Scores the output against the case's pass/fail criteria
-5. Reports results with a summary scorecard
+**Every case runs in a fresh subagent.** The context that reads the rubric must
+not be the context that produces the answer: an evaluator that has already seen
+`expected` will write output that satisfies it, and the eval passes
+tautologically. So:
+
+- the **subject** subagent gets the skill text and the case's `scenario` +
+  `mock_input`, and never sees `expected` / `anti_expected`;
+- the **parent** (you) scores the returned output against the criteria.
+
+Do not "mentally apply" a skill in your own context and score the result. That
+measures nothing.
 
 ## Workflow
 
@@ -39,55 +45,73 @@ exist, report "No eval cases found for <skill>" and stop.
 
 ### 2. For each test case
 
-**a. Set up the scenario:**
-Read the case's `scenario` field, which describes the context the skill would
-operate in (e.g., a code diff, an issue body, a set of changed files). The
-`mock_input` field provides the specific input the skill would process.
+**a. Launch the subject subagent** with a prompt containing, in this order:
 
-**b. Apply the skill:**
-Following the target skill's instructions exactly as written in its SKILL.md,
-produce the output the skill would generate for this scenario. Do not use
-knowledge beyond what the skill's instructions and the test scenario provide.
+1. the full text of the skill's `SKILL.md`, introduced as "instructions you have
+   been given for this kind of task";
+2. the case's `scenario`;
+3. the case's `mock_input`, as the request to act on;
+4. "Do not use the Skill tool. Reply with your final output only."
 
-**c. Score against criteria:**
-Check the output against each criterion in `expected` (things that MUST be
-present) and `anti_expected` (things that must NOT be present). Score each
-criterion as pass or fail.
+Do not include the case name, description, tags or any criterion — they leak the
+answer. Run independent cases in parallel.
 
-**d. Record the result:**
-For each case: case name, pass/fail, which criteria passed, which failed,
-and a brief note on any failures.
+**b. With `--bare`, launch a second subagent** for the same case with item 1
+removed, plus "Do not read anything under `.claude/skills/`." It still has the
+repo and `AGENTS.md`. This is the baseline: what the model does with no skill.
+
+**c. Score against criteria.** Check each returned output against every
+criterion in `expected` (must be present) and `anti_expected` (must not be).
+Score each criterion pass or fail, quoting the part of the output that decided
+it.
+
+**d. Record the result:** case name, pass/fail, which criteria passed, which
+failed, and a brief note on any failure.
 
 ### 3. Report results
 
-Output a scorecard in this format:
-
 ```
 ## Skill Eval: <skill-name>
-Date: <date>
+Date: <date>   Model: <model id>
 
-| Case | Result | Pass | Fail | Notes |
-|---|---|---|---|---|
-| case-name-1 | PASS | 4/4 | 0 | |
-| case-name-2 | FAIL | 2/3 | 1 | missed: must flag PII exposure |
+| Case | With skill | Bare | Notes |
+|---|---|---|---|
+| case-name-1 | PASS 4/4 | PASS 4/4 | skill adds nothing here |
+| case-name-2 | PASS 3/3 | FAIL 2/3 | bare missed: must flag PII exposure |
 
-**Overall: 5/7 criteria passed (71%)**
+**Overall: 5/7 criteria passed with skill (71%); 4/7 bare (57%)**
 
 ### Failures
-- case-name-2 / criterion "must flag PII exposure":
+- case-name-2 / criterion "must flag PII exposure" (bare):
   Output did not mention PII or personal data in the context of crew emails.
 ```
 
-A case passes only if ALL its `expected` criteria pass and NONE of its
-`anti_expected` criteria trigger.
+Always record the model ID: results are model-dependent, and the reason to
+re-run is usually a model change. Omit the Bare column when `--bare` was not
+requested.
 
-### 4. Benchmark mode
+A case passes only if ALL its `critical` `expected` criteria pass and NONE of
+its `critical` `anti_expected` criteria trigger.
+
+### 4. Reading a bare run
+
+| Result | Meaning |
+|---|---|
+| Passes with skill, fails bare | The skill is load-bearing for this case. Keep it. |
+| Passes both | The case does not test the skill — the model, `AGENTS.md` and the repo already cover it. If every case passes bare, the skill is a candidate for slimming or removal (#692). |
+| Fails with skill, passes bare | The skill is making things worse: stale or wrong content. Fix or delete that part. |
+| Fails both | The case may be ambiguous, or the skill does not actually encode the answer. |
+
+A skill that passes bare can still be worth keeping for its *trigger* — a
+reminder that fires at the right moment — but then its body should be short.
+
+### 5. Benchmark mode
 
 When running all cases for a skill, also report:
 - **Pass rate:** percentage of cases that fully passed
 - **Criteria hit rate:** percentage of individual criteria met across all cases
-- **Consistency notes:** any cases where the result seems borderline or
-  model-dependent (flag these for potential flakiness)
+- **Consistency notes:** any borderline cases. Re-run those two or three times
+  in fresh subagents and report the spread rather than a single verdict.
 
 ## Test Case Format
 
@@ -122,16 +146,16 @@ Cases live in `<skill-dir>/evals/cases.yaml`:
 | `important` | Should be present for a good result | Noted in report |
 | `nice-to-have` | Would improve the result but not essential | Noted if missing |
 
-A case **fails** if any `critical` criterion is missed or any `critical`
-anti-criterion triggers. Non-critical misses are reported but don't fail the case.
-
 ### Test case types
 
 | Type | What it tests | Example |
 |---|---|---|
 | `capability` | Can the skill produce correct output for this scenario? | Does `/data-license` catch a PII leak? |
-| `preference` | Does the skill follow the encoded workflow correctly? | Does `/tdd` write the test before the implementation? |
-| `trigger` | Would the skill correctly activate (or not) for this prompt? | Does `/pr-checklist` trigger before PR creation? |
+| `preference` | Does the skill follow the encoded workflow correctly? | Does `/pr-checklist` resolve the tier correctly? |
+| `trigger` | Does the skill activate (or stay silent) for this prompt? | Does `/pr-checklist` trigger before PR creation? |
+
+`trigger` cases need a subagent that is given only the prompt and no skill
+text — see `../trigger-tests/METHODOLOGY.md`.
 
 ## Adding Evals to a New Skill
 
@@ -141,16 +165,17 @@ When creating a new skill, add at least 3 eval cases:
 3. One **negative case** — a scenario where the skill should correctly decline
    or produce a "no action needed" result
 
+Then run them with `--bare`. A new skill whose cases all pass bare has not yet
+shown that it is needed.
+
 ## Tips
 
-- Test cases should be **self-contained** — all context needed is in the
-  `scenario` and `mock_input` fields. Don't rely on actual repo state.
+- Cases should be **self-contained** — all context needed is in `scenario` and
+  `mock_input`. Mock diffs drift from the real code over time (file names,
+  helper names), and a subagent with repo access will notice; refresh a case
+  when its mock no longer resembles the codebase.
 - Write cases that test the **skill's instructions**, not general model
-  capability. If a case would pass without the skill loaded, it's not testing
-  the skill.
-- For capability uplift skills (`/data-license`, `/spec`), focus cases on
-  scenarios where the base model would likely get it wrong without the skill's
-  specific guidance.
+  capability. The `--bare` run is how you find out which you have.
 - Review flaky cases — if a case sometimes passes and sometimes fails, the
   criterion may be too vague or the scenario too ambiguous.
 - When a real-world skill failure occurs, capture it as a new eval case to

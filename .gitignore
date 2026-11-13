@@ -1,5 +1,6 @@
 # Data files — never commit
 data/*.db
+/*.db
 data/*.db-shm
 data/*.db-wal
 data/*.db-journal
@@ -9,9 +10,12 @@ data/audio/
 data/notes/
 data/vakaros-inbox/
 
-# Claude Code project directory (except shared skills and evals)
+# Claude Code project directory (except shared skills, evals, hooks and
+# the project settings that wire the hooks)
 .claude/*
 !.claude/skills/
+!.claude/hooks/
+!.claude/settings.json
 
 # Credentials reference (contains real secrets — never commit)
 docs/credentials.md
