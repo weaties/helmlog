@@ -275,7 +275,7 @@ def process_delta(raw: str, buf: dict[str, float]) -> list[PGNRecord]:
 
 `process_delta()` is a pure function — no I/O, no side effects beyond the mutable buffer. This makes it trivially testable. It guards against two hazards:
 
-- **AIS data** (issue #208): Other-vessel positions from AIS transponders must never be ingested. Both the context check (`vessels.self` only) and the path check (`ais` substring) enforce this.
+- **AIS data** (issue #208): Other-vessel positions from AIS transponders are blocked at ingest until session-scoped capture (#394) is built. Both the context check (`vessels.self` only) and the path check (`ais` substring) enforce this.
 - **Malformed values**: Every numeric conversion is wrapped in try/except. Bad data from the instrument bus gets logged and skipped, never crashes the loop.
 
 ## 3. NMEA 2000 Decoding — `nmea2000.py`
