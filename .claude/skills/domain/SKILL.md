@@ -42,9 +42,11 @@ instrument-handling code.
   So `_compute_twa()` in `polar.py` is on the hot path; do not bypass it.
 - **Reference=4 needs a contemporaneous heading.** If `HeadingRecord` is
   missing or stale, drop the wind sample — do not guess.
-- **AIS PGNs (129038–129810) are never ingested.** Data licensing
-  requirement (#208), not a technical limitation. If you find yourself
-  adding an AIS decoder, stop and check `docs/data-licensing.md`.
+- **AIS PGNs (129038–129810) are blocked at ingest today** (#208) — a
+  data-licensing choice, not a technical limitation. The policy now
+  permits session-scoped capture of position and static reports, but
+  only as specified in #394. If you find yourself adding an AIS decoder
+  outside that issue, stop and check `docs/data-licensing.md`.
 
 ---
 
