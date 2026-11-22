@@ -287,14 +287,14 @@
       weight: critical
   tags: [tier-escalation, critical-in-large-diff, federation]
 
-- name: pr-without-issue-no-linking-needed
-  description: Does not require issue linking when the PR is not related to any issue
+- name: pr-without-issue-requires-one
+  description: A PR with no tracked issue must get one before opening (every change gets an issue)
   type: preference
   scenario: |
     A developer creates a PR for a small refactoring that was not tracked by
-    any GitHub issue. The PR checklist step 13 says "If this PR resolves a
-    GitHub issue, confirm the PR body contains Closes #N." If there's no
-    issue, this step should pass without requiring a link.
+    any GitHub issue. AGENTS.md requires `Closes #N` on every PR and the
+    `in-progress` label on the issue being worked, so untracked work has no
+    exemption: an issue has to be opened first.
   mock_input: |
     git diff --name-only main...HEAD:
     src/helmlog/polar.py
@@ -302,12 +302,12 @@
 
     No linked issue. PR body: "## Summary\nRefactor polar lookup to use dict instead of linear scan.\n\n## Test plan\n- Existing tests pass, performance benchmark shows 3x speedup"
   expected:
-    - criterion: "Must NOT flag the PR for missing issue linking when there is no related issue"
+    - criterion: "Must flag the missing issue and require opening one, then adding `Closes #N` to the PR body"
       weight: critical
     - criterion: "Must still run all Standard-tier checks (tests, lint, format, mypy, complexity)"
       weight: important
   anti_expected:
-    - criterion: "Must NOT require Closes #N when the PR is not resolving any issue"
+    - criterion: "Must NOT treat issue linking as not applicable just because no issue exists yet"
       weight: critical
   tags: [issue-linking, no-issue, edge-case]
 
