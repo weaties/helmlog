@@ -3,6 +3,67 @@
 Decisions made during the CLAUDE.md tightening pass (#667). Captured here so
 the reasoning isn't lost if these come up again.
 
+## Entry format (from #872 on)
+
+Each decision records what it was expected to do and whether that was checked,
+not only why it was made. A change whose effect was never measured should look
+unmeasured, so that a later pass doesn't keep it just because it was added on
+purpose.
+
+```
+## Decision: <one line>
+
+**Chose:** what was done.
+**Why:** the reasoning at the time.
+**Expected effect:** what should change, stated so it could be checked
+  (e.g. "bare `tdd` probe skips the red step; with the table it doesn't").
+**Verified by:** <model id>, <eval or probe + result file>, <date>
+  — or "not yet verified".
+```
+
+Entries written before #872 use the older Chose/Why shape. Add the last two
+fields when an old decision is revisited.
+
+## Decision: anti-rationalization tables in `tdd`, `pr-checklist`, `data-license` (#778)
+
+**Chose:** each of the three skills has a table pairing an excuse for skipping
+a check with a rebuttal, placed where the temptation occurs.
+
+**Why:** adopted from Addy Osmani's "Agent Skills" article (O'Reilly Radar).
+
+**Expected effect:** under pressure ("tiny change, just get it done"), an agent
+with the skill loaded skips fewer verification steps than one without it.
+
+**Verified by:** not yet verified. The #866 re-probe kept the tables without
+measuring them. The bare `/tdd` probe there passed with no skill at all, which
+is weak evidence that the `tdd` table is not load-bearing on Fable 5.2. To
+settle it, run `/skill-compare` on `tdd` with and without the table, using a
+pressure-framed case.
+
+## Decision: keep `/skill-eval` results in the repo and gate skill edits on them (#872)
+
+**Chose:** every full `/skill-eval` run is saved to
+`.claude/skills/<X>/evals/results/<date>-<model>.md` and compared with the
+previous run, reporting newly failing cases separately from still-failing
+ones. `/pr-checklist` requires a run, with its result file committed, for any
+PR that changes a skill that has eval cases, and stops on a confirmed newly
+failing case.
+
+**Why:** a result that lives in one session can't show a regression. The #692
+and #866 baselines survived only in this doc and one user's private agent
+memory. The approach is adapted from work on self-improving agent harnesses:
+GUARD (separate "newly broke" from "never solved" and accept an edit only if
+its gains outweigh what it breaks), Safe Personal RSI (keep the current version
+when no candidate passes), and Self-Improvement Memory (keep each edit's
+reasons and results next to the code, because a harness tuned on one model can
+do worse than the untuned version on another).
+
+**Expected effect:** skill edits that regress an existing case get caught
+before merge, and the next model bump has a per-skill, per-model history to
+compare against instead of hand-rolled probes.
+
+**Verified by:** not yet verified. The first saved runs will set the baseline.
+
 ## Decision: keep `/domain` as a single skill
 
 **Considered:** splitting into `domain-signalk`, `domain-nmea`, `domain-racing`
