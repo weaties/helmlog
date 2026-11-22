@@ -18,6 +18,10 @@ changes, and decide whether a skill still earns its place.
 /skill-eval all                    # run evals for all skills that have them
 ```
 
+A full run (every case of a skill) is saved to `evals/results/` and compared
+with the previous saved run — see step 4. Single-case runs are for debugging
+and are not saved.
+
 ## How It Works
 
 Each skill can have test cases in `<skill-dir>/evals/cases.yaml`. Each case
@@ -42,6 +46,9 @@ measures nothing.
 
 Read the target skill's `SKILL.md` and its `evals/cases.yaml`. If no cases
 exist, report "No eval cases found for <skill>" and stop.
+
+Also read the most recent file in `<skill-dir>/evals/results/` (filenames sort
+by date), if any. That is the previous run you will compare against in step 4.
 
 ### 2. For each test case
 
@@ -93,7 +100,58 @@ requested.
 A case passes only if ALL its `critical` `expected` criteria pass and NONE of
 its `critical` `anti_expected` criteria trigger.
 
-### 4. Reading a bare run
+### 4. Save the result and compare with the previous run
+
+A table that only lives in one session cannot show a regression. Keep every
+full run in the repo, next to the cases it ran.
+
+**a. Save** the report from step 3 to
+`<skill-dir>/evals/results/<YYYY-MM-DD>-<model-id>.md` (add `-2`, `-3` if that
+name exists). Put this header above the table:
+
+```
+Skill commit: <git log -1 --format=%h -- <skill-dir>/SKILL.md>
+Cases commit: <git log -1 --format=%h -- <skill-dir>/evals/cases.yaml>
+Bare arm: yes | no
+```
+
+Commit the skill and case edits before running, so these hashes name the exact
+versions tested. A later run needs them to re-run the old skill. Then commit
+the result file on the same branch.
+
+**b. Compare** each case's with-skill verdict to the previous run and add this
+section to the report and the saved file:
+
+```
+### Compared with <previous file name>
+Newly failing: case-a            <- regressions; list these first
+Newly passing: case-b
+Still failing: case-c            <- never solved; not a regression
+Still passing: case-d, case-e
+New / changed / removed cases: case-f (new)
+```
+
+Keep **newly failing** separate from **still failing**. A newly failing case is
+something the change broke, while a still-failing case was never solved, and
+the two call for different responses. Lumping them into one pass rate hides
+regressions behind fixes.
+
+- **Confirm before calling a regression.** Re-run each newly failing case twice
+  more in fresh subagents. Call it a regression only if it fails at least 2 of 3.
+- **Model changed since the previous run?** Then a newly failing case may be
+  caused by the model rather than the skill. To tell them apart, re-run that case
+  with the previous skill version (`git show <previous run's skill commit>:<path>`) on the
+  current model. If the old version passes, the skill edit caused it.
+- **Case changed since the previous run?** (Cases commit differs.) Report edited
+  cases as *changed*, not as passing or failing transitions. A case edited in the
+  same change as its skill must be called out. Editing the test until it passes
+  is not a pass.
+- **Bare arm, too:** a case that newly passes bare means the model now covers it
+  without the skill. Note it, because it points to content that can be slimmed.
+
+No previous result file: say "first saved run — no comparison" and save it.
+
+### 5. Reading a bare run
 
 | Result | Meaning |
 |---|---|
@@ -105,7 +163,7 @@ its `critical` `anti_expected` criteria trigger.
 A skill that passes bare can still be worth keeping for its *trigger* — a
 reminder that fires at the right moment — but then its body should be short.
 
-### 5. Benchmark mode
+### 6. Benchmark mode
 
 When running all cases for a skill, also report:
 - **Pass rate:** percentage of cases that fully passed

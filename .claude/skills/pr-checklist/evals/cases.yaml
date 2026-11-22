@@ -336,3 +336,30 @@
     - criterion: "Must NOT resolve higher than Low for documentation-only changes"
       weight: critical
   tags: [docs-only, low-tier, minimal]
+
+- name: skill-edit-requires-eval-run
+  description: A PR that edits a skill with eval cases must run /skill-eval and block on a new regression
+  type: preference
+  scenario: |
+    A PR rewords two paragraphs of the /tdd skill and touches nothing else.
+    .claude/skills/tdd/evals/cases.yaml exists with 5 cases, and
+    .claude/skills/tdd/evals/results/ holds one earlier saved run in which all
+    5 cases passed. The author says it is "just a wording tweak".
+  mock_input: |
+    git diff --name-only main...HEAD:
+    .claude/skills/tdd/SKILL.md
+
+    PR body: "## Summary\nTighten wording in the tdd skill.\n\nCloses #900"
+  expected:
+    - criterion: "Must require running /skill-eval tdd (with --bare) before the PR is ready"
+      weight: critical
+    - criterion: "Must require the new result file under evals/results/ to be committed in the PR and the comparison to go in the PR body"
+      weight: important
+    - criterion: "Must say that a confirmed newly failing case blocks the PR (fix the skill or justify and correct the case)"
+      weight: critical
+    - criterion: "Must resolve the risk tier as Low (skill markdown only)"
+      weight: important
+  anti_expected:
+    - criterion: "Must NOT accept 'just a wording tweak' as a reason to skip the eval run"
+      weight: critical
+  tags: [skill-edit, regression-gate, rationalization]

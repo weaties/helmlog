@@ -59,6 +59,24 @@ Report the resolved tier — e.g., "This PR touches `auth.py` → **Critical**."
 For Critical-tier without an existing approved `/spec` comment on the
 issue, **stop and flag** — the spec must be approved before merge.
 
+## Skill edits: no regressions
+
+If the diff changes `.claude/skills/<X>/SKILL.md` and
+`.claude/skills/<X>/evals/cases.yaml` exists:
+
+1. Run `/skill-eval <X> --bare`. It saves a result file under
+   `<X>/evals/results/` and compares it with the previous saved run.
+2. Commit that result file in this PR.
+3. Put the comparison (newly failing / newly passing / still failing) in the
+   PR body.
+4. **Any confirmed newly failing case → stop and flag.** Either fix the skill,
+   or explain in the PR body why the case is wrong and correct it there. If
+   no version passes, the current skill stays. A worse skill doesn't merge
+   just because the edit was intended as an improvement.
+
+If the skill has no eval cases, write "unevaluated skill edit" in the PR body.
+That makes it visible that the change was never measured.
+
 ## Documentation updates
 
 If the change involved any of these, update accordingly:
@@ -92,6 +110,7 @@ excuses and their rebuttals:
 | "Unit tests pass — integration tests are overkill." | For federation/peer/auth/PII changes, integration tests are Required regardless of unit coverage. Run them. |
 | "This Pi hotfix is urgent, just commit to main." | Never. Branch + PR + merge — even for hotfixes (AGENTS.md). Urgency is not an exception. |
 | "Module isn't in the tier table, so it's low-risk." | Unclassified `.py` defaults to **Standard**, not Low — and you must flag it for classification. |
+| "It's only a wording tweak to a skill — skip the evals." | The wording is the skill. If it has `evals/cases.yaml`, run `/skill-eval <X> --bare` and commit the result. |
 | "Docs are out of scope for this PR." | If you added a module / env var / CLI command / migration / dep, the documentation-update map below is part of the PR. |
 
 ## Final steps
