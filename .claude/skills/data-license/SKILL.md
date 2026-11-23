@@ -48,8 +48,15 @@ These are the policies a general PII review will NOT catch:
       sharing — boat-owner consent is not sufficient.
 - [ ] Biometric data cannot be used in personnel decisions.
 
-### AIS / other-vessel data (Section 1)
-- [ ] AIS and proximity data from other vessels is excluded from
+### AIS / other-vessel data (Sections 1 and 7)
+- [ ] AIS position reports are stored only during an active session
+      (every row carries a session id), behind the discovery radius and
+      the per-vessel rate limit. Until #394 ships, all AIS stays blocked.
+- [ ] AIS data never reaches `peer_api.py`, co-op sync, or fleet
+      benchmarks — it is local to the receiving boat, with no opt-in.
+- [ ] Retention pruning covers AIS positions (90 days; 365 for
+      race-fleet vessels).
+- [ ] Radar, DSC, and AIS messaging/safety data stay excluded from
       ingest, storage, export, and federation.
 
 ### Protest firewall (Section 11)
@@ -86,7 +93,7 @@ why "it looked fine" is not a clearance. Common excuses and rebuttals:
 | "There's already an embargo check, so it's covered." | Presence ≠ correctness. Verify the comparison operator matches `embargo_until`'s meaning — a flipped check leaks early. |
 | "Boat owner consented, so biometric data is fine." | Biometrics need per-person consent separate from instrument sharing. Owner consent is not sufficient. |
 | "Coach just needs access for the season." | No permanent or blanket grants — time-limited, per-session authorization only. |
-| "It's only an export format tweak." | Export is where the protest firewall and AIS-exclusion rules bite. Re-check both before clearing. |
+| "It's only an export format tweak." | Export is where the protest firewall and AIS-scoping rules bite. Re-check both before clearing. |
 
 ## 3. Report findings
 

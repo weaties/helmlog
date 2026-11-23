@@ -32,9 +32,10 @@ Checked items are complete.
 
 - [ ] **AIS fleet tracking** (#394) — capture public AIS broadcast data (position, SOG,
       COG, MMSI) from Signal K for race fleet performance analysis. AIS data is already
-      available on the VHF radio broadcast and captured by Signal K; this feature reads
-      it for fleet-level context while respecting the existing AIS exclusion policy for
-      non-member vessel storage.
+      available on the VHF radio broadcast and decoded by Signal K; this feature reads
+      it for fleet-level context within the limits in `docs/data-licensing.md`
+      (Section 1, AIS broadcast data): sessions only, local to the boat, 90/365-day
+      retention. Needs an AIS receiver on the boat's network.
 
 ### Data co-op platform
 

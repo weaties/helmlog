@@ -32,7 +32,11 @@
   current observations are private and never shared unless you say so.
 - **Crew rights.** Any crew member can ask to have their voice, face, or likeness
   deleted or blurred from your audio and video at any time.
-- **No spying.** We don't track non-member boats via AIS or radar.
+- **Public AIS only.** During a session we may record the positions other boats
+  broadcast over AIS — public radio data that any chartplotter shows. It stays
+  on the boat that received it, is never pooled in the co-op, and expires
+  (90 days, or a year for boats you tag as your race fleet). We don't track
+  other boats by radar, and we don't record AIS outside a session.
 - **Governance.** The co-op is a democracy. AI/ML model training and commercial
   use require a 2/3 supermajority vote. Current model sharing requires unanimous
   consent — a higher bar because current knowledge is competitively sensitive.
@@ -79,6 +83,7 @@
 | **YouTube video links/metadata** | Boat owner | Boat-private | No — listed under "not shared" | Metadata deleted on departure; actual YouTube videos remain on YouTube | Only if boat owner explicitly grants access |
 | **Email addresses** | Individual (PII) | Admin-only (owner email visible to co-op admins; crew email visible only to boat owner) | No — never shared with co-op members | Scrubbed from all records on departure or on request | No |
 | **Current/tide observations** | Boat owner | Boat-private | No — hard-earned local knowledge, never shared unless boat owner explicitly opts in | Deleted on request | Only if boat owner explicitly grants access |
+| **AIS broadcast data** (other vessels' position, SOG, COG, heading, name, MMSI) | Nobody — it is a public broadcast. The receiving boat holds a receive log | Boat-private | No — stays on the receiving boat; no opt-in exists | Expires automatically (90 days; 365 days for race-fleet vessels). The boat owner can delete it sooner | Visible in session replay only to coaches the boat owner has granted that session |
 
 ---
 
@@ -141,6 +146,7 @@ The following terms have specific meanings throughout this document:
 | **Co-op admin** | A boat designated to perform administrative functions (approving members, signing records) under the M-of-N multi-admin model. Admin is a role, not a rank — admins have no governance authority beyond what this policy grants |
 | **Fleet benchmark** | An aggregate statistic computed across all contributing co-op boats for a specific metric and condition range — e.g., "fleet median upwind VMG in 10–12 knots TWS." Benchmarks are anonymous by construction: they contain no boat identities, no individual tracks, and no per-boat data points. A boat sees the fleet distribution and its own position within it, but not which boats produced which data points |
 | **PII** | Personally identifiable information — data that can identify a specific individual. In this policy: video recordings (including 360° footage capturing crew faces and nearby boats), audio recordings, voice data, photos containing identifiable people, email addresses, biometric data, and diarized (speaker-labeled) transcripts |
+| **AIS broadcast data** | Position, speed, course, heading, and static identity (name, MMSI, call sign, ship type, dimensions) that a vessel transmits about itself over AIS. A public broadcast, not instrument data and not co-op data. Captured only within the limits in Section 1 |
 
 ---
 
@@ -157,16 +163,55 @@ The boat owner has full rights to export, share, delete, or restrict access to
 their instrument data. The boat owner controls who their data is shared with and
 can revoke any person's access at any time.
 
-#### AIS and proximity data exclusion
+#### AIS broadcast data
 
-Instrument systems may passively receive AIS (Automatic Identification System)
-transmissions or other proximity data from nearby boats. Helm Log **must not
-capture, store, or share** AIS positions or identifying information of other
-boats. The co-op exists to share data that members voluntarily contribute — it
-must not become a surveillance tool for non-participating boats.
+AIS (Automatic Identification System) is a public VHF broadcast. A vessel with
+a transponder transmits its own position, speed, course, and identity to every
+receiver in range, and commercial services already collect and publish it. It
+is a different category from instrument data: nobody shares it in confidence,
+and a boat receiving it learns nothing a chartplotter would not show.
 
-This exclusion applies to any passively received data that identifies or tracks
-another vessel, regardless of the source (AIS, radar targets, DSC, etc.).
+Helm Log **may capture AIS broadcast data** from other vessels, members and
+non-members alike, within these limits:
+
+- **Sessions only.** Position reports are stored only while a session is
+  active, and every stored position belongs to that session. There is no
+  background capture.
+- **Nearby vessels only.** A vessel is recorded once it comes within a
+  configured radius of the boat (default 5 nm) during the session. It is then
+  followed for the rest of that session, so a race that spreads out stays
+  complete.
+- **Broadcast fields only.** Position, speed over ground, course over ground,
+  heading, navigation status, and the vessel's static identity (name, MMSI,
+  call sign, ship type, dimensions). Static identity may be kept in a local
+  vessel registry outside a session so that boats can be named and tagged as
+  race fleet. AIS safety, binary, and addressed messages are not captured.
+- **Local to the receiving boat.** AIS data is **not co-op data**. It is not
+  served through the peer API, not synced to other boats, not used in fleet
+  benchmarks, and not used to train co-op models. Each boat records what its
+  own receiver hears.
+- **Limited retention.** Positions of vessels the boat owner has tagged as
+  race fleet are deleted after 365 days. All other positions are deleted after
+  90 days. The vessel registry is not deleted automatically. The boat owner can
+  shorten either period or delete AIS data at any time.
+- **Performance analysis only.** The purpose is race replay and debrief: where
+  the boat gained and lost against the fleet.
+
+The boat owner may include captured AIS tracks in their own exports. Nobody
+owns another vessel's broadcast positions, and the boat owner makes no
+ownership claim over them.
+
+Capture is off by default and the boat owner turns it on.
+
+#### Other proximity data exclusion
+
+Helm Log **must not capture, store, or share** any other passively received
+data that identifies or tracks another vessel: radar targets, DSC calls, or
+AIS messages outside the position and static reports listed above. It must
+not derive or estimate another boat's instrument-level data (wind, speed
+through water, heel, sail or rig settings) from any source. The co-op exists
+to share data that members voluntarily contribute — it must not become a
+surveillance tool for non-participating boats.
 
 ### Audio and voice data
 
@@ -289,7 +334,7 @@ Video PII obligations:
   This is technically harder than audio anonymization and may require
   re-processing the video through a face-detection pipeline.
 - **Non-member boats captured in video** are subject to the same principle as
-  AIS data: the platform must not become a surveillance tool. However, video
+  other non-member data: the platform must not become a surveillance tool. However, video
   captured incidentally during racing is a natural consequence of being on the
   water together. The policy does not require blurring of non-member boats
   in race footage, but boat owners should be aware that uploading video makes
@@ -595,6 +640,9 @@ owner explicitly opts in:
 - Sail selections and tuning notes
 - YouTube video links and metadata
 - Observed current and tide data (derived local knowledge)
+
+AIS broadcast data a boat has captured (Section 1) is not shareable through
+the co-op at all. There is no opt-in for it.
 
 ### Session visibility and data aging
 
@@ -1075,6 +1123,10 @@ identifiable photos containing them, per Section 1.
 Data is retained indefinitely by default on the boat's local Helm Log instance.
 There is no automatic expiration.
 
+The one exception is AIS broadcast data, which expires automatically: 365 days
+for vessels tagged as race fleet and 90 days for all others (see Section 1,
+AIS broadcast data).
+
 ### Deletion requests
 
 Any boat owner may request **full deletion** of all their data from the co-op and
@@ -1193,34 +1245,52 @@ The existence of a data co-op within a fleet must not create adverse consequence
 for boats that choose not to participate. Non-members should experience racing
 exactly as they would if the co-op did not exist.
 
+Recording AIS is consistent with this principle. A non-member's AIS position
+is broadcast by their own transponder to every receiver in range, whether or
+not a co-op exists, and any boat with a chartplotter can already record it.
+
 ### What the co-op knows about non-members
 
-The co-op's only information about non-member boats comes from **official race
-results published by the organizing authority**. This is limited to:
+The co-op's only pooled information about non-member boats comes from
+**official race results published by the organizing authority**. This is
+limited to:
 
 - Boat name (as published by the OA)
 - Scored rank, finishing time, and corrected time
 - Class, sail number, and other regatta registration data
 
-The co-op has **no instrument data, GPS tracks, performance metrics, or session
-data** for non-member boats.
+The co-op has **no instrument data, performance metrics, or session data** for
+non-member boats.
+
+### What member boats may capture about non-members
+
+A member boat may record the **AIS broadcast data** of non-member boats during
+its own sessions, within the limits in Section 1 (AIS broadcast data). Each
+boat keeps what it recorded. AIS data is not pooled, synced between members,
+or added to fleet benchmarks, so the co-op as a whole holds no AIS tracks.
 
 ### What the co-op must NOT capture about non-members
 
-- AIS positions or tracks (see Section 1, AIS exclusion)
+- AIS positions outside an active session, or AIS messages other than position
+  and static reports
 - Radar targets or other proximity-derived position data
-- Any data that would allow the co-op to reconstruct a non-member's race
-  performance beyond what the organizing authority publishes
+- Instrument-level data about a non-member (wind, speed through water, heel,
+  sail or rig settings), whether measured, derived, or estimated
 
 ### Non-member removal requests
 
-Non-member boats **cannot request removal** of their data from the co-op, because
-the only non-member data in the co-op is official race results that the organizing
-authority has already published. The co-op is not the source of this data — the
-organizing authority is.
+Non-member boats **cannot request removal** of their race results from the
+co-op, because the organizing authority has already published them. The co-op
+is not the source of this data — the organizing authority is.
 
 If a non-member has concerns about their race results being published, they should
 address those concerns with the organizing authority.
+
+The same applies to AIS broadcast data: the vessel itself is the source, and
+it controls the broadcast. This policy gives non-members no right to have AIS
+positions removed from a member boat's log. Those positions expire on the
+retention schedule in Section 1, and a boat owner may delete any vessel's
+positions sooner if asked.
 
 ### Joining the co-op
 
@@ -1504,7 +1574,7 @@ launch) and **future** (needed as the platform matures).
 | Replay protection | Include a random nonce in every signed API request; reject duplicate nonces within the clock skew window. Prevents replay attacks even when NTP sync is stale |
 | Revocation broadcast | On membership revocation (departure or expulsion), actively push the signed revocation record to all online peers rather than relying on passive polling. Ensures rapid enforcement within minutes of signing |
 | Processing offload cleanup | When a processing task (transcription, analysis) completes on a remote host, the Pi should request deletion of the source file and intermediate artifacts from the offload host. Log offload events (what was sent, where, when) for PII audit trail |
-| AIS data filtering | Exclude AIS and proximity data from other vessels during capture; never store non-member tracking data |
+| AIS and proximity data filtering | Block radar, DSC, and AIS messaging data at ingest. Until AIS capture ships (#394), block all AIS data. Once it ships: store AIS position reports only during an active session, behind the discovery radius and a per-vessel rate limit; prune on the 90/365-day retention schedule; never expose AIS data through the peer API, co-op sync, or benchmarks |
 | Email PII handling | Scrub owner and crew email from records on departure; admin-only visibility by default |
 | Active/inactive member tracking | Heartbeat-based activity detection; manual inactive toggle; configurable inactivity threshold; quorum denominator adjustment |
 | Fleet benchmark computation | Compute anonymous aggregate statistics (median, percentiles, rank) per metric per condition bin from co-op shared data; enforce minimum 4-boat threshold per bin |
@@ -1609,3 +1679,4 @@ beyond what the AGPLv3 allows.
 | 2026-03-08 | Rev 19 — protocol hardening from security review: audit logging expanded to track data volume (points returned, bytes transferred) for volume-based rate limiting; replay protection via request nonces with dedup; revocation broadcast (active push to all peers instead of passive polling); event-scoped Proof of Participation for track data requests; maneuver detection added to future tech requirements |
 | 2026-03-08 | Rev 20 — processing offload: new "Processing offload" subsection in Section 1 covering own-boat offload (PII obligations, ephemeral processing, no data retention on offload host), third-party offload (GDPR data processor role, public endpoint warning), co-op offload (designated host approved by 2/3 vote, no raw per-boat data retention, audit logging), and transport security (Tailscale default, TLS 1.2+ for non-Tailscale); MVP tech requirement for offload cleanup and audit trail; future requirements for third-party warning, co-op host approval, and photo/video analysis offload; plain English summary updated |
 | 2026-03-08 | Rev 21 — video and camera pipeline: comprehensive rewrite of "YouTube and external video" into "Video recordings and the camera pipeline" covering: video as PII (crew faces, voices, other boats, tactical info in 360° footage); crew PII rights over likeness in video with face-blur anonymization; camera consent (inform crew, respect objections, departure rights); YouTube as third-party platform (data leaves boat permanently, privacy settings, unlinking vs deletion); video in co-op context (boat-private by default, event-scoping for future sharing); video deletion asymmetry (metadata deleted, YouTube videos persist); video retention (no auto-expiration on YouTube, aging reminder); PII definition updated to include video; future tech requirements for video PII handling, camera consent notification, upload privacy defaults, and video aging reminders |
+| 2026-11-15 | Rev 22 — AIS broadcast data permitted (#394): Section 1 "AIS and proximity data exclusion" split into "AIS broadcast data" (capture allowed during active sessions only, discovery radius, broadcast fields only, local to the receiving boat and never co-op data, 90/365-day retention, off by default) and "Other proximity data exclusion" (radar, DSC, AIS messaging, and derived instrument data still excluded); Section 7 updated so member boats may record non-members' AIS during their own sessions while the co-op pools none of it, with no removal right for public broadcast data; retention exception added to Section 5; data type matrix, definitions, technical requirements, and plain English summary ("No spying" replaced by "Public AIS only") updated |
